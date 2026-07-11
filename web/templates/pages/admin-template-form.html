@@ -1,0 +1,50 @@
+{{ define "admin-template-form-page" }}
+{{ template "base-start" . }}
+<section class="narrow-section template-form-section" aria-labelledby="template-form-title">
+  <p class="eyebrow">Administration</p>
+  <h1 id="template-form-title">{{ if .Template.Editing }}Edit workspace template{{ else }}Create workspace template{{ end }}</h1>
+  {{ if .Template.Error }}<p class="alert alert-error" role="alert">{{ .Template.Error }}</p>{{ end }}
+  <form class="form-panel" method="post" action="{{ if .Template.Editing }}/admin/templates/{{ .Template.ID }}{{ else }}/admin/templates{{ end }}">
+    <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
+    <label for="template-name">Display name</label>
+    <input id="template-name" name="name" type="text" value="{{ .Template.Name }}" maxlength="100" required>
+    <label for="template-description">Description</label>
+    <textarea id="template-description" name="description" rows="3" maxlength="2000">{{ .Template.Description }}</textarea>
+    <label for="image-reference">Container image reference</label>
+    <input id="image-reference" name="image_reference" type="text" value="{{ .Template.ImageReference }}" maxlength="255" placeholder="registry.example/team/image:version" required>
+    <label for="image-digest">Image digest <span class="muted">optional</span></label>
+    <input id="image-digest" name="image_digest" type="text" value="{{ .Template.ImageDigest }}" placeholder="sha256:...">
+
+    <fieldset>
+      <legend>Resource defaults and maximums</legend>
+      <div class="form-grid">
+        <div><label for="default-cpu">Default CPU (mCPU)</label><input id="default-cpu" name="default_cpu_millis" type="number" min="1" max="1000000" value="{{ .Template.DefaultCPUMillis }}" required></div>
+        <div><label for="max-cpu">Maximum CPU (mCPU)</label><input id="max-cpu" name="max_cpu_millis" type="number" min="1" max="1000000" value="{{ .Template.MaxCPUMillis }}" required></div>
+        <div><label for="default-memory">Default memory (MiB)</label><input id="default-memory" name="default_memory_mib" type="number" min="1" value="{{ .Template.DefaultMemoryMiB }}" required></div>
+        <div><label for="max-memory">Maximum memory (MiB)</label><input id="max-memory" name="max_memory_mib" type="number" min="1" value="{{ .Template.MaxMemoryMiB }}" required></div>
+        <div><label for="default-storage">Default storage (GiB)</label><input id="default-storage" name="default_storage_gib" type="number" min="1" value="{{ .Template.DefaultStorageGiB }}" required></div>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Supported access methods</legend>
+      <label class="check-row"><input type="checkbox" name="access_methods" value="terminal"{{ if .Template.TerminalAccess }} checked{{ end }}> Browser terminal</label>
+      <label class="check-row"><input type="checkbox" name="access_methods" value="desktop"{{ if .Template.DesktopAccess }} checked{{ end }}> Graphical desktop</label>
+      <label class="check-row"><input type="checkbox" name="access_methods" value="web"{{ if .Template.WebAccess }} checked{{ end }}> Approved web applications</label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Allowed roles</legend>
+      <label class="check-row"><input type="checkbox" name="allowed_roles" value="user"{{ if .Template.UserRole }} checked{{ end }}> Users</label>
+      <label class="check-row"><input type="checkbox" name="allowed_roles" value="administrator"{{ if .Template.AdministratorRole }} checked{{ end }}> Administrators</label>
+    </fieldset>
+
+    <label class="check-row"><input type="checkbox" name="enabled"{{ if .Template.Enabled }} checked{{ end }}> Enabled for future workspace requests</label>
+    <div class="form-actions">
+      <a class="secondary-button button-link" href="/admin/templates">Cancel</a>
+      <button class="primary-button" type="submit">{{ if .Template.Editing }}Save changes{{ else }}Create template{{ end }}</button>
+    </div>
+  </form>
+</section>
+{{ template "base-end" . }}
+{{ end }}

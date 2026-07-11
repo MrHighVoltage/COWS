@@ -18,6 +18,7 @@
       {{ if .User }}
         <a href="/">Dashboard</a>
         {{ if .User.IsAdministrator }}<a href="/admin/users">Users</a>{{ end }}
+        {{ if .User.IsAdministrator }}<a href="/admin/templates">Templates</a>{{ end }}
         <form method="post" action="/logout">
           <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
           <button class="link-button" type="submit">Sign out</button>

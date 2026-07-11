@@ -43,3 +43,33 @@ type AuditEvent struct {
 	Metadata    map[string]string
 	CreatedAt   time.Time
 }
+
+type AccessMethod string
+
+const (
+	AccessTerminal AccessMethod = "terminal"
+	AccessDesktop  AccessMethod = "desktop"
+	AccessWeb      AccessMethod = "web"
+)
+
+func (m AccessMethod) Valid() bool {
+	return m == AccessTerminal || m == AccessDesktop || m == AccessWeb
+}
+
+type WorkspaceTemplate struct {
+	ID                  string
+	Name                string
+	Description         string
+	ImageReference      string
+	ImageDigest         string
+	DefaultCPUMillis    int64
+	MaxCPUMillis        int64
+	DefaultMemoryBytes  int64
+	MaxMemoryBytes      int64
+	DefaultStorageBytes int64
+	AccessMethods       []AccessMethod
+	AllowedRoles        []Role
+	Enabled             bool
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+}

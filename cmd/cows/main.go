@@ -16,6 +16,7 @@ import (
 	"github.com/cows-project/cows/internal/database"
 	"github.com/cows-project/cows/internal/repository/sqlite"
 	"github.com/cows-project/cows/internal/web"
+	"github.com/cows-project/cows/internal/workspace"
 )
 
 func main() {
@@ -58,7 +59,8 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 
-	webServer, err := web.New(db, authService, web.Options{CookieSecure: cfg.CookieSecure, SessionLifetime: cfg.SessionLifetime})
+	templateService := workspace.New(sqlite.New(db))
+	webServer, err := web.New(db, authService, templateService, web.Options{CookieSecure: cfg.CookieSecure, SessionLifetime: cfg.SessionLifetime})
 	if err != nil {
 		return fmt.Errorf("initialize web server: %w", err)
 	}

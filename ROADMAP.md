@@ -32,13 +32,14 @@ handler, operational audit review, and a documented recovery procedure. Login
 failure rate limiting is now process-local and must move to shared infrastructure
 if COWS ever runs multiple active instances.
 
-## Milestone 2: Templates and runtime inspection (interface prepared)
+## Milestone 2: Templates and runtime inspection (in progress)
 
-The COWS-facing runtime interface and managed-label convention are prepared,
-but no adapter or runtime operation exists yet. Add validated administrator
-templates, template access rules, one read-only runtime adapter,
-health/capability reporting, managed-container inspection, and fake-runtime
-contract tests. Preserve a practical second adapter for Docker or Podman.
+Validated administrator templates, role access rules, resource policy fields,
+and the COWS-facing runtime interface are now present. No adapter or runtime
+operation exists yet. Remaining work is one deliberately read-only runtime
+adapter, health/capability reporting, managed-container inspection, and
+fake-runtime contract tests. Preserve a practical second adapter for Docker or
+Podman.
 
 ## Milestone 3: Workspace lifecycle
 

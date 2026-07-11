@@ -7,11 +7,11 @@ environments through one authenticated HTTPS endpoint.
 
 ## Project status
 
-COWS is at **Milestone 1 in progress: local users and authorization
-foundation**. The current code provides local administrator bootstrap, password
-authentication, server-side sessions, CSRF-protected forms, and basic user
-management. It does not yet create containers or provide workspace access. It
-is not production-ready.
+COWS is at **Milestone 2 in progress: templates and runtime inspection**. The
+current code provides local administrator bootstrap, password authentication,
+server-side sessions, CSRF-protected forms, basic user management, and
+administrator-managed workspace templates. It does not create containers or
+provide workspace access. It is not production-ready.
 
 ## Goals
 
