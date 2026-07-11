@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/mail"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -18,10 +19,11 @@ import (
 )
 
 var (
-	ErrInvalidCredentials = errors.New("invalid credentials")
-	ErrInvalidInput       = errors.New("invalid user input")
-	ErrLastAdministrator  = errors.New("cannot disable the last active administrator")
-	ErrSelfDisable        = errors.New("administrator cannot disable their own account")
+	ErrInvalidCredentials     = errors.New("invalid credentials")
+	ErrInvalidInput           = errors.New("invalid user input")
+	ErrPasswordChangeRequired = errors.New("password change required")
+	ErrLastAdministrator      = errors.New("cannot disable the last active administrator")
+	ErrSelfDisable            = errors.New("administrator cannot disable their own account")
 )
 
 const (
@@ -40,6 +42,7 @@ type Service struct {
 
 type CreateUserInput struct {
 	Username    string
+	Email       string
 	DisplayName string
 	Password    string
 	Role        domain.Role
@@ -107,6 +110,28 @@ func (s *Service) Logout(ctx context.Context, rawToken string) error {
 	return s.store.DeleteSession(ctx, hashToken(rawToken))
 }
 
+func (s *Service) ChangePassword(ctx context.Context, userID, currentPassword, newPassword string) error {
+	record, err := s.store.FindUserCredentialsByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if record.User.Disabled || bcrypt.CompareHashAndPassword([]byte(record.PasswordHash), []byte(currentPassword)) != nil {
+		return ErrInvalidCredentials
+	}
+	if !validPassword(newPassword) {
+		return ErrInvalidInput
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+	if err := s.store.UpdateUserPassword(ctx, userID, string(hash), false); err != nil {
+		return err
+	}
+	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: userID, EventType: "password.changed", TargetType: "user", TargetID: userID})
+	return nil
+}
+
 func (s *Service) ListUsers(ctx context.Context, actorID string) ([]domain.User, error) {
 	if _, err := s.requireAdministrator(ctx, actorID); err != nil {
 		return nil, err
@@ -165,12 +190,15 @@ func (s *Service) requireAdministrator(ctx context.Context, actorID string) (dom
 	if !user.IsAdministrator() {
 		return domain.User{}, ErrInvalidCredentials
 	}
+	if user.MustChangePassword {
+		return domain.User{}, ErrPasswordChangeRequired
+	}
 	return user, nil
 }
 
 func (s *Service) createUser(ctx context.Context, input CreateUserInput) (domain.User, error) {
 	username := normalizeUsername(input.Username)
-	if !validUsername(username) || !validDisplayName(input.DisplayName) || !validPassword(input.Password) || !input.Role.Valid() {
+	if !validUsername(username) || !validEmail(input.Email) || !validDisplayName(input.DisplayName) || !validPassword(input.Password) || !input.Role.Valid() {
 		return domain.User{}, ErrInvalidInput
 	}
 	if input.DisplayName == "" {
@@ -190,7 +218,7 @@ func (s *Service) createUser(ctx context.Context, input CreateUserInput) (domain
 		return domain.User{}, fmt.Errorf("create user ID: %w", err)
 	}
 	now := s.now().UTC()
-	user := domain.User{ID: id, Username: username, DisplayName: input.DisplayName, Role: input.Role, CreatedAt: now, UpdatedAt: now}
+	user := domain.User{ID: id, Username: username, Email: strings.TrimSpace(input.Email), DisplayName: input.DisplayName, Role: input.Role, MustChangePassword: true, CreatedAt: now, UpdatedAt: now}
 	if err := s.store.CreateUser(ctx, user, string(hash)); err != nil {
 		return domain.User{}, err
 	}
@@ -223,6 +251,15 @@ func validUsername(value string) bool {
 
 func validDisplayName(value string) bool {
 	return utf8.RuneCountInString(strings.TrimSpace(value)) <= 120
+}
+
+func validEmail(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return true
+	}
+	parsed, err := mail.ParseAddress(value)
+	return err == nil && parsed.Address == value && len(value) <= 254
 }
 
 func validPassword(value string) bool {

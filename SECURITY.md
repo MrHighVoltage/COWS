@@ -40,6 +40,9 @@ partial operations, and compromised or misconfigured images.
   contents, and sensitive environment values.
 - Login failures are rate-limited per source by the single COWS process. A
   multi-instance deployment must move this control to shared infrastructure.
+- Newly created users must change their initial password before administrator
+  operations are available. Email is stored for future notifications but is
+  not yet used for recovery or delivery.
 - Runtime capabilities are least privilege. Privileged mode, host networking,
   unrestricted host mounts, arbitrary capabilities, and direct devices are not
   user-selectable.
@@ -79,13 +82,13 @@ workspace, a runtime socket, a host path, or container secrets.
 
 ## Known limitations of the current milestone
 
-Local username/password authentication, server-side opaque sessions, CSRF
-protected forms, administrator checks, login rate limiting, and basic audit
-persistence now exist. The implementation has no OpenID Connect, password
-recovery, account deletion workflow, runtime integration, terminal, desktop,
-proxy, file manager, or production HTTPS configuration. Audit failures and
-operational alerts still need a deliberate policy. Do not deploy it as a
-service for untrusted users.
+Local username/password authentication, mandatory first-login password change,
+stored email fields, server-side opaque sessions, CSRF protected forms,
+administrator checks, login rate limiting, and basic audit persistence now
+exist. The implementation has no OpenID Connect, password recovery, account
+deletion workflow, runtime integration, terminal, desktop, proxy, file manager,
+or production HTTPS configuration. Audit failures and operational alerts still
+need a deliberate policy. Do not deploy it as a service for untrusted users.
 
 ## Reporting vulnerabilities
 

@@ -52,9 +52,14 @@ type healthSnapshot struct {
 
 type userFormData struct {
 	Username    string
+	Email       string
 	DisplayName string
 	Role        string
 	Error       string
+}
+
+type passwordFormData struct {
+	Error string
 }
 
 type templateFormData struct {
@@ -88,6 +93,7 @@ type pageData struct {
 	Form      userFormData
 	Templates []domain.WorkspaceTemplate
 	Template  templateFormData
+	Password  passwordFormData
 }
 
 func New(db *sql.DB, authService *auth.Service, templateService *workspace.Service, options Options) (*Server, error) {
@@ -118,6 +124,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /login", s.loginGet)
 	mux.HandleFunc("POST /login", s.loginPost)
 	mux.HandleFunc("POST /logout", s.logoutPost)
+	mux.HandleFunc("GET /account/password", s.passwordGet)
+	mux.HandleFunc("POST /account/password", s.passwordPost)
 	mux.HandleFunc("GET /admin/users", s.adminUsers)
 	mux.HandleFunc("GET /admin/users/new", s.adminUsersNew)
 	mux.HandleFunc("POST /admin/users", s.adminUsersCreate)
@@ -140,6 +148,10 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 	user, err := s.currentUser(r)
 	if err != nil {
 		http.Error(w, "failed to load session", http.StatusInternalServerError)
+		return
+	}
+	if user != nil && user.MustChangePassword {
+		http.Redirect(w, r, "/account/password", http.StatusSeeOther)
 		return
 	}
 	s.render(w, http.StatusOK, "home-page", pageData{Title: "COWS", User: user, CSRFToken: s.ensureCSRF(w, r), Health: s.snapshot(r.Context())})
@@ -182,7 +194,7 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	_, token, err := s.auth.Authenticate(r.Context(), r.FormValue("username"), r.FormValue("password"))
+	user, token, err := s.auth.Authenticate(r.Context(), r.FormValue("username"), r.FormValue("password"))
 	if err != nil {
 		s.options.LoginLimiter.Failure(key)
 		s.render(w, http.StatusUnauthorized, "login-page", pageData{
@@ -194,6 +206,59 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 	}
 	s.options.LoginLimiter.Success(key)
 	s.setSessionCookie(w, token)
+	if user.MustChangePassword {
+		http.Redirect(w, r, "/account/password", http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) passwordGet(w http.ResponseWriter, r *http.Request) {
+	user, err := s.currentUser(r)
+	if err != nil {
+		http.Error(w, "failed to load session", http.StatusInternalServerError)
+		return
+	}
+	if user == nil {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	s.render(w, http.StatusOK, "password-page", pageData{Title: "Change password | COWS", User: user, CSRFToken: s.ensureCSRF(w, r)})
+}
+
+func (s *Server) passwordPost(w http.ResponseWriter, r *http.Request) {
+	user, err := s.currentUser(r)
+	if err != nil {
+		http.Error(w, "failed to load session", http.StatusInternalServerError)
+		return
+	}
+	if user == nil {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if !s.validCSRF(r) {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if r.FormValue("new_password") != r.FormValue("confirm_password") {
+		s.render(w, http.StatusBadRequest, "password-page", pageData{Title: "Change password | COWS", User: user, CSRFToken: s.ensureCSRF(w, r), Password: passwordFormData{Error: "The new passwords do not match."}})
+		return
+	}
+	if err := s.auth.ChangePassword(r.Context(), user.ID, r.FormValue("current_password"), r.FormValue("new_password")); err != nil {
+		message := "The password could not be changed."
+		if errors.Is(err, auth.ErrInvalidCredentials) {
+			message = "The current password is incorrect."
+		} else if errors.Is(err, auth.ErrInvalidInput) {
+			message = "The new password must be between 12 and 72 characters."
+		}
+		s.render(w, http.StatusBadRequest, "password-page", pageData{Title: "Change password | COWS", User: user, CSRFToken: s.ensureCSRF(w, r), Password: passwordFormData{Error: message}})
+		return
+	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
@@ -258,9 +323,10 @@ func (s *Server) adminUsersCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	form := userFormData{Username: r.FormValue("username"), DisplayName: r.FormValue("display_name"), Role: r.FormValue("role")}
+	form := userFormData{Username: r.FormValue("username"), Email: r.FormValue("email"), DisplayName: r.FormValue("display_name"), Role: r.FormValue("role")}
 	_, err := s.auth.CreateUser(r.Context(), user.ID, auth.CreateUserInput{
 		Username:    form.Username,
+		Email:       form.Email,
 		DisplayName: form.DisplayName,
 		Password:    r.FormValue("password"),
 		Role:        domain.Role(form.Role),
@@ -575,6 +641,10 @@ func (s *Server) requireAdministrator(w http.ResponseWriter, r *http.Request) (d
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return domain.User{}, false
 	}
+	if user.MustChangePassword {
+		http.Redirect(w, r, "/account/password", http.StatusSeeOther)
+		return domain.User{}, false
+	}
 	if !user.IsAdministrator() {
 		http.Error(w, "administrator permission required", http.StatusForbidden)
 		return domain.User{}, false
@@ -645,7 +715,7 @@ func (s *Server) render(w http.ResponseWriter, status int, name string, data pag
 func userFormError(err error) string {
 	switch {
 	case errors.Is(err, auth.ErrInvalidInput):
-		return "Use a valid username, a display name, a supported role, and a password between 12 and 72 characters."
+		return "Use a valid username, email address, display name, supported role, and password between 12 and 72 characters."
 	case errors.Is(err, repository.ErrConflict):
 		return "A user with that username already exists."
 	default:

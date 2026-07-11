@@ -23,8 +23,10 @@ type UserRepository interface {
 	CountActiveAdministrators(ctx context.Context) (int, error)
 	FindUserByUsername(ctx context.Context, username string) (UserRecord, error)
 	FindUserByID(ctx context.Context, id string) (domain.User, error)
+	FindUserCredentialsByID(ctx context.Context, id string) (UserRecord, error)
 	ListUsers(ctx context.Context) ([]domain.User, error)
 	CreateUser(ctx context.Context, user domain.User, passwordHash string) error
+	UpdateUserPassword(ctx context.Context, id, passwordHash string, mustChangePassword bool) error
 	SetUserDisabled(ctx context.Context, id string, disabled bool) error
 }
 
