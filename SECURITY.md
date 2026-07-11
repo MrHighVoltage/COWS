@@ -75,12 +75,15 @@ upload and temporary-storage limits, safe archive inspection, ZIP-slip and
 ZIP-bomb defenses, and tests proving that a user cannot reach another
 workspace, a runtime socket, a host path, or container secrets.
 
-## Known limitations of Milestone 0
+## Known limitations of the current milestone
 
-Milestone 0 has no real authentication, authorization, runtime integration,
-terminal, desktop, proxy, file manager, audit trail, or production HTTPS
-configuration. Its health endpoint and demo interaction are only a scaffold.
-Do not deploy it as a service for untrusted users.
+Local username/password authentication, server-side opaque sessions, CSRF
+protected forms, administrator checks, and basic audit persistence now exist.
+The implementation has no OpenID Connect, password recovery, rate limiting,
+account deletion workflow, runtime integration, terminal, desktop, proxy, file
+manager, or production HTTPS configuration. Audit failures and operational
+alerts still need a deliberate policy. Do not deploy it as a service for
+untrusted users.
 
 ## Reporting vulnerabilities
 

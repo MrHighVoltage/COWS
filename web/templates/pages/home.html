@@ -1,8 +1,15 @@
-{{ define "content" }}
+{{ define "home-page" }}
+{{ template "base-start" . }}
 <section class="intro" aria-labelledby="page-title">
-  <p class="eyebrow">Project foundation</p>
-  <h1 id="page-title">COWS control plane</h1>
-  <p class="lede">A small server-driven foundation for secure containerized workspaces.</p>
+  {{ if .User }}
+    <p class="eyebrow">Signed in</p>
+    <h1 id="page-title">Welcome, {{ .User.DisplayName }}</h1>
+    <p class="lede">Your COWS control plane is ready for the next workspace features.</p>
+  {{ else }}
+    <p class="eyebrow">Project foundation</p>
+    <h1 id="page-title">COWS control plane</h1>
+    <p class="lede">A small server-driven foundation for secure containerized workspaces.</p>
+  {{ end }}
 </section>
 
 <section class="panel" aria-labelledby="health-title" x-data="{ detailsOpen: false }">
@@ -22,4 +29,5 @@
     </dl>
   </div>
 </section>
+{{ template "base-end" . }}
 {{ end }}
