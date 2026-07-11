@@ -11,8 +11,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cows-project/cows/internal/auth"
 	"github.com/cows-project/cows/internal/config"
 	"github.com/cows-project/cows/internal/database"
+	"github.com/cows-project/cows/internal/repository/sqlite"
 	"github.com/cows-project/cows/internal/web"
 )
 
@@ -39,7 +41,24 @@ func run(ctx context.Context, args []string) error {
 	}
 	defer db.Close()
 
-	webServer, err := web.New(db)
+	authService, err := auth.New(sqlite.New(db), cfg.SessionLifetime)
+	if err != nil {
+		return fmt.Errorf("initialize authentication: %w", err)
+	}
+	if cfg.BootstrapAdminUsername != "" {
+		created, err := authService.BootstrapAdministrator(ctx, auth.CreateUserInput{
+			Username: cfg.BootstrapAdminUsername,
+			Password: cfg.BootstrapAdminPassword,
+		})
+		if err != nil {
+			return fmt.Errorf("bootstrap administrator: %w", err)
+		}
+		if created {
+			logger.Info("bootstrap administrator created", "username", cfg.BootstrapAdminUsername)
+		}
+	}
+
+	webServer, err := web.New(db, authService, web.Options{CookieSecure: cfg.CookieSecure, SessionLifetime: cfg.SessionLifetime})
 	if err != nil {
 		return fmt.Errorf("initialize web server: %w", err)
 	}

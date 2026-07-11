@@ -74,13 +74,13 @@ allows it.
 The initial package layout stays small:
 
 ```text
-cmd/cows/              process startup and graceful shutdown
+cmd/cows/              process startup, bootstrap, and graceful shutdown
 internal/config/       configuration parsing and validation
 internal/database/     SQLite setup and migrations
 internal/web/          handlers, templates, and static asset serving
 internal/domain/       stable COWS concepts and error categories
-internal/service/      use-case orchestration
-internal/repository/   focused persistence interfaces and SQLite code later
+internal/auth/         password authentication and session use cases
+internal/repository/   focused persistence interfaces and SQLite implementation
 internal/runtime/      Docker and Podman adapter boundary later
 migrations/            ordered SQL migrations
 web/                   templates and local browser assets
@@ -113,7 +113,7 @@ of authoritative workspace state. Browser libraries are pinned, stored locally,
 and served from COWS. There is no Node.js, npm, TypeScript, bundler, or required
 frontend compilation step.
 
-HTMX and Alpine.js are the only browser dependencies in Milestone 0. Web
+HTMX and Alpine.js are the only browser dependencies in the foundation. Web
 Awesome is the preferred candidate for a later standards-based component
 library, but it is not added until its self-hosted distribution, licensing, and
 update procedure are verified against the repository policy. The initial page

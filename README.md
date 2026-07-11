@@ -7,9 +7,11 @@ environments through one authenticated HTTPS endpoint.
 
 ## Project status
 
-COWS is at **Milestone 0: project foundation**. The current code proves the
-server-driven Go/SQLite/HTMX path; it does not yet create containers or provide
-authentication. It is not production-ready.
+COWS is at **Milestone 1 in progress: local users and authorization
+foundation**. The current code provides local administrator bootstrap, password
+authentication, server-side sessions, CSRF-protected forms, and basic user
+management. It does not yet create containers or provide workspace access. It
+is not production-ready.
 
 ## Goals
 
@@ -46,7 +48,10 @@ go build -o bin/cows ./cmd/cows
 The server defaults to `127.0.0.1:8080` and creates its SQLite database at
 `./data/cows.db`. Configuration may also be supplied with flags or the
 `COWS_LISTEN_ADDR`, `COWS_DATABASE_PATH`, `COWS_LOG_LEVEL`, and
-`COWS_SHUTDOWN_TIMEOUT` environment variables.
+`COWS_SHUTDOWN_TIMEOUT` environment variables. For a new local database, set
+`COWS_BOOTSTRAP_ADMIN_USERNAME` and `COWS_BOOTSTRAP_ADMIN_PASSWORD` together;
+the bootstrap is attempted only when no users exist. Use
+`COWS_COOKIE_SECURE=true` when serving through HTTPS.
 
 ## Security warning
 

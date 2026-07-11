@@ -22,12 +22,14 @@ Exit criteria:
   is required.
 - Documentation describes the architecture, security limits, and next steps.
 
-## Milestone 1: Local users and authorization foundation
+## Milestone 1: Local users and authorization foundation (in progress)
 
-Add administrator bootstrap, password hashing, login/logout, secure sessions,
-CSRF protection, user and administrator roles, basic user management, and the
-first audit events. Exit requires authorization tests for every state-changing
-handler and a documented recovery procedure.
+Implemented so far: administrator bootstrap, bcrypt password hashing,
+login/logout, opaque server-side sessions, CSRF protection, user and
+administrator roles, basic user management, and the first audit events. The
+remaining exit work includes authorization coverage for every state-changing
+handler, rate limiting, operational audit review, and a documented recovery
+procedure.
 
 ## Milestone 2: Templates and runtime inspection
 

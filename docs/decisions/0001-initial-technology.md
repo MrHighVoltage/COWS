@@ -15,10 +15,10 @@ Status: accepted for Milestone 0
 | Migrations | Embedded ordered SQL with `schema_migrations` | Explicit, reviewable, and sufficient for one control-plane instance. No migration framework is needed yet. |
 | Queries | `database/sql` and explicit SQL | Keeps schema and transaction behavior visible. `sqlc` remains an evaluation option if repetition grows. |
 | Templates | `html/template` with layouts, pages, components, fragments | Escaping is correct by default and fits server-driven HTMX interactions. |
-| Authentication | Local users first, OpenID Connect later | Local recovery/bootstrap is useful during foundation work; institutional OIDC is a later milestone. No custom token format. |
-| Sessions | Server-side opaque sessions in SQLite later | Cookies carry only an opaque identifier and can be revoked. This is not implemented in Milestone 0. |
-| Authorization | Explicit service and handler checks, roles first | Makes ownership and fail-closed behavior visible before a larger permission model. |
-| CSRF | Server-side token middleware when forms exist | State-changing requests need protection; not needed for the read-only scaffold. |
+| Authentication | Local users first, OpenID Connect later | Local bootstrap and recovery are useful for initial deployment; institutional OIDC is a later milestone. Passwords use bcrypt through `golang.org/x/crypto`; no custom token format. |
+| Sessions | Server-side opaque sessions in SQLite | Cookies carry only an opaque identifier and can be revoked. Session records store token hashes, not browser tokens. |
+| Authorization | Explicit service and handler checks, roles first | Makes administrator and fail-closed behavior visible before a larger permission model. |
+| CSRF | Per-browser token cookie plus hidden form token | State-changing form requests require a constant-time token match. SameSite cookies are defense in depth, not the sole control. |
 | WebSockets | `github.com/coder/websocket` later | Focused, maintained Go WebSocket implementation; standard library has no WebSocket server. Exact version is selected when terminal/desktop work starts. |
 | SSE | `net/http` streaming later | One-way updates need no new dependency. |
 | Runtime | Separate Docker and Podman adapters later | Avoids leaking runtime objects into COWS domain code; adapter contracts will be tested with fakes. |

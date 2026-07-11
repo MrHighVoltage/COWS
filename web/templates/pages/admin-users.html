@@ -1,0 +1,44 @@
+{{ define "admin-users-page" }}
+{{ template "base-start" . }}
+<section class="intro" aria-labelledby="users-title">
+  <p class="eyebrow">Administration</p>
+  <div class="title-row">
+    <div>
+      <h1 id="users-title">Users</h1>
+      <p class="lede">Manage local COWS accounts and administrator access.</p>
+    </div>
+    <a class="primary-button button-link" href="/admin/users/new">Create user</a>
+  </div>
+</section>
+
+<section class="panel table-panel" aria-labelledby="user-list-title">
+  <h2 id="user-list-title">Local accounts</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Username</th><th>Display name</th><th>Role</th><th>Status</th><th>Action</th></tr></thead>
+      <tbody>
+      {{ range .Users }}
+        <tr>
+          <td><strong>{{ .Username }}</strong></td>
+          <td>{{ .DisplayName }}</td>
+          <td><span class="badge">{{ .Role }}</span></td>
+          <td>{{ if .Disabled }}<span class="status-value status-disabled">Disabled</span>{{ else }}<span class="status-value status-ok">Active</span>{{ end }}</td>
+          <td>
+            {{ if ne .ID $.User.ID }}
+            <form method="post" action="/admin/users/{{ .ID }}/disabled" x-on:submit="if (!confirm('Change this user status?')) $event.preventDefault()">
+              <input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}">
+              <input type="hidden" name="disabled" value="{{ if .Disabled }}false{{ else }}true{{ end }}">
+              <button class="table-action" type="submit">{{ if .Disabled }}Enable{{ else }}Disable{{ end }}</button>
+            </form>
+            {{ else }}<span class="muted">Current account</span>{{ end }}
+          </td>
+        </tr>
+      {{ else }}
+        <tr><td colspan="5" class="muted">No users found.</td></tr>
+      {{ end }}
+      </tbody>
+    </table>
+  </div>
+</section>
+{{ template "base-end" . }}
+{{ end }}

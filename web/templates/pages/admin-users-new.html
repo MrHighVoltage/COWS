@@ -1,0 +1,27 @@
+{{ define "admin-users-new-page" }}
+{{ template "base-start" . }}
+<section class="narrow-section" aria-labelledby="new-user-title">
+  <p class="eyebrow">Administration</p>
+  <h1 id="new-user-title">Create user</h1>
+  {{ if .Form.Error }}<p class="alert alert-error" role="alert">{{ .Form.Error }}</p>{{ end }}
+  <form class="form-panel" method="post" action="/admin/users">
+    <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
+    <label for="username">Username</label>
+    <input id="username" name="username" type="text" value="{{ .Form.Username }}" pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,63}" maxlength="64" autocomplete="username" required>
+    <label for="display-name">Display name</label>
+    <input id="display-name" name="display_name" type="text" value="{{ .Form.DisplayName }}" maxlength="120" autocomplete="name">
+    <label for="role">Role</label>
+    <select id="role" name="role">
+      <option value="user"{{ if eq .Form.Role "user" }} selected{{ end }}>User</option>
+      <option value="administrator"{{ if eq .Form.Role "administrator" }} selected{{ end }}>Administrator</option>
+    </select>
+    <label for="password">Temporary password</label>
+    <input id="password" name="password" type="password" minlength="12" maxlength="72" autocomplete="new-password" required>
+    <div class="form-actions">
+      <a class="secondary-button button-link" href="/admin/users">Cancel</a>
+      <button class="primary-button" type="submit">Create user</button>
+    </div>
+  </form>
+</section>
+{{ template "base-end" . }}
+{{ end }}
