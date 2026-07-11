@@ -11,7 +11,7 @@ func TestLoadDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load defaults: %v", err)
 	}
-	if cfg.ListenAddr != "127.0.0.1:8080" || cfg.DatabasePath != "./data/cows.db" || cfg.DockerSocket != "/var/run/docker.sock" {
+	if cfg.ListenAddr != "127.0.0.1:8080" || cfg.DatabasePath != "./data/cows.db" || cfg.DockerSocket != "/var/run/docker.sock" || cfg.HostStorageBytes != 0 {
 		t.Fatalf("unexpected defaults: %+v", cfg)
 	}
 	if cfg.LogLevel != slog.LevelInfo || cfg.ShutdownTimeout != 10*time.Second || cfg.SessionLifetime != 8*time.Hour || cfg.CookieSecure {
@@ -46,6 +46,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{name: "empty address", args: []string{"-listen-addr", " "}},
 		{name: "empty database", args: []string{"-database-path", ""}},
 		{name: "empty Docker socket", args: []string{"-docker-socket", " "}},
+		{name: "negative host storage", args: []string{"-host-storage-bytes", "-1"}},
 		{name: "bad log level", args: []string{"-log-level", "trace"}},
 		{name: "bad timeout", args: []string{"-shutdown-timeout", "0s"}},
 		{name: "bad session lifetime", args: []string{"-session-lifetime", "0s"}},

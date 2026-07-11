@@ -25,6 +25,9 @@ type CreateWorkspaceInput struct {
 	TemplateID string
 }
 
+// Scheduler is optional for persistence-only tests and is enabled by the
+// application once quota and host-capacity configuration is available.
+
 func (s *Service) ListAvailableTemplates(ctx context.Context, actorID string) ([]domain.WorkspaceTemplate, error) {
 	user, err := s.requireActor(ctx, actorID)
 	if err != nil {
@@ -58,6 +61,11 @@ func (s *Service) CreateWorkspace(ctx context.Context, actorID string, input Cre
 	}
 	if !template.Enabled || !roleAllowed(template.AllowedRoles, user.Role) {
 		return domain.Workspace{}, ErrTemplateNotAvailable
+	}
+	if s.scheduler != nil {
+		if err := s.scheduler.CheckCreate(ctx, user.ID, domain.ResourceRequest{CPUMillis: template.DefaultCPUMillis, MemoryBytes: template.DefaultMemoryBytes, StorageBytes: template.DefaultStorageBytes}); err != nil {
+			return domain.Workspace{}, err
+		}
 	}
 	if _, err := s.store.FindWorkspaceByOwnerAndName(ctx, user.ID, name); err == nil {
 		return domain.Workspace{}, repository.ErrConflict

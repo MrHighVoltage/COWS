@@ -14,7 +14,9 @@ import (
 	"github.com/cows-project/cows/internal/auth"
 	"github.com/cows-project/cows/internal/config"
 	"github.com/cows-project/cows/internal/database"
+	"github.com/cows-project/cows/internal/quota"
 	"github.com/cows-project/cows/internal/repository/sqlite"
+	"github.com/cows-project/cows/internal/runtime"
 	"github.com/cows-project/cows/internal/runtime/docker"
 	"github.com/cows-project/cows/internal/web"
 	"github.com/cows-project/cows/internal/workspace"
@@ -42,8 +44,9 @@ func run(ctx context.Context, args []string) error {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
+	store := sqlite.New(db)
 
-	authService, err := auth.New(sqlite.New(db), cfg.SessionLifetime)
+	authService, err := auth.New(store, cfg.SessionLifetime)
 	if err != nil {
 		return fmt.Errorf("initialize authentication: %w", err)
 	}
@@ -60,12 +63,14 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 
-	templateService := workspace.New(sqlite.New(db))
 	dockerRuntime, err := docker.New(cfg.DockerSocket)
 	if err != nil {
 		return fmt.Errorf("initialize Docker runtime: %w", err)
 	}
-	webServer, err := web.New(db, authService, templateService, dockerRuntime, web.Options{CookieSecure: cfg.CookieSecure, SessionLifetime: cfg.SessionLifetime})
+	quotaService := quota.New(store)
+	scheduler := quota.NewScheduler(store, quota.NewCapacityOverride(dockerRuntime, cfg.HostStorageBytes), runtime.HostCapacity{})
+	templateService := workspace.New(store, scheduler)
+	webServer, err := web.New(db, authService, templateService, quotaService, dockerRuntime, web.Options{CookieSecure: cfg.CookieSecure, SessionLifetime: cfg.SessionLifetime})
 	if err != nil {
 		return fmt.Errorf("initialize web server: %w", err)
 	}

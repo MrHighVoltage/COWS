@@ -16,6 +16,7 @@ type Config struct {
 	ListenAddr             string
 	DatabasePath           string
 	DockerSocket           string
+	HostStorageBytes       int64
 	LogLevel               slog.Level
 	ShutdownTimeout        time.Duration
 	SessionLifetime        time.Duration
@@ -32,6 +33,7 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	listenAddr := envOr(lookup, "COWS_LISTEN_ADDR", "127.0.0.1:8080")
 	databasePath := envOr(lookup, "COWS_DATABASE_PATH", "./data/cows.db")
 	dockerSocket := envOr(lookup, "COWS_DOCKER_SOCKET", "/var/run/docker.sock")
+	hostStorageValue := envOr(lookup, "COWS_HOST_STORAGE_BYTES", "0")
 	logLevel := envOr(lookup, "COWS_LOG_LEVEL", "info")
 	shutdownTimeout := envOr(lookup, "COWS_SHUTDOWN_TIMEOUT", "10s")
 	sessionLifetime := envOr(lookup, "COWS_SESSION_LIFETIME", "8h")
@@ -48,6 +50,7 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	flags.StringVar(&listenAddr, "listen-addr", listenAddr, "HTTP listen address")
 	flags.StringVar(&databasePath, "database-path", databasePath, "SQLite database path")
 	flags.StringVar(&dockerSocket, "docker-socket", dockerSocket, "Docker Engine Unix socket path")
+	flags.StringVar(&hostStorageValue, "host-storage-bytes", hostStorageValue, "configured allocatable host storage in bytes; zero means unknown")
 	flags.StringVar(&logLevel, "log-level", logLevel, "log level: debug, info, warn, or error")
 	flags.StringVar(&shutdownTimeout, "shutdown-timeout", shutdownTimeout, "graceful shutdown timeout")
 	flags.StringVar(&sessionLifetime, "session-lifetime", sessionLifetime, "authenticated session lifetime")
@@ -66,6 +69,10 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	}
 	if strings.TrimSpace(dockerSocket) == "" {
 		return Config{}, errors.New("Docker socket path must not be empty")
+	}
+	hostStorageBytes, err := strconv.ParseInt(hostStorageValue, 10, 64)
+	if err != nil || hostStorageBytes < 0 {
+		return Config{}, fmt.Errorf("host storage bytes must be zero or positive: %q", hostStorageValue)
 	}
 
 	level, err := parseLogLevel(logLevel)
@@ -88,6 +95,7 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 		ListenAddr:             listenAddr,
 		DatabasePath:           databasePath,
 		DockerSocket:           dockerSocket,
+		HostStorageBytes:       hostStorageBytes,
 		LogLevel:               level,
 		ShutdownTimeout:        timeout,
 		SessionLifetime:        sessionDuration,

@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/cows-project/cows/internal/domain"
+	"github.com/cows-project/cows/internal/quota"
 	"github.com/cows-project/cows/internal/repository"
 )
 
@@ -42,12 +43,17 @@ type TemplateInput struct {
 }
 
 type Service struct {
-	store repository.Store
-	now   func() time.Time
+	store     repository.Store
+	scheduler *quota.Scheduler
+	now       func() time.Time
 }
 
-func New(store repository.Store) *Service {
-	return &Service{store: store, now: time.Now}
+func New(store repository.Store, schedulers ...*quota.Scheduler) *Service {
+	var scheduler *quota.Scheduler
+	if len(schedulers) > 0 {
+		scheduler = schedulers[0]
+	}
+	return &Service{store: store, scheduler: scheduler, now: time.Now}
 }
 
 func (s *Service) ListTemplates(ctx context.Context, actorID string) ([]domain.WorkspaceTemplate, error) {

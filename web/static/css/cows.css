@@ -81,6 +81,8 @@ code { color: #465866; font-size: .82rem; }
 .table-action { min-height: 2rem; padding: .35rem .55rem; color: #176b8f; border-color: #9fb7c5; background: transparent; font-size: .85rem; }
 .action-stack { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
 .action-stack form { margin: 0; }
+.quota-form { display: grid; grid-template-columns: repeat(4, minmax(4rem, 1fr)) auto; gap: .35rem; align-items: center; min-width: 28rem; }
+.quota-form input { min-height: 2rem; width: 100%; padding: .35rem; border: 1px solid #9fb0bd; border-radius: .3rem; font: inherit; }
 .muted { color: #647482; font-size: .85rem; }
 [x-cloak] { display: none !important; }
 
@@ -99,4 +101,5 @@ code { color: #465866; font-size: .82rem; }
   .form-actions > * { width: 100%; }
   .form-grid { grid-template-columns: 1fr; }
   .runtime-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .quota-form { min-width: 24rem; }
 }
