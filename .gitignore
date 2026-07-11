@@ -214,5 +214,11 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
+# Go and COWS local runtime data
+/bin/
+/data/
+*.test
+coverage.out
+
 # Streamlit
 .streamlit/secrets.toml

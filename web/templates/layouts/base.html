@@ -1,0 +1,23 @@
+{{ define "base" }}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>{{ .Title }}</title>
+  <link rel="stylesheet" href="/static/css/cows.css">
+  <script defer src="/static/vendor/htmx/htmx.min.js"></script>
+  <script defer src="/static/vendor/alpine/alpine.min.js"></script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="wordmark" href="/">COWS</a>
+    <span class="header-context">Containerized On-Demand Workspace System</span>
+  </header>
+  <main class="page-shell">
+    {{ template "content" . }}
+  </main>
+</body>
+</html>
+{{ end }}

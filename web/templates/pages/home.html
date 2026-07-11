@@ -1,0 +1,25 @@
+{{ define "content" }}
+<section class="intro" aria-labelledby="page-title">
+  <p class="eyebrow">Project foundation</p>
+  <h1 id="page-title">COWS control plane</h1>
+  <p class="lede">A small server-driven foundation for secure containerized workspaces.</p>
+</section>
+
+<section class="panel" aria-labelledby="health-title" x-data="{ detailsOpen: false }">
+  <div class="panel-heading">
+    <div>
+      <p class="eyebrow">System</p>
+      <h2 id="health-title">Service health</h2>
+    </div>
+    <button class="secondary-button" type="button" x-on:click="detailsOpen = !detailsOpen" x-text="detailsOpen ? 'Hide details' : 'Show details'"></button>
+  </div>
+  {{ template "health-status" .Health }}
+  <div class="details" x-show="detailsOpen" x-cloak>
+    <dl>
+      <div><dt>Frontend</dt><dd>Server-rendered HTML</dd></div>
+      <div><dt>Database migrations</dt><dd>Enabled</dd></div>
+      <div><dt>Container runtime</dt><dd>Not configured</dd></div>
+    </dl>
+  </div>
+</section>
+{{ end }}
