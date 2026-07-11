@@ -1,0 +1,32 @@
+{{ define "admin-runtime-page" }}
+{{ template "base-start" . }}
+<section class="intro" aria-labelledby="runtime-title">
+  <p class="eyebrow">Administration</p>
+  <h1 id="runtime-title">Docker runtime</h1>
+  <p class="lede">Read-only inspection of Docker capabilities and COWS-managed containers.</p>
+</section>
+
+{{ if .RuntimeError }}
+<section class="panel" aria-labelledby="runtime-error-title">
+  <h2 id="runtime-error-title">Runtime unavailable</h2>
+  <p class="alert alert-error">{{ .RuntimeError }}</p>
+</section>
+{{ else if .Inspection }}
+<section class="panel" aria-labelledby="runtime-summary-title">
+  <div class="panel-heading"><div><p class="eyebrow">Connection</p><h2 id="runtime-summary-title">{{ .Inspection.RuntimeName }}</h2></div><span class="status-value status-ok">Connected</span></div>
+  <div class="runtime-facts">
+    <div><span class="status-label">Resource limits</span><strong>{{ if .Inspection.Capabilities.SupportsResourceLimits }}Supported{{ else }}Unavailable{{ end }}</strong></div>
+    <div><span class="status-label">Private networking</span><strong>{{ if .Inspection.Capabilities.SupportsPrivateNetwork }}Supported{{ else }}Unavailable{{ end }}</strong></div>
+    <div><span class="status-label">Managed labels</span><strong>{{ if .Inspection.Capabilities.SupportsManagedLabels }}Supported{{ else }}Unavailable{{ end }}</strong></div>
+    <div><span class="status-label">Managed workspaces</span><strong>{{ len .Inspection.Workspaces }}</strong></div>
+  </div>
+</section>
+<section class="panel table-panel" aria-labelledby="managed-title">
+  <h2 id="managed-title">Managed containers</h2>
+  <div class="table-scroll"><table><thead><tr><th>COWS workspace</th><th>Runtime ID</th><th>State</th><th>Observed</th></tr></thead><tbody>
+  {{ range .Inspection.Workspaces }}<tr><td><strong>{{ .WorkspaceID }}</strong></td><td><code>{{ .RuntimeID }}</code></td><td>{{ .State }}</td><td>{{ .ObservedAt }}</td></tr>{{ else }}<tr><td colspan="4" class="muted">No managed containers were found.</td></tr>{{ end }}
+  </tbody></table></div>
+</section>
+{{ end }}
+{{ template "base-end" . }}
+{{ end }}

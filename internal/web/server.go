@@ -20,6 +20,7 @@ import (
 	"github.com/cows-project/cows/internal/auth"
 	"github.com/cows-project/cows/internal/domain"
 	"github.com/cows-project/cows/internal/repository"
+	"github.com/cows-project/cows/internal/runtime"
 	"github.com/cows-project/cows/internal/workspace"
 	webassets "github.com/cows-project/cows/web"
 )
@@ -39,6 +40,7 @@ type Server struct {
 	db        *sql.DB
 	auth      *auth.Service
 	workspace *workspace.Service
+	runtime   runtime.Runtime
 	options   Options
 	templates *template.Template
 	static    fs.FS
@@ -84,19 +86,21 @@ type templateFormData struct {
 }
 
 type pageData struct {
-	Title     string
-	User      *domain.User
-	Health    healthSnapshot
-	CSRFToken string
-	Error     string
-	Users     []domain.User
-	Form      userFormData
-	Templates []domain.WorkspaceTemplate
-	Template  templateFormData
-	Password  passwordFormData
+	Title        string
+	User         *domain.User
+	Health       healthSnapshot
+	CSRFToken    string
+	Error        string
+	Users        []domain.User
+	Form         userFormData
+	Templates    []domain.WorkspaceTemplate
+	Template     templateFormData
+	Password     passwordFormData
+	Inspection   *runtime.Inspection
+	RuntimeError string
 }
 
-func New(db *sql.DB, authService *auth.Service, templateService *workspace.Service, options Options) (*Server, error) {
+func New(db *sql.DB, authService *auth.Service, templateService *workspace.Service, runtimeAdapter runtime.Runtime, options Options) (*Server, error) {
 	if options.SessionLifetime <= 0 {
 		options.SessionLifetime = 8 * time.Hour
 	}
@@ -113,7 +117,7 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 	if err != nil {
 		return nil, fmt.Errorf("open static assets: %w", err)
 	}
-	return &Server{db: db, auth: authService, workspace: templateService, options: options, templates: templates, static: static}, nil
+	return &Server{db: db, auth: authService, workspace: templateService, runtime: runtimeAdapter, options: options, templates: templates, static: static}, nil
 }
 
 func (s *Server) Handler() http.Handler {
@@ -136,6 +140,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/templates/{id}/edit", s.adminTemplatesEdit)
 	mux.HandleFunc("POST /admin/templates/{id}", s.adminTemplatesUpdate)
 	mux.HandleFunc("POST /admin/templates/{id}/enabled", s.adminTemplateEnabled)
+	mux.HandleFunc("GET /admin/runtime", s.adminRuntime)
 	mux.HandleFunc("GET /", s.home)
 	return mux
 }
@@ -502,6 +507,23 @@ func (s *Server) adminTemplateEnabled(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/admin/templates", http.StatusSeeOther)
+}
+
+func (s *Server) adminRuntime(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	inspection, err := runtime.Inspect(r.Context(), s.runtime)
+	status := http.StatusOK
+	data := pageData{Title: "Runtime | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r)}
+	if err != nil {
+		status = http.StatusServiceUnavailable
+		data.RuntimeError = "Docker is unavailable or returned invalid inspection data."
+	} else {
+		data.Inspection = &inspection
+	}
+	s.render(w, status, "admin-runtime-page", data)
 }
 
 func (s *Server) parseTemplateForm(r *http.Request) (templateFormData, workspace.TemplateInput, error) {

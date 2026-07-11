@@ -43,6 +43,16 @@ type Capabilities struct {
 	SupportsManagedLabels  bool
 }
 
+type HostCapacity struct {
+	CPUMillis    int64
+	MemoryBytes  int64
+	StorageBytes int64
+}
+
+type CapacityProvider interface {
+	HostCapacity(ctx context.Context) (HostCapacity, error)
+}
+
 type ResourceLimits struct {
 	CPUMillis    int64
 	MemoryBytes  int64

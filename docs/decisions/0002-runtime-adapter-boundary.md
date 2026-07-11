@@ -10,7 +10,10 @@ references, resource limits, capabilities, and observed lifecycle state. Docker
 or Podman SDK types must not cross this boundary.
 
 The initial interface covers capability reporting, managed-workspace listing,
-create/start/stop/remove lifecycle operations, and inspection. Terminal attach,
+create/start/stop/remove lifecycle operations, and inspection. The selected
+Docker adapter currently implements only capability reporting, host capacity,
+managed-workspace listing, and inspection; mutation returns `ErrNotSupported`.
+Terminal attach,
 desktop forwarding, logs, and resource sampling remain separate design work;
 they are not forced into this base interface.
 
@@ -33,8 +36,8 @@ targets; those values remain service-side data.
 
 ## Deliberately deferred
 
-- Docker or Podman client libraries and socket access.
-- Container creation, start/stop, inspection, or deletion.
+- Docker or Podman SDK dependencies.
+- Container creation, start/stop, or deletion.
 - Runtime-specific resource-limit translation.
 - Terminal, graphical desktop, proxy, and log-stream interfaces.
 - Multi-host agents and remote transport.
