@@ -28,8 +28,9 @@ Implemented so far: administrator bootstrap, bcrypt password hashing,
 login/logout, opaque server-side sessions, CSRF protection, user and
 administrator roles, basic user management, and the first audit events. The
 remaining exit work includes authorization coverage for every state-changing
-handler, rate limiting, operational audit review, and a documented recovery
-procedure.
+handler, operational audit review, and a documented recovery procedure. Login
+failure rate limiting is now process-local and must move to shared infrastructure
+if COWS ever runs multiple active instances.
 
 ## Milestone 2: Templates and runtime inspection (interface prepared)
 

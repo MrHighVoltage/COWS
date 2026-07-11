@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"html/template"
 	"io/fs"
+	"net"
 	"net/http"
 	"strconv"
 	"time"
@@ -29,6 +30,7 @@ const (
 type Options struct {
 	CookieSecure    bool
 	SessionLifetime time.Duration
+	LoginLimiter    *auth.LoginLimiter
 }
 
 type Server struct {
@@ -65,6 +67,9 @@ type pageData struct {
 func New(db *sql.DB, authService *auth.Service, options Options) (*Server, error) {
 	if options.SessionLifetime <= 0 {
 		options.SessionLifetime = 8 * time.Hour
+	}
+	if options.LoginLimiter == nil {
+		options.LoginLimiter, _ = auth.NewLoginLimiter(auth.DefaultLoginFailureLimit, auth.DefaultLoginFailureWindow)
 	}
 	templates, err := template.ParseFS(webassets.Files, "templates/layouts/*.html", "templates/pages/*.html", "templates/fragments/*.html")
 	if err != nil {
@@ -129,8 +134,23 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
+	key := loginRateLimitKey(r)
+	if !s.options.LoginLimiter.Allow(key) {
+		retryAfter := int(s.options.LoginLimiter.RetryAfter(key).Seconds())
+		if retryAfter < 1 {
+			retryAfter = 1
+		}
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+		s.render(w, http.StatusTooManyRequests, "login-page", pageData{
+			Title:     "Sign in | COWS",
+			CSRFToken: s.ensureCSRF(w, r),
+			Error:     "Too many sign-in attempts. Try again later.",
+		})
+		return
+	}
 	_, token, err := s.auth.Authenticate(r.Context(), r.FormValue("username"), r.FormValue("password"))
 	if err != nil {
+		s.options.LoginLimiter.Failure(key)
 		s.render(w, http.StatusUnauthorized, "login-page", pageData{
 			Title:     "Sign in | COWS",
 			CSRFToken: s.ensureCSRF(w, r),
@@ -138,6 +158,7 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	s.options.LoginLimiter.Success(key)
 	s.setSessionCookie(w, token)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
@@ -375,4 +396,15 @@ func (s *Server) snapshot(ctx context.Context) healthSnapshot {
 		snapshot.Database = "unavailable"
 	}
 	return snapshot
+}
+
+func loginRateLimitKey(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil && host != "" {
+		return host
+	}
+	if r.RemoteAddr == "" {
+		return "unknown"
+	}
+	return r.RemoteAddr
 }
