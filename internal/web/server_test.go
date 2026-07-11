@@ -80,6 +80,51 @@ func TestHealthFragmentRendersHTML(t *testing.T) {
 	}
 }
 
+func TestStateChangingRequestsRequireCSRF(t *testing.T) {
+	server, _ := testServer(t)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/logout", strings.NewReader(""))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("missing CSRF response = %d, want 403", recorder.Code)
+	}
+}
+
+func TestLoginRateLimitReturnsRetryAfter(t *testing.T) {
+	server, authService := testServer(t)
+	limiter, err := auth.NewLoginLimiter(1, time.Hour)
+	if err != nil {
+		t.Fatalf("create login limiter: %v", err)
+	}
+	server.options.LoginLimiter = limiter
+	if _, err := authService.BootstrapAdministrator(context.Background(), auth.CreateUserInput{Username: "admin", Password: "correct horse battery staple"}); err != nil {
+		t.Fatalf("bootstrap administrator: %v", err)
+	}
+	loginPage := httptest.NewRecorder()
+	server.Handler().ServeHTTP(loginPage, httptest.NewRequest(http.MethodGet, "/login", nil))
+	csrfCookie := cookieByName(loginPage.Result().Cookies(), "cows_csrf")
+	if csrfCookie == nil {
+		t.Fatal("login page did not set CSRF cookie")
+	}
+	failedLogin := func() *httptest.ResponseRecorder {
+		form := url.Values{"csrf_token": {csrfCookie.Value}, "username": {"admin"}, "password": {"wrong password"}}
+		request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		request.AddCookie(csrfCookie)
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, request)
+		return recorder
+	}
+	if response := failedLogin(); response.Code != http.StatusUnauthorized {
+		t.Fatalf("first failed login status = %d", response.Code)
+	}
+	response := failedLogin()
+	if response.Code != http.StatusTooManyRequests || response.Header().Get("Retry-After") == "" {
+		t.Fatalf("rate-limited login response: status=%d retry-after=%q", response.Code, response.Header().Get("Retry-After"))
+	}
+}
+
 func TestLoginAndAdministratorUserManagement(t *testing.T) {
 	server, authService := testServer(t)
 	ctx := context.Background()
@@ -144,6 +189,32 @@ func TestAdministratorRouteRedirectsUnauthenticatedUsers(t *testing.T) {
 	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/admin/users", nil))
 	if recorder.Code != http.StatusSeeOther || recorder.Header().Get("Location") != "/login" {
 		t.Fatalf("unauthenticated admin response: status=%d location=%q", recorder.Code, recorder.Header().Get("Location"))
+	}
+}
+
+func TestNonAdministratorCannotOpenAdministratorUI(t *testing.T) {
+	server, authService := testServer(t)
+	ctx := context.Background()
+	if _, err := authService.BootstrapAdministrator(ctx, auth.CreateUserInput{Username: "admin", Password: "correct horse battery staple"}); err != nil {
+		t.Fatalf("bootstrap administrator: %v", err)
+	}
+	admin, _, err := authService.Authenticate(ctx, "admin", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate administrator: %v", err)
+	}
+	if _, err := authService.CreateUser(ctx, admin.ID, auth.CreateUserInput{Username: "student", Password: "another correct password", Role: domain.RoleUser}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	_, userToken, err := authService.Authenticate(ctx, "student", "another correct password")
+	if err != nil {
+		t.Fatalf("authenticate user: %v", err)
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/admin/users", nil)
+	request.AddCookie(&http.Cookie{Name: "cows_session", Value: userToken})
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("non-administrator response = %d, want 403", recorder.Code)
 	}
 }
 
