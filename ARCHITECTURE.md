@@ -81,7 +81,7 @@ internal/web/          handlers, templates, and static asset serving
 internal/domain/       stable COWS concepts and error categories
 internal/auth/         password authentication and session use cases
 internal/repository/   focused persistence interfaces and SQLite implementation
-internal/runtime/      Docker and Podman adapter boundary later
+internal/runtime/      Docker and Podman domain adapter boundary
 migrations/            ordered SQL migrations
 web/                   templates and local browser assets
 docs/decisions/        short architecture decisions
@@ -122,10 +122,12 @@ not become an unreviewed runtime dependency.
 
 ## Future host-agent boundary
 
-The runtime interface is intentionally internal and domain-oriented. A future
-host agent may own runtime socket access, host registration, capability
-reporting, and remote lifecycle operations. That is an evolution point, not a
-reason to add RPC, a message broker, or multiple services now.
+The runtime interface is intentionally internal and domain-oriented. The
+interface-only preparation currently lives in `internal/runtime`; it performs
+no runtime operations. A future host agent may own runtime socket access, host
+registration, capability reporting, and remote lifecycle operations. That is an
+evolution point, not a reason to add RPC, a message broker, or multiple services
+now.
 
 ## Operational direction
 

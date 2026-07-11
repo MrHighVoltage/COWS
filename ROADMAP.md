@@ -31,12 +31,13 @@ remaining exit work includes authorization coverage for every state-changing
 handler, rate limiting, operational audit review, and a documented recovery
 procedure.
 
-## Milestone 2: Templates and runtime inspection
+## Milestone 2: Templates and runtime inspection (interface prepared)
 
-Add validated administrator templates, template access rules, the runtime
-interface, one read-only runtime adapter, health/capability reporting, managed
-container labels, and fake-runtime contract tests. Preserve a practical second
-adapter for Docker or Podman.
+The COWS-facing runtime interface and managed-label convention are prepared,
+but no adapter or runtime operation exists yet. Add validated administrator
+templates, template access rules, one read-only runtime adapter,
+health/capability reporting, managed-container inspection, and fake-runtime
+contract tests. Preserve a practical second adapter for Docker or Podman.
 
 ## Milestone 3: Workspace lifecycle
 
