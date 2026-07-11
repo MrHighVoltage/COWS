@@ -64,6 +64,12 @@ type passwordFormData struct {
 	Error string
 }
 
+type workspaceFormData struct {
+	Name       string
+	TemplateID string
+	Error      string
+}
+
 type templateFormData struct {
 	ID                string
 	Editing           bool
@@ -98,6 +104,8 @@ type pageData struct {
 	Password     passwordFormData
 	Inspection   *runtime.Inspection
 	RuntimeError string
+	Workspaces   []domain.Workspace
+	Workspace    workspaceFormData
 }
 
 func New(db *sql.DB, authService *auth.Service, templateService *workspace.Service, runtimeAdapter runtime.Runtime, options Options) (*Server, error) {
@@ -109,6 +117,7 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 	}
 	templates, err := template.New("cows").Funcs(template.FuncMap{
 		"mib": func(bytes int64) int64 { return bytes / (1 << 20) },
+		"gib": func(bytes int64) int64 { return bytes / (1 << 30) },
 	}).ParseFS(webassets.Files, "templates/layouts/*.html", "templates/pages/*.html", "templates/fragments/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse templates: %w", err)
@@ -130,6 +139,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /logout", s.logoutPost)
 	mux.HandleFunc("GET /account/password", s.passwordGet)
 	mux.HandleFunc("POST /account/password", s.passwordPost)
+	mux.HandleFunc("GET /workspaces", s.workspaces)
+	mux.HandleFunc("GET /workspaces/new", s.workspacesNew)
+	mux.HandleFunc("POST /workspaces", s.workspacesCreate)
 	mux.HandleFunc("GET /admin/users", s.adminUsers)
 	mux.HandleFunc("GET /admin/users/new", s.adminUsersNew)
 	mux.HandleFunc("POST /admin/users", s.adminUsersCreate)
@@ -265,6 +277,56 @@ func (s *Server) passwordPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) workspaces(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	workspaces, err := s.workspace.ListWorkspaces(r.Context(), user.ID)
+	if err != nil {
+		http.Error(w, "failed to load workspaces", http.StatusInternalServerError)
+		return
+	}
+	s.render(w, http.StatusOK, "workspaces-page", pageData{Title: "Workspaces | COWS", User: user, Workspaces: workspaces, CSRFToken: s.ensureCSRF(w, r)})
+}
+
+func (s *Server) workspacesNew(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	templates, err := s.workspace.ListAvailableTemplates(r.Context(), user.ID)
+	if err != nil {
+		http.Error(w, "failed to load workspace templates", http.StatusInternalServerError)
+		return
+	}
+	s.render(w, http.StatusOK, "workspace-new-page", pageData{Title: "Create workspace | COWS", User: user, Templates: templates, CSRFToken: s.ensureCSRF(w, r)})
+}
+
+func (s *Server) workspacesCreate(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if !s.validCSRF(r) {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	form := workspaceFormData{Name: r.FormValue("name"), TemplateID: r.FormValue("template_id")}
+	if _, err := s.workspace.CreateWorkspace(r.Context(), user.ID, workspace.CreateWorkspaceInput{Name: form.Name, TemplateID: form.TemplateID}); err != nil {
+		form.Error = workspaceFormError(err)
+		templates, _ := s.workspace.ListAvailableTemplates(r.Context(), user.ID)
+		s.render(w, http.StatusBadRequest, "workspace-new-page", pageData{Title: "Create workspace | COWS", User: user, Templates: templates, CSRFToken: s.ensureCSRF(w, r), Workspace: form})
+		return
+	}
+	http.Redirect(w, r, "/workspaces", http.StatusSeeOther)
 }
 
 func (s *Server) logoutPost(w http.ResponseWriter, r *http.Request) {
@@ -674,6 +736,27 @@ func (s *Server) requireAdministrator(w http.ResponseWriter, r *http.Request) (d
 	return *user, true
 }
 
+func (s *Server) requireUser(w http.ResponseWriter, r *http.Request) (*domain.User, bool) {
+	user, err := s.currentUser(r)
+	if err != nil {
+		http.Error(w, "failed to load session", http.StatusInternalServerError)
+		return nil, false
+	}
+	if user == nil {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return nil, false
+	}
+	if user.MustChangePassword {
+		http.Redirect(w, r, "/account/password", http.StatusSeeOther)
+		return nil, false
+	}
+	if user.Disabled {
+		http.Error(w, "account disabled", http.StatusForbidden)
+		return nil, false
+	}
+	return user, true
+}
+
 func (s *Server) currentUser(r *http.Request) (*domain.User, error) {
 	cookie, err := r.Cookie(sessionCookieName)
 	if err != nil {
@@ -772,6 +855,19 @@ func templateActionError(err error) string {
 		return "The workspace template was not found."
 	}
 	return "The workspace template state could not be changed."
+}
+
+func workspaceFormError(err error) string {
+	switch {
+	case errors.Is(err, workspace.ErrInvalidWorkspace):
+		return "Enter a workspace name and select an approved template."
+	case errors.Is(err, workspace.ErrTemplateNotAvailable):
+		return "That workspace template is not available for your account."
+	case errors.Is(err, repository.ErrConflict):
+		return "You already have a workspace with that name."
+	default:
+		return "The workspace could not be created."
+	}
 }
 
 func (s *Server) healthFragment(w http.ResponseWriter, r *http.Request) {

@@ -113,6 +113,13 @@ initial SQLite deployment; browser input is converted to typed values and
 validated before persistence. Runtime arguments, mounts, capabilities, devices,
 host networking, and arbitrary environment values are intentionally absent.
 
+Workspaces reference an owner and template through foreign keys. Creation
+stores the template's default allocations and desired state `stopped`; it does
+not contact Docker. Observed state, runtime ID, and reconciliation errors are
+stored separately and may only be updated by reconciliation code. Ordinary
+users can list and access their own records; administrators can inspect all
+records through service-layer authorization.
+
 ## Frontend architecture
 
 Go `html/template` renders complete pages, layouts, components, and fragments.

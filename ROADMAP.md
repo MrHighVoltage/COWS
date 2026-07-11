@@ -42,10 +42,11 @@ connectivity reporting, reconciliation persistence, and fake-runtime contract
 coverage. Docker lifecycle operations and a practical second adapter for
 Podman remain deliberately deferred.
 
-## Milestone 3: Workspace lifecycle
+## Milestone 3: Workspace lifecycle (persistence prepared)
 
-Add create/start/stop/restart/delete, ownership checks, runtime-enforced limits,
-quota and host-capacity checks, desired/observed state reconciliation, and
+Workspace persistence, owner/template foreign keys, desired/observed state, and
+user creation/listing are now present. Add start/stop/restart/delete,
+runtime-enforced limits, quota and host-capacity checks, reconciliation, and
 administrator overrides. Exit requires idempotence and failure-path tests.
 
 ## Milestone 4: Terminal access

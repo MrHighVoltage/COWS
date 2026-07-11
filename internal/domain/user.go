@@ -75,3 +75,27 @@ type WorkspaceTemplate struct {
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
 }
+
+type DesiredWorkspaceState string
+
+const (
+	DesiredWorkspaceStopped DesiredWorkspaceState = "stopped"
+	DesiredWorkspaceRunning DesiredWorkspaceState = "running"
+)
+
+type Workspace struct {
+	ID                  string
+	OwnerUserID         string
+	TemplateID          string
+	Name                string
+	DesiredState        DesiredWorkspaceState
+	ObservedState       string
+	RuntimeID           string
+	ObservedError       string
+	AllocatedCPUMillis  int64
+	AllocatedMemoryBytes int64
+	AllocatedStorageBytes int64
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+	ObservedAt          time.Time
+}

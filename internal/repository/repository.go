@@ -50,9 +50,20 @@ type TemplateRepository interface {
 	SetTemplateEnabled(ctx context.Context, id string, enabled bool, updatedAt time.Time) error
 }
 
+type WorkspaceRepository interface {
+	ListWorkspacesForUser(ctx context.Context, ownerUserID string) ([]domain.Workspace, error)
+	ListAllWorkspaces(ctx context.Context) ([]domain.Workspace, error)
+	FindWorkspaceByID(ctx context.Context, id string) (domain.Workspace, error)
+	FindWorkspaceByOwnerAndName(ctx context.Context, ownerUserID, name string) (domain.Workspace, error)
+	CreateWorkspace(ctx context.Context, workspace domain.Workspace) error
+	SetWorkspaceDesiredState(ctx context.Context, id string, state domain.DesiredWorkspaceState, updatedAt time.Time) error
+	UpdateWorkspaceObservedState(ctx context.Context, id, observedState, runtimeID, observedError string, observedAt, updatedAt time.Time) error
+}
+
 type Store interface {
 	UserRepository
 	SessionRepository
 	AuditRepository
 	TemplateRepository
+	WorkspaceRepository
 }

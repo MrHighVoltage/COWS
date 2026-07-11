@@ -1,0 +1,17 @@
+{{ define "workspaces-page" }}
+{{ template "base-start" . }}
+<section class="intro" aria-labelledby="workspaces-title">
+  <p class="eyebrow">Workspace access</p>
+  <div class="title-row">
+    <div><h1 id="workspaces-title">Your workspaces</h1><p class="lede">Manage environments created from approved templates.</p></div>
+    <a class="primary-button button-link" href="/workspaces/new">Create workspace</a>
+  </div>
+</section>
+<section class="panel table-panel" aria-labelledby="workspace-list-title">
+  <h2 id="workspace-list-title">Workspace list</h2>
+  <div class="table-scroll"><table><thead><tr><th>Name</th><th>Template</th><th>Desired state</th><th>Observed state</th><th>Allocated</th></tr></thead><tbody>
+  {{ range .Workspaces }}<tr><td><strong>{{ .Name }}</strong><span class="table-subtext">{{ .ID }}</span></td><td><code>{{ .TemplateID }}</code></td><td>{{ .DesiredState }}</td><td>{{ .ObservedState }}{{ if .ObservedError }}<span class="table-subtext">{{ .ObservedError }}</span>{{ end }}</td><td><span class="table-subtext">CPU {{ .AllocatedCPUMillis }} mCPU</span><span class="table-subtext">Memory {{ mib .AllocatedMemoryBytes }} MiB</span><span class="table-subtext">Storage {{ gib .AllocatedStorageBytes }} GiB</span></td></tr>{{ else }}<tr><td colspan="5" class="muted">No workspaces have been created.</td></tr>{{ end }}
+  </tbody></table></div>
+</section>
+{{ template "base-end" . }}
+{{ end }}
