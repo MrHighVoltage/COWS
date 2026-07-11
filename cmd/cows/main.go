@@ -15,6 +15,7 @@ import (
 	"github.com/cows-project/cows/internal/config"
 	"github.com/cows-project/cows/internal/database"
 	"github.com/cows-project/cows/internal/repository/sqlite"
+	"github.com/cows-project/cows/internal/runtime/docker"
 	"github.com/cows-project/cows/internal/web"
 	"github.com/cows-project/cows/internal/workspace"
 )
@@ -60,7 +61,11 @@ func run(ctx context.Context, args []string) error {
 	}
 
 	templateService := workspace.New(sqlite.New(db))
-	webServer, err := web.New(db, authService, templateService, web.Options{CookieSecure: cfg.CookieSecure, SessionLifetime: cfg.SessionLifetime})
+	dockerRuntime, err := docker.New(cfg.DockerSocket)
+	if err != nil {
+		return fmt.Errorf("initialize Docker runtime: %w", err)
+	}
+	webServer, err := web.New(db, authService, templateService, dockerRuntime, web.Options{CookieSecure: cfg.CookieSecure, SessionLifetime: cfg.SessionLifetime})
 	if err != nil {
 		return fmt.Errorf("initialize web server: %w", err)
 	}

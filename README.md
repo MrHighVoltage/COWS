@@ -52,6 +52,9 @@ The server defaults to `127.0.0.1:8080` and creates its SQLite database at
 `COWS_BOOTSTRAP_ADMIN_USERNAME` and `COWS_BOOTSTRAP_ADMIN_PASSWORD` together;
 the bootstrap is attempted only when no users exist. Use
 `COWS_COOKIE_SECURE=true` when serving through HTTPS.
+Docker inspection uses `/var/run/docker.sock` by default and can be changed
+with `COWS_DOCKER_SOCKET` or `-docker-socket`. The current Docker integration is
+read-only; it does not create or modify containers.
 
 ## Security warning
 

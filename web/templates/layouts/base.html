@@ -19,6 +19,7 @@
         <a href="/">Dashboard</a>
         {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a href="/admin/users">Users</a>{{ end }}
         {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a href="/admin/templates">Templates</a>{{ end }}
+        {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a href="/admin/runtime">Runtime</a>{{ end }}
         <form method="post" action="/logout">
           <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
           <button class="link-button" type="submit">Sign out</button>

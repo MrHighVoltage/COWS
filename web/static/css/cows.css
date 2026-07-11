@@ -76,6 +76,8 @@ th { color: #52616f; font-size: .78rem; text-transform: uppercase; }
 code { color: #465866; font-size: .82rem; }
 .badge { display: inline-block; padding: .2rem .45rem; border: 1px solid #9fb7c5; border-radius: .25rem; color: #176b8f; font-size: .8rem; }
 .status-disabled { color: #8c2d1a; }
+.runtime-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; padding-top: 1rem; border-top: 1px solid #e3e8ed; }
+.runtime-facts strong { display: block; margin-top: .15rem; }
 .table-action { min-height: 2rem; padding: .35rem .55rem; color: #176b8f; border-color: #9fb7c5; background: transparent; font-size: .85rem; }
 .action-stack { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
 .action-stack form { margin: 0; }
@@ -96,4 +98,5 @@ code { color: #465866; font-size: .82rem; }
   .form-actions { align-items: stretch; flex-direction: column-reverse; }
   .form-actions > * { width: 100%; }
   .form-grid { grid-template-columns: 1fr; }
+  .runtime-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
