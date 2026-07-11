@@ -39,5 +39,8 @@ targets; those values remain service-side data.
 - Terminal, graphical desktop, proxy, and log-stream interfaces.
 - Multi-host agents and remote transport.
 
-The first adapter should be selected after fake-runtime service tests define
-the required operation semantics and error handling.
+The interface-only inspection coordinator now exercises the read-only portion
+of this contract: it requests capabilities and managed workspaces, validates
+identity uniqueness, and returns deterministic ordering without mutating the
+runtime or database. The first adapter should be selected only after fake-runtime
+service tests define the required operation semantics and error handling.

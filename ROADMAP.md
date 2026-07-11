@@ -35,11 +35,11 @@ if COWS ever runs multiple active instances.
 ## Milestone 2: Templates and runtime inspection (in progress)
 
 Validated administrator templates, role access rules, resource policy fields,
-and the COWS-facing runtime interface are now present. No adapter or runtime
-operation exists yet. Remaining work is one deliberately read-only runtime
-adapter, health/capability reporting, managed-container inspection, and
-fake-runtime contract tests. Preserve a practical second adapter for Docker or
-Podman.
+the COWS-facing runtime interface, and an interface-only inspection coordinator
+are now present. No adapter or runtime operation exists yet. Remaining work is
+one deliberately read-only runtime adapter, runtime connectivity reporting,
+managed-container inspection, and fake-runtime contract tests. Preserve a
+practical second adapter for Docker or Podman.
 
 ## Milestone 3: Workspace lifecycle
 
