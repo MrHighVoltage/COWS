@@ -153,9 +153,22 @@ func TestLoginAndAdministratorUserManagement(t *testing.T) {
 	if loginRecorder.Code != http.StatusSeeOther {
 		t.Fatalf("login status = %d, want 303", loginRecorder.Code)
 	}
+	if loginRecorder.Header().Get("Location") != "/account/password" {
+		t.Fatalf("first login location = %q, want password change", loginRecorder.Header().Get("Location"))
+	}
 	sessionCookie := cookieByName(loginRecorder.Result().Cookies(), "cows_session")
 	if sessionCookie == nil || !sessionCookie.HttpOnly {
 		t.Fatalf("invalid session cookie: %#v", sessionCookie)
+	}
+	passwordForm := url.Values{"csrf_token": {csrfCookie.Value}, "current_password": {"correct horse battery staple"}, "new_password": {"changed correct horse battery staple"}, "confirm_password": {"changed correct horse battery staple"}}
+	passwordRequest := httptest.NewRequest(http.MethodPost, "/account/password", strings.NewReader(passwordForm.Encode()))
+	passwordRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	passwordRequest.AddCookie(sessionCookie)
+	passwordRequest.AddCookie(csrfCookie)
+	passwordRecorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(passwordRecorder, passwordRequest)
+	if passwordRecorder.Code != http.StatusSeeOther || passwordRecorder.Header().Get("Location") != "/" {
+		t.Fatalf("password change response: status=%d location=%q", passwordRecorder.Code, passwordRecorder.Header().Get("Location"))
 	}
 
 	adminRequest := httptest.NewRequest(http.MethodGet, "/admin/users", nil)
@@ -236,12 +249,26 @@ func TestNonAdministratorCannotOpenAdministratorUI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("authenticate administrator: %v", err)
 	}
+	if err := authService.ChangePassword(ctx, admin.ID, "correct horse battery staple", "changed correct horse battery staple"); err != nil {
+		t.Fatalf("change administrator password: %v", err)
+	}
 	if _, err := authService.CreateUser(ctx, admin.ID, auth.CreateUserInput{Username: "student", Password: "another correct password", Role: domain.RoleUser}); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
 	_, userToken, err := authService.Authenticate(ctx, "student", "another correct password")
 	if err != nil {
 		t.Fatalf("authenticate user: %v", err)
+	}
+	student, _, err := authService.Authenticate(ctx, "student", "another correct password")
+	if err != nil {
+		t.Fatalf("authenticate student for password change: %v", err)
+	}
+	if err := authService.ChangePassword(ctx, student.ID, "another correct password", "changed student password"); err != nil {
+		t.Fatalf("change student password: %v", err)
+	}
+	_, userToken, err = authService.Authenticate(ctx, "student", "changed student password")
+	if err != nil {
+		t.Fatalf("authenticate changed student password: %v", err)
 	}
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/admin/users", nil)

@@ -15,11 +15,12 @@
   <h2 id="user-list-title">Local accounts</h2>
   <div class="table-scroll">
     <table>
-      <thead><tr><th>Username</th><th>Display name</th><th>Role</th><th>Status</th><th>Action</th></tr></thead>
+      <thead><tr><th>Username</th><th>Email</th><th>Display name</th><th>Role</th><th>Status</th><th>Action</th></tr></thead>
       <tbody>
       {{ range .Users }}
         <tr>
           <td><strong>{{ .Username }}</strong></td>
+          <td>{{ if .Email }}{{ .Email }}{{ else }}<span class="muted">Not set</span>{{ end }}</td>
           <td>{{ .DisplayName }}</td>
           <td><span class="badge">{{ .Role }}</span></td>
           <td>{{ if .Disabled }}<span class="status-value status-disabled">Disabled</span>{{ else }}<span class="status-value status-ok">Active</span>{{ end }}</td>
@@ -34,7 +35,7 @@
           </td>
         </tr>
       {{ else }}
-        <tr><td colspan="5" class="muted">No users found.</td></tr>
+        <tr><td colspan="6" class="muted">No users found.</td></tr>
       {{ end }}
       </tbody>
     </table>

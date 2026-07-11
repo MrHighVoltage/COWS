@@ -46,6 +46,12 @@ func TestBootstrapAuthenticateAndSession(t *testing.T) {
 	if user.Role != domain.RoleAdministrator || token == "" {
 		t.Fatalf("unexpected authenticated user/token: %+v %q", user, token)
 	}
+	if !user.MustChangePassword {
+		t.Fatal("new administrator should require a password change")
+	}
+	if err := service.ChangePassword(ctx, user.ID, "correct horse battery staple", "changed correct horse battery staple"); err != nil {
+		t.Fatalf("change bootstrap password: %v", err)
+	}
 	sessionUser, err := service.UserForSession(ctx, token)
 	if err != nil || sessionUser.ID != user.ID {
 		t.Fatalf("session user: %+v %v", sessionUser, err)
@@ -65,9 +71,16 @@ func TestAdministratorCanManageUsersWithSafetyChecks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bootstrap administrator: %v", err)
 	}
-	admin, _, err := service.Authenticate(ctx, "admin", "correct horse battery staple")
+	adminBeforeChange, _, err := service.Authenticate(ctx, "admin", "correct horse battery staple")
 	if err != nil {
 		t.Fatalf("authenticate administrator: %v", err)
+	}
+	if err := service.ChangePassword(ctx, adminBeforeChange.ID, "correct horse battery staple", "changed correct horse battery staple"); err != nil {
+		t.Fatalf("change administrator password: %v", err)
+	}
+	admin, _, err := service.Authenticate(ctx, "admin", "changed correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate changed administrator password: %v", err)
 	}
 	user, err := service.CreateUser(ctx, admin.ID, CreateUserInput{Username: "student", DisplayName: "Student", Password: "another correct password", Role: domain.RoleUser})
 	if err != nil {

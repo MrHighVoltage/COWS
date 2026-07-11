@@ -14,7 +14,10 @@ import (
 	"github.com/cows-project/cows/internal/repository"
 )
 
-var ErrInvalidTemplate = errors.New("invalid workspace template")
+var (
+	ErrInvalidTemplate        = errors.New("invalid workspace template")
+	ErrPasswordChangeRequired = errors.New("password change required")
+)
 
 const (
 	auditTemplateCreated  = "template.created"
@@ -160,6 +163,9 @@ func (s *Service) requireAdministrator(ctx context.Context, actorID string) (dom
 	user, err := s.store.FindUserByID(ctx, actorID)
 	if err != nil {
 		return domain.User{}, err
+	}
+	if user.MustChangePassword {
+		return domain.User{}, ErrPasswordChangeRequired
 	}
 	if !user.IsAdministrator() {
 		return domain.User{}, errors.New("administrator permission required")

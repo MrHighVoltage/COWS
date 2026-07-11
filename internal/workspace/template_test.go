@@ -29,11 +29,14 @@ func testService(t *testing.T) (*Service, *auth.Service, string) {
 	if _, err := authService.BootstrapAdministrator(context.Background(), auth.CreateUserInput{Username: "admin", Password: "correct horse battery staple"}); err != nil {
 		t.Fatalf("bootstrap administrator: %v", err)
 	}
-	admin, _, err := authService.Authenticate(context.Background(), "admin", "correct horse battery staple")
+	adminBeforeChange, _, err := authService.Authenticate(context.Background(), "admin", "correct horse battery staple")
 	if err != nil {
 		t.Fatalf("authenticate administrator: %v", err)
 	}
-	return New(store), authService, admin.ID
+	if err := authService.ChangePassword(context.Background(), adminBeforeChange.ID, "correct horse battery staple", "changed correct horse battery staple"); err != nil {
+		t.Fatalf("change administrator password: %v", err)
+	}
+	return New(store), authService, adminBeforeChange.ID
 }
 
 func validTemplateInput() TemplateInput {

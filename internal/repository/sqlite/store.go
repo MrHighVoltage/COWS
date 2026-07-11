@@ -36,13 +36,13 @@ func (s *Store) CountActiveAdministrators(ctx context.Context) (int, error) {
 }
 
 func (s *Store) FindUserByUsername(ctx context.Context, username string) (repository.UserRecord, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, username, display_name, password_hash, role, disabled, created_at, updated_at
+	row := s.db.QueryRowContext(ctx, `SELECT id, username, email, display_name, password_hash, role, disabled, must_change_password, created_at, updated_at
 		FROM users WHERE username = ?`, username)
 	return scanUserRecord(row)
 }
 
 func (s *Store) FindUserByID(ctx context.Context, id string) (domain.User, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, username, display_name, password_hash, role, disabled, created_at, updated_at
+	row := s.db.QueryRowContext(ctx, `SELECT id, username, email, display_name, password_hash, role, disabled, must_change_password, created_at, updated_at
 		FROM users WHERE id = ?`, id)
 	record, err := scanUserRecord(row)
 	if err != nil {
@@ -51,8 +51,14 @@ func (s *Store) FindUserByID(ctx context.Context, id string) (domain.User, error
 	return record.User, nil
 }
 
+func (s *Store) FindUserCredentialsByID(ctx context.Context, id string) (repository.UserRecord, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT id, username, email, display_name, password_hash, role, disabled, must_change_password, created_at, updated_at
+		FROM users WHERE id = ?`, id)
+	return scanUserRecord(row)
+}
+
 func (s *Store) ListUsers(ctx context.Context) ([]domain.User, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, username, display_name, password_hash, role, disabled, created_at, updated_at
+	rows, err := s.db.QueryContext(ctx, `SELECT id, username, email, display_name, password_hash, role, disabled, must_change_password, created_at, updated_at
 		FROM users ORDER BY username`)
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
@@ -75,11 +81,26 @@ func (s *Store) ListUsers(ctx context.Context) ([]domain.User, error) {
 
 func (s *Store) CreateUser(ctx context.Context, user domain.User, passwordHash string) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO users
-		(id, username, display_name, password_hash, role, disabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, user.ID, user.Username, user.DisplayName, passwordHash,
-		user.Role, boolInt(user.Disabled), user.CreatedAt.Unix(), user.UpdatedAt.Unix())
+		(id, username, email, display_name, password_hash, role, disabled, must_change_password, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, user.ID, user.Username, user.Email, user.DisplayName, passwordHash,
+		user.Role, boolInt(user.Disabled), boolInt(user.MustChangePassword), user.CreatedAt.Unix(), user.UpdatedAt.Unix())
 	if err != nil {
 		return fmt.Errorf("create user: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) UpdateUserPassword(ctx context.Context, id, passwordHash string, mustChangePassword bool) error {
+	result, err := s.db.ExecContext(ctx, "UPDATE users SET password_hash = ?, must_change_password = ?, updated_at = ? WHERE id = ?", passwordHash, boolInt(mustChangePassword), time.Now().UTC().Unix(), id)
+	if err != nil {
+		return fmt.Errorf("update user password: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check user password update: %w", err)
+	}
+	if count == 0 {
+		return repository.ErrNotFound
 	}
 	return nil
 }
@@ -110,7 +131,7 @@ func (s *Store) CreateSession(ctx context.Context, session domain.Session) error
 }
 
 func (s *Store) FindSessionUser(ctx context.Context, tokenHash string, nowUnix int64) (domain.User, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT u.id, u.username, u.display_name, u.password_hash, u.role, u.disabled, u.created_at, u.updated_at
+	row := s.db.QueryRowContext(ctx, `SELECT u.id, u.username, u.email, u.display_name, u.password_hash, u.role, u.disabled, u.must_change_password, u.created_at, u.updated_at
 		FROM sessions AS s JOIN users AS u ON u.id = s.user_id
 		WHERE s.token_hash = ? AND s.expires_at > ? AND u.disabled = 0`, tokenHash, nowUnix)
 	record, err := scanUserRecord(row)
@@ -297,11 +318,12 @@ func scanUserRecord(row scanner) (repository.UserRecord, error) {
 		record      repository.UserRecord
 		role        string
 		disabled    int
+		mustChange  int
 		createdUnix int64
 		updatedUnix int64
 	)
-	if err := row.Scan(&record.User.ID, &record.User.Username, &record.User.DisplayName, &record.PasswordHash,
-		&role, &disabled, &createdUnix, &updatedUnix); err != nil {
+	if err := row.Scan(&record.User.ID, &record.User.Username, &record.User.Email, &record.User.DisplayName, &record.PasswordHash,
+		&role, &disabled, &mustChange, &createdUnix, &updatedUnix); err != nil {
 		if err == sql.ErrNoRows {
 			return repository.UserRecord{}, repository.ErrNotFound
 		}
@@ -309,6 +331,7 @@ func scanUserRecord(row scanner) (repository.UserRecord, error) {
 	}
 	record.User.Role = domain.Role(role)
 	record.User.Disabled = disabled != 0
+	record.User.MustChangePassword = mustChange != 0
 	record.User.CreatedAt = time.Unix(createdUnix, 0).UTC()
 	record.User.UpdatedAt = time.Unix(updatedUnix, 0).UTC()
 	return record, nil

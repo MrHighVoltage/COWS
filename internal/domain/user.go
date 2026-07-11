@@ -14,13 +14,15 @@ func (r Role) Valid() bool {
 }
 
 type User struct {
-	ID          string
-	Username    string
-	DisplayName string
-	Role        Role
-	Disabled    bool
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID                 string
+	Username           string
+	Email              string
+	DisplayName        string
+	Role               Role
+	Disabled           bool
+	MustChangePassword bool
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 func (u User) IsAdministrator() bool {
