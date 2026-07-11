@@ -14,11 +14,13 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/cows-project/cows/internal/auth"
 	"github.com/cows-project/cows/internal/domain"
 	"github.com/cows-project/cows/internal/repository"
+	"github.com/cows-project/cows/internal/workspace"
 	webassets "github.com/cows-project/cows/web"
 )
 
@@ -36,6 +38,7 @@ type Options struct {
 type Server struct {
 	db        *sql.DB
 	auth      *auth.Service
+	workspace *workspace.Service
 	options   Options
 	templates *template.Template
 	static    fs.FS
@@ -54,6 +57,27 @@ type userFormData struct {
 	Error       string
 }
 
+type templateFormData struct {
+	ID                string
+	Editing           bool
+	Name              string
+	Description       string
+	ImageReference    string
+	ImageDigest       string
+	DefaultCPUMillis  string
+	MaxCPUMillis      string
+	DefaultMemoryMiB  string
+	MaxMemoryMiB      string
+	DefaultStorageGiB string
+	TerminalAccess    bool
+	DesktopAccess     bool
+	WebAccess         bool
+	UserRole          bool
+	AdministratorRole bool
+	Enabled           bool
+	Error             string
+}
+
 type pageData struct {
 	Title     string
 	User      *domain.User
@@ -62,16 +86,20 @@ type pageData struct {
 	Error     string
 	Users     []domain.User
 	Form      userFormData
+	Templates []domain.WorkspaceTemplate
+	Template  templateFormData
 }
 
-func New(db *sql.DB, authService *auth.Service, options Options) (*Server, error) {
+func New(db *sql.DB, authService *auth.Service, templateService *workspace.Service, options Options) (*Server, error) {
 	if options.SessionLifetime <= 0 {
 		options.SessionLifetime = 8 * time.Hour
 	}
 	if options.LoginLimiter == nil {
 		options.LoginLimiter, _ = auth.NewLoginLimiter(auth.DefaultLoginFailureLimit, auth.DefaultLoginFailureWindow)
 	}
-	templates, err := template.ParseFS(webassets.Files, "templates/layouts/*.html", "templates/pages/*.html", "templates/fragments/*.html")
+	templates, err := template.New("cows").Funcs(template.FuncMap{
+		"mib": func(bytes int64) int64 { return bytes / (1 << 20) },
+	}).ParseFS(webassets.Files, "templates/layouts/*.html", "templates/pages/*.html", "templates/fragments/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse templates: %w", err)
 	}
@@ -79,7 +107,7 @@ func New(db *sql.DB, authService *auth.Service, options Options) (*Server, error
 	if err != nil {
 		return nil, fmt.Errorf("open static assets: %w", err)
 	}
-	return &Server{db: db, auth: authService, options: options, templates: templates, static: static}, nil
+	return &Server{db: db, auth: authService, workspace: templateService, options: options, templates: templates, static: static}, nil
 }
 
 func (s *Server) Handler() http.Handler {
@@ -94,6 +122,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/users/new", s.adminUsersNew)
 	mux.HandleFunc("POST /admin/users", s.adminUsersCreate)
 	mux.HandleFunc("POST /admin/users/{id}/disabled", s.adminUserDisabled)
+	mux.HandleFunc("GET /admin/templates", s.adminTemplates)
+	mux.HandleFunc("GET /admin/templates/new", s.adminTemplatesNew)
+	mux.HandleFunc("POST /admin/templates", s.adminTemplatesCreate)
+	mux.HandleFunc("GET /admin/templates/{id}/edit", s.adminTemplatesEdit)
+	mux.HandleFunc("POST /admin/templates/{id}", s.adminTemplatesUpdate)
+	mux.HandleFunc("POST /admin/templates/{id}/enabled", s.adminTemplateEnabled)
 	mux.HandleFunc("GET /", s.home)
 	return mux
 }
@@ -269,6 +303,268 @@ func (s *Server) adminUserDisabled(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
 }
 
+func (s *Server) adminTemplates(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	templates, err := s.workspace.ListTemplates(r.Context(), user.ID)
+	if err != nil {
+		http.Error(w, "failed to load workspace templates", http.StatusInternalServerError)
+		return
+	}
+	s.render(w, http.StatusOK, "admin-templates-page", pageData{Title: "Templates | COWS", User: &user, Templates: templates, CSRFToken: s.ensureCSRF(w, r)})
+}
+
+func (s *Server) adminTemplatesNew(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	s.render(w, http.StatusOK, "admin-template-form-page", pageData{
+		Title:     "Create template | COWS",
+		User:      &user,
+		CSRFToken: s.ensureCSRF(w, r),
+		Template:  defaultTemplateForm(),
+	})
+}
+
+func (s *Server) adminTemplatesCreate(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if !s.validCSRF(r) {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	form, input, err := s.parseTemplateForm(r)
+	if err != nil {
+		form.Error = templateFormError(err)
+		s.render(w, http.StatusBadRequest, "admin-template-form-page", pageData{Title: "Create template | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), Template: form})
+		return
+	}
+	if _, err := s.workspace.CreateTemplate(r.Context(), user.ID, input); err != nil {
+		form.Error = templateFormError(err)
+		s.render(w, http.StatusBadRequest, "admin-template-form-page", pageData{Title: "Create template | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), Template: form})
+		return
+	}
+	http.Redirect(w, r, "/admin/templates", http.StatusSeeOther)
+}
+
+func (s *Server) adminTemplatesEdit(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	template, err := s.workspace.GetTemplate(r.Context(), user.ID, r.PathValue("id"))
+	if errors.Is(err, repository.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to load workspace template", http.StatusInternalServerError)
+		return
+	}
+	s.render(w, http.StatusOK, "admin-template-form-page", pageData{Title: "Edit template | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), Template: templateFormFromDomain(template)})
+}
+
+func (s *Server) adminTemplatesUpdate(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if !s.validCSRF(r) {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	form, input, err := s.parseTemplateForm(r)
+	form.ID = r.PathValue("id")
+	form.Editing = true
+	if err != nil {
+		form.Error = templateFormError(err)
+		s.render(w, http.StatusBadRequest, "admin-template-form-page", pageData{Title: "Edit template | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), Template: form})
+		return
+	}
+	if _, err := s.workspace.UpdateTemplate(r.Context(), user.ID, r.PathValue("id"), input); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, repository.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		form.Error = templateFormError(err)
+		s.render(w, status, "admin-template-form-page", pageData{Title: "Edit template | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), Template: form})
+		return
+	}
+	http.Redirect(w, r, "/admin/templates", http.StatusSeeOther)
+}
+
+func (s *Server) adminTemplateEnabled(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if !s.validCSRF(r) {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	enabled, err := strconv.ParseBool(r.FormValue("enabled"))
+	if err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if err := s.workspace.SetTemplateEnabled(r.Context(), user.ID, r.PathValue("id"), enabled); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, repository.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		http.Error(w, templateActionError(err), status)
+		return
+	}
+	http.Redirect(w, r, "/admin/templates", http.StatusSeeOther)
+}
+
+func (s *Server) parseTemplateForm(r *http.Request) (templateFormData, workspace.TemplateInput, error) {
+	form := templateFormData{
+		Name:              r.FormValue("name"),
+		Description:       r.FormValue("description"),
+		ImageReference:    r.FormValue("image_reference"),
+		ImageDigest:       r.FormValue("image_digest"),
+		DefaultCPUMillis:  r.FormValue("default_cpu_millis"),
+		MaxCPUMillis:      r.FormValue("max_cpu_millis"),
+		DefaultMemoryMiB:  r.FormValue("default_memory_mib"),
+		MaxMemoryMiB:      r.FormValue("max_memory_mib"),
+		DefaultStorageGiB: r.FormValue("default_storage_gib"),
+		Enabled:           r.FormValue("enabled") == "on",
+	}
+	for _, method := range r.Form["access_methods"] {
+		switch domain.AccessMethod(method) {
+		case domain.AccessTerminal:
+			form.TerminalAccess = true
+		case domain.AccessDesktop:
+			form.DesktopAccess = true
+		case domain.AccessWeb:
+			form.WebAccess = true
+		}
+	}
+	for _, role := range r.Form["allowed_roles"] {
+		switch domain.Role(role) {
+		case domain.RoleUser:
+			form.UserRole = true
+		case domain.RoleAdministrator:
+			form.AdministratorRole = true
+		}
+	}
+	defaultCPU, err := parsePositiveInt(form.DefaultCPUMillis)
+	if err != nil {
+		return form, workspace.TemplateInput{}, workspace.ErrInvalidTemplate
+	}
+	maxCPU, err := parsePositiveInt(form.MaxCPUMillis)
+	if err != nil {
+		return form, workspace.TemplateInput{}, workspace.ErrInvalidTemplate
+	}
+	defaultMemory, err := parseResource(form.DefaultMemoryMiB, 1<<20)
+	if err != nil {
+		return form, workspace.TemplateInput{}, workspace.ErrInvalidTemplate
+	}
+	maxMemory, err := parseResource(form.MaxMemoryMiB, 1<<20)
+	if err != nil {
+		return form, workspace.TemplateInput{}, workspace.ErrInvalidTemplate
+	}
+	defaultStorage, err := parseResource(form.DefaultStorageGiB, 1<<30)
+	if err != nil {
+		return form, workspace.TemplateInput{}, workspace.ErrInvalidTemplate
+	}
+	methods := make([]domain.AccessMethod, 0, 3)
+	if form.TerminalAccess {
+		methods = append(methods, domain.AccessTerminal)
+	}
+	if form.DesktopAccess {
+		methods = append(methods, domain.AccessDesktop)
+	}
+	if form.WebAccess {
+		methods = append(methods, domain.AccessWeb)
+	}
+	roles := make([]domain.Role, 0, 2)
+	if form.UserRole {
+		roles = append(roles, domain.RoleUser)
+	}
+	if form.AdministratorRole {
+		roles = append(roles, domain.RoleAdministrator)
+	}
+	return form, workspace.TemplateInput{
+		Name:                form.Name,
+		Description:         form.Description,
+		ImageReference:      form.ImageReference,
+		ImageDigest:         form.ImageDigest,
+		DefaultCPUMillis:    defaultCPU,
+		MaxCPUMillis:        maxCPU,
+		DefaultMemoryBytes:  defaultMemory,
+		MaxMemoryBytes:      maxMemory,
+		DefaultStorageBytes: defaultStorage,
+		AccessMethods:       methods,
+		AllowedRoles:        roles,
+		Enabled:             form.Enabled,
+	}, nil
+}
+
+func parsePositiveInt(value string) (int64, error) {
+	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil || parsed <= 0 {
+		return 0, errors.New("value must be positive")
+	}
+	return parsed, nil
+}
+
+func parseResource(value string, multiplier int64) (int64, error) {
+	parsed, err := parsePositiveInt(value)
+	if err != nil || parsed > (1<<62)/multiplier {
+		return 0, errors.New("resource value is invalid")
+	}
+	return parsed * multiplier, nil
+}
+
+func defaultTemplateForm() templateFormData {
+	return templateFormData{DefaultCPUMillis: "1000", MaxCPUMillis: "4000", DefaultMemoryMiB: "2048", MaxMemoryMiB: "8192", DefaultStorageGiB: "20", TerminalAccess: true, UserRole: true, Enabled: true}
+}
+
+func templateFormFromDomain(template domain.WorkspaceTemplate) templateFormData {
+	form := templateFormData{ID: template.ID, Editing: true, Name: template.Name, Description: template.Description, ImageReference: template.ImageReference, ImageDigest: template.ImageDigest, DefaultCPUMillis: strconv.FormatInt(template.DefaultCPUMillis, 10), MaxCPUMillis: strconv.FormatInt(template.MaxCPUMillis, 10), DefaultMemoryMiB: strconv.FormatInt(template.DefaultMemoryBytes/(1<<20), 10), MaxMemoryMiB: strconv.FormatInt(template.MaxMemoryBytes/(1<<20), 10), DefaultStorageGiB: strconv.FormatInt(template.DefaultStorageBytes/(1<<30), 10), Enabled: template.Enabled}
+	for _, method := range template.AccessMethods {
+		switch method {
+		case domain.AccessTerminal:
+			form.TerminalAccess = true
+		case domain.AccessDesktop:
+			form.DesktopAccess = true
+		case domain.AccessWeb:
+			form.WebAccess = true
+		}
+	}
+	for _, role := range template.AllowedRoles {
+		switch role {
+		case domain.RoleUser:
+			form.UserRole = true
+		case domain.RoleAdministrator:
+			form.AdministratorRole = true
+		}
+	}
+	return form
+}
+
 func (s *Server) requireAdministrator(w http.ResponseWriter, r *http.Request) (domain.User, bool) {
 	user, err := s.currentUser(r)
 	if err != nil {
@@ -366,6 +662,24 @@ func userActionError(err error) string {
 	default:
 		return "The user state could not be changed."
 	}
+}
+
+func templateFormError(err error) string {
+	switch {
+	case errors.Is(err, workspace.ErrInvalidTemplate):
+		return "Check the image reference, resource limits, access methods, roles, and required fields."
+	case errors.Is(err, repository.ErrConflict):
+		return "A workspace template with that name already exists."
+	default:
+		return "The workspace template could not be saved."
+	}
+}
+
+func templateActionError(err error) string {
+	if errors.Is(err, repository.ErrNotFound) {
+		return "The workspace template was not found."
+	}
+	return "The workspace template state could not be changed."
 }
 
 func (s *Server) healthFragment(w http.ResponseWriter, r *http.Request) {

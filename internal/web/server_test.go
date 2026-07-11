@@ -15,6 +15,7 @@ import (
 	"github.com/cows-project/cows/internal/database"
 	"github.com/cows-project/cows/internal/domain"
 	"github.com/cows-project/cows/internal/repository/sqlite"
+	"github.com/cows-project/cows/internal/workspace"
 )
 
 func testServer(t *testing.T) (*Server, *auth.Service) {
@@ -28,7 +29,8 @@ func testServer(t *testing.T) (*Server, *auth.Service) {
 	if err != nil {
 		t.Fatalf("create auth service: %v", err)
 	}
-	server, err := New(db, authService, Options{SessionLifetime: time.Hour})
+	templateService := workspace.New(sqlite.New(db))
+	server, err := New(db, authService, templateService, Options{SessionLifetime: time.Hour})
 	if err != nil {
 		t.Fatalf("create web server: %v", err)
 	}
@@ -180,6 +182,38 @@ func TestLoginAndAdministratorUserManagement(t *testing.T) {
 	server.Handler().ServeHTTP(createRecorder, createRequest)
 	if createRecorder.Code != http.StatusSeeOther {
 		t.Fatalf("create user status = %d", createRecorder.Code)
+	}
+
+	templatesRequest := httptest.NewRequest(http.MethodGet, "/admin/templates", nil)
+	templatesRequest.AddCookie(sessionCookie)
+	templatesRequest.AddCookie(csrfCookie)
+	templatesRecorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(templatesRecorder, templatesRequest)
+	if templatesRecorder.Code != http.StatusOK || !strings.Contains(templatesRecorder.Body.String(), "Workspace templates") {
+		t.Fatalf("template administrator page: status=%d body=%s", templatesRecorder.Code, templatesRecorder.Body.String())
+	}
+	templateForm := url.Values{
+		"csrf_token":          {csrfCookie.Value},
+		"name":                {"Research environment"},
+		"description":         {"Approved research environment"},
+		"image_reference":     {"registry.example/research:1"},
+		"default_cpu_millis":  {"1000"},
+		"max_cpu_millis":      {"4000"},
+		"default_memory_mib":  {"2048"},
+		"max_memory_mib":      {"8192"},
+		"default_storage_gib": {"20"},
+		"access_methods":      {"terminal"},
+		"allowed_roles":       {"user"},
+		"enabled":             {"on"},
+	}
+	templateRequest := httptest.NewRequest(http.MethodPost, "/admin/templates", strings.NewReader(templateForm.Encode()))
+	templateRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	templateRequest.AddCookie(sessionCookie)
+	templateRequest.AddCookie(csrfCookie)
+	templateRecorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(templateRecorder, templateRequest)
+	if templateRecorder.Code != http.StatusSeeOther {
+		t.Fatalf("create template status = %d body=%s", templateRecorder.Code, templateRecorder.Body.String())
 	}
 }
 

@@ -1,0 +1,44 @@
+{{ define "admin-templates-page" }}
+{{ template "base-start" . }}
+<section class="intro" aria-labelledby="templates-title">
+  <p class="eyebrow">Administration</p>
+  <div class="title-row">
+    <div>
+      <h1 id="templates-title">Workspace templates</h1>
+      <p class="lede">Control which approved environments users may request.</p>
+    </div>
+    <a class="primary-button button-link" href="/admin/templates/new">Create template</a>
+  </div>
+</section>
+
+<section class="panel table-panel" aria-labelledby="template-list-title">
+  <h2 id="template-list-title">Approved definitions</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Name</th><th>Image</th><th>Resources</th><th>Access</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody>
+      {{ range .Templates }}
+        <tr>
+          <td><strong>{{ .Name }}</strong><span class="table-subtext">{{ .Description }}</span></td>
+          <td><code>{{ .ImageReference }}</code>{{ if .ImageDigest }}<span class="table-subtext">{{ .ImageDigest }}</span>{{ end }}</td>
+          <td><span class="table-subtext">CPU {{ .DefaultCPUMillis }} / {{ .MaxCPUMillis }} mCPU</span><span class="table-subtext">Memory {{ mib .DefaultMemoryBytes }} / {{ mib .MaxMemoryBytes }} MiB</span></td>
+          <td><span class="table-subtext">{{ range .AccessMethods }}{{ . }} {{ end }}</span><span class="table-subtext">Roles: {{ range .AllowedRoles }}{{ . }} {{ end }}</span></td>
+          <td>{{ if .Enabled }}<span class="status-value status-ok">Enabled</span>{{ else }}<span class="status-value status-disabled">Disabled</span>{{ end }}</td>
+          <td class="action-stack">
+            <a class="table-action button-link" href="/admin/templates/{{ .ID }}/edit">Edit</a>
+            <form method="post" action="/admin/templates/{{ .ID }}/enabled" x-on:submit="if (!confirm('Change this template status?')) $event.preventDefault()">
+              <input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}">
+              <input type="hidden" name="enabled" value="{{ if .Enabled }}false{{ else }}true{{ end }}">
+              <button class="table-action" type="submit">{{ if .Enabled }}Disable{{ else }}Enable{{ end }}</button>
+            </form>
+          </td>
+        </tr>
+      {{ else }}
+        <tr><td colspan="6" class="muted">No workspace templates have been defined.</td></tr>
+      {{ end }}
+      </tbody>
+    </table>
+  </div>
+</section>
+{{ template "base-end" . }}
+{{ end }}

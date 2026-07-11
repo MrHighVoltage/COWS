@@ -155,6 +155,139 @@ func (s *Store) RecordAuditEvent(ctx context.Context, event domain.AuditEvent) e
 	return nil
 }
 
+func (s *Store) ListTemplates(ctx context.Context) ([]domain.WorkspaceTemplate, error) {
+	rows, err := s.db.QueryContext(ctx, templateSelect+" ORDER BY name")
+	if err != nil {
+		return nil, fmt.Errorf("list templates: %w", err)
+	}
+	defer rows.Close()
+
+	templates := make([]domain.WorkspaceTemplate, 0)
+	for rows.Next() {
+		template, err := scanTemplate(rows)
+		if err != nil {
+			return nil, err
+		}
+		templates = append(templates, template)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate templates: %w", err)
+	}
+	return templates, nil
+}
+
+func (s *Store) FindTemplateByID(ctx context.Context, id string) (domain.WorkspaceTemplate, error) {
+	return scanTemplate(s.db.QueryRowContext(ctx, templateSelect+" WHERE id = ?", id))
+}
+
+func (s *Store) FindTemplateByName(ctx context.Context, name string) (domain.WorkspaceTemplate, error) {
+	return scanTemplate(s.db.QueryRowContext(ctx, templateSelect+" WHERE name = ?", name))
+}
+
+func (s *Store) CreateTemplate(ctx context.Context, template domain.WorkspaceTemplate) error {
+	accessMethods, roles, err := marshalTemplateLists(template)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO workspace_templates
+		(id, name, description, image_reference, image_digest, default_cpu_millis, max_cpu_millis,
+		 default_memory_bytes, max_memory_bytes, default_storage_bytes, access_methods_json,
+		 allowed_roles_json, enabled, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, template.ID, template.Name, template.Description,
+		template.ImageReference, template.ImageDigest, template.DefaultCPUMillis, template.MaxCPUMillis,
+		template.DefaultMemoryBytes, template.MaxMemoryBytes, template.DefaultStorageBytes, accessMethods,
+		roles, boolInt(template.Enabled), template.CreatedAt.Unix(), template.UpdatedAt.Unix())
+	if err != nil {
+		return fmt.Errorf("create template: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) UpdateTemplate(ctx context.Context, template domain.WorkspaceTemplate) error {
+	accessMethods, roles, err := marshalTemplateLists(template)
+	if err != nil {
+		return err
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE workspace_templates SET
+		name = ?, description = ?, image_reference = ?, image_digest = ?, default_cpu_millis = ?, max_cpu_millis = ?,
+		default_memory_bytes = ?, max_memory_bytes = ?, default_storage_bytes = ?, access_methods_json = ?,
+		allowed_roles_json = ?, enabled = ?, updated_at = ? WHERE id = ?`, template.Name, template.Description,
+		template.ImageReference, template.ImageDigest, template.DefaultCPUMillis, template.MaxCPUMillis,
+		template.DefaultMemoryBytes, template.MaxMemoryBytes, template.DefaultStorageBytes, accessMethods, roles,
+		boolInt(template.Enabled), template.UpdatedAt.Unix(), template.ID)
+	if err != nil {
+		return fmt.Errorf("update template: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check template update: %w", err)
+	}
+	if count == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) SetTemplateEnabled(ctx context.Context, id string, enabled bool, updatedAt time.Time) error {
+	result, err := s.db.ExecContext(ctx, "UPDATE workspace_templates SET enabled = ?, updated_at = ? WHERE id = ?", boolInt(enabled), updatedAt.Unix(), id)
+	if err != nil {
+		return fmt.Errorf("set template enabled: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check template state update: %w", err)
+	}
+	if count == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
+const templateSelect = `SELECT id, name, description, image_reference, image_digest, default_cpu_millis,
+	max_cpu_millis, default_memory_bytes, max_memory_bytes, default_storage_bytes, access_methods_json,
+	allowed_roles_json, enabled, created_at, updated_at FROM workspace_templates`
+
+func marshalTemplateLists(template domain.WorkspaceTemplate) (string, string, error) {
+	accessMethods, err := json.Marshal(template.AccessMethods)
+	if err != nil {
+		return "", "", fmt.Errorf("encode template access methods: %w", err)
+	}
+	roles, err := json.Marshal(template.AllowedRoles)
+	if err != nil {
+		return "", "", fmt.Errorf("encode template roles: %w", err)
+	}
+	return string(accessMethods), string(roles), nil
+}
+
+func scanTemplate(row scanner) (domain.WorkspaceTemplate, error) {
+	var (
+		template      domain.WorkspaceTemplate
+		accessMethods string
+		roles         string
+		enabled       int
+		createdUnix   int64
+		updatedUnix   int64
+	)
+	if err := row.Scan(&template.ID, &template.Name, &template.Description, &template.ImageReference, &template.ImageDigest,
+		&template.DefaultCPUMillis, &template.MaxCPUMillis, &template.DefaultMemoryBytes, &template.MaxMemoryBytes,
+		&template.DefaultStorageBytes, &accessMethods, &roles, &enabled, &createdUnix, &updatedUnix); err != nil {
+		if err == sql.ErrNoRows {
+			return domain.WorkspaceTemplate{}, repository.ErrNotFound
+		}
+		return domain.WorkspaceTemplate{}, fmt.Errorf("scan template: %w", err)
+	}
+	if err := json.Unmarshal([]byte(accessMethods), &template.AccessMethods); err != nil {
+		return domain.WorkspaceTemplate{}, fmt.Errorf("decode template access methods: %w", err)
+	}
+	if err := json.Unmarshal([]byte(roles), &template.AllowedRoles); err != nil {
+		return domain.WorkspaceTemplate{}, fmt.Errorf("decode template roles: %w", err)
+	}
+	template.Enabled = enabled != 0
+	template.CreatedAt = time.Unix(createdUnix, 0).UTC()
+	template.UpdatedAt = time.Unix(updatedUnix, 0).UTC()
+	return template, nil
+}
+
 type scanner interface {
 	Scan(dest ...any) error
 }

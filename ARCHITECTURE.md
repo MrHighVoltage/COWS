@@ -104,6 +104,14 @@ Repository methods should represent domain operations rather than expose SQL
 details. PostgreSQL is a future option when multiple active control-plane
 instances or higher availability requirements justify it.
 
+Workspace templates are administrator-controlled records. Their current policy
+surface contains an image reference and optional immutable digest, CPU/memory/
+storage defaults and maxima, supported access-method names, allowed roles, and
+enabled state. JSON columns store the small access-method and role lists for the
+initial SQLite deployment; browser input is converted to typed values and
+validated before persistence. Runtime arguments, mounts, capabilities, devices,
+host networking, and arbitrary environment values are intentionally absent.
+
 ## Frontend architecture
 
 Go `html/template` renders complete pages, layouts, components, and fragments.
