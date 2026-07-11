@@ -72,6 +72,10 @@ Resource limits must be enforced by Docker or Podman wherever possible. COWS
 quotas alone are not a containment mechanism. Capacity calculations must fail
 closed when host information is unavailable.
 
+The current scheduler reserves allocations for stopped workspaces and requires
+an explicit configured host-storage capacity. It does not support overcommit,
+GPU capacity, or multiple active schedulers.
+
 ## Future file-manager risks
 
 File access is not implemented. Before it is added, the backend needs approved

@@ -120,6 +120,14 @@ stored separately and may only be updated by reconciliation code. Ordinary
 users can list and access their own records; administrators can inspect all
 records through service-layer authorization.
 
+Quota checks use recorded allocations for all existing workspaces, including
+stopped records. A request must fit the user's CPU, memory, storage, and
+workspace-count quota and the remaining host capacity after reserved capacity.
+The scheduler does not overcommit by default. Docker reports CPU and memory;
+allocatable storage is an explicit configuration value because Docker's host
+info response does not provide a portable storage-capacity contract. Unknown
+capacity fails closed.
+
 ## Frontend architecture
 
 Go `html/template` renders complete pages, layouts, components, and fragments.

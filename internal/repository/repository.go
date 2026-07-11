@@ -58,6 +58,14 @@ type WorkspaceRepository interface {
 	CreateWorkspace(ctx context.Context, workspace domain.Workspace) error
 	SetWorkspaceDesiredState(ctx context.Context, id string, state domain.DesiredWorkspaceState, updatedAt time.Time) error
 	UpdateWorkspaceObservedState(ctx context.Context, id, observedState, runtimeID, observedError string, observedAt, updatedAt time.Time) error
+	WorkspaceAllocations(ctx context.Context, ownerUserID string) (domain.AllocationSummary, error)
+	AllWorkspaceAllocations(ctx context.Context) (domain.AllocationSummary, error)
+}
+
+type QuotaRepository interface {
+	FindUserQuota(ctx context.Context, userID string) (domain.UserQuota, error)
+	ListUserQuotas(ctx context.Context) ([]domain.UserQuota, error)
+	UpsertUserQuota(ctx context.Context, quota domain.UserQuota) error
 }
 
 type Store interface {
@@ -66,4 +74,5 @@ type Store interface {
 	AuditRepository
 	TemplateRepository
 	WorkspaceRepository
+	QuotaRepository
 }

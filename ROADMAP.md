@@ -44,10 +44,11 @@ Podman remain deliberately deferred.
 
 ## Milestone 3: Workspace lifecycle (persistence prepared)
 
-Workspace persistence, owner/template foreign keys, desired/observed state, and
-user creation/listing are now present. Add start/stop/restart/delete,
-runtime-enforced limits, quota and host-capacity checks, reconciliation, and
-administrator overrides. Exit requires idempotence and failure-path tests.
+Workspace persistence, owner/template foreign keys, desired/observed state,
+user creation/listing, quota assignment, and deterministic quota/host-capacity
+admission checks are now present. Add start/stop/restart/delete,
+runtime-enforced limits, reconciliation, and administrator overrides. Exit
+requires idempotence and failure-path tests.
 
 ## Milestone 4: Terminal access
 

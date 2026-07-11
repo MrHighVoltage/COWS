@@ -7,12 +7,14 @@ environments through one authenticated HTTPS endpoint.
 
 ## Project status
 
-COWS is at **Milestone 2 in progress: templates and runtime inspection**. The
+COWS is at **Milestone 3/4 in progress: workspace preparation and resource
+admission**. The
 current code provides local administrator bootstrap, password authentication,
 server-side sessions, CSRF-protected forms, basic user management, and
-administrator-managed workspace templates. It does not create containers or
-provide workspace access to running containers yet. Workspace records can be
-created in stopped state. It is not production-ready.
+administrator-managed workspace templates, Docker read-only inspection,
+workspace persistence, quotas, and fail-closed capacity checks. It does not
+create containers or provide workspace access to running containers yet. It is
+not production-ready.
 
 ## Goals
 
@@ -56,6 +58,9 @@ the bootstrap is attempted only when no users exist. Use
 Docker inspection uses `/var/run/docker.sock` by default and can be changed
 with `COWS_DOCKER_SOCKET` or `-docker-socket`. The current Docker integration is
 read-only; it does not create or modify containers.
+Workspace capacity checks also require `COWS_HOST_STORAGE_BYTES` to be set to
+the storage amount COWS may allocate. Zero leaves storage capacity unknown and
+causes workspace creation to fail closed.
 
 ## Security warning
 

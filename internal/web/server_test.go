@@ -30,7 +30,7 @@ func testServer(t *testing.T) (*Server, *auth.Service) {
 		t.Fatalf("create auth service: %v", err)
 	}
 	templateService := workspace.New(sqlite.New(db))
-	server, err := New(db, authService, templateService, nil, Options{SessionLifetime: time.Hour})
+	server, err := New(db, authService, templateService, nil, nil, Options{SessionLifetime: time.Hour})
 	if err != nil {
 		t.Fatalf("create web server: %v", err)
 	}

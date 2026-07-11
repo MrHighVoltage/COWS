@@ -19,6 +19,7 @@ import (
 
 	"github.com/cows-project/cows/internal/auth"
 	"github.com/cows-project/cows/internal/domain"
+	"github.com/cows-project/cows/internal/quota"
 	"github.com/cows-project/cows/internal/repository"
 	"github.com/cows-project/cows/internal/runtime"
 	"github.com/cows-project/cows/internal/workspace"
@@ -40,6 +41,7 @@ type Server struct {
 	db        *sql.DB
 	auth      *auth.Service
 	workspace *workspace.Service
+	quota     *quota.Service
 	runtime   runtime.Runtime
 	options   Options
 	templates *template.Template
@@ -68,6 +70,21 @@ type workspaceFormData struct {
 	Name       string
 	TemplateID string
 	Error      string
+}
+
+type quotaFormData struct {
+	UserID        string
+	MaxCPUMillis  string
+	MaxMemoryMiB  string
+	MaxStorageGiB string
+	MaxWorkspaces string
+	Error         string
+}
+
+type quotaView struct {
+	User     domain.User
+	Quota    domain.UserQuota
+	Assigned bool
 }
 
 type templateFormData struct {
@@ -106,9 +123,11 @@ type pageData struct {
 	RuntimeError string
 	Workspaces   []domain.Workspace
 	Workspace    workspaceFormData
+	Quotas       []quotaView
+	Quota        quotaFormData
 }
 
-func New(db *sql.DB, authService *auth.Service, templateService *workspace.Service, runtimeAdapter runtime.Runtime, options Options) (*Server, error) {
+func New(db *sql.DB, authService *auth.Service, templateService *workspace.Service, quotaService *quota.Service, runtimeAdapter runtime.Runtime, options Options) (*Server, error) {
 	if options.SessionLifetime <= 0 {
 		options.SessionLifetime = 8 * time.Hour
 	}
@@ -126,7 +145,7 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 	if err != nil {
 		return nil, fmt.Errorf("open static assets: %w", err)
 	}
-	return &Server{db: db, auth: authService, workspace: templateService, runtime: runtimeAdapter, options: options, templates: templates, static: static}, nil
+	return &Server{db: db, auth: authService, workspace: templateService, quota: quotaService, runtime: runtimeAdapter, options: options, templates: templates, static: static}, nil
 }
 
 func (s *Server) Handler() http.Handler {
@@ -146,6 +165,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/users/new", s.adminUsersNew)
 	mux.HandleFunc("POST /admin/users", s.adminUsersCreate)
 	mux.HandleFunc("POST /admin/users/{id}/disabled", s.adminUserDisabled)
+	mux.HandleFunc("GET /admin/quotas", s.adminQuotas)
+	mux.HandleFunc("POST /admin/quotas/{id}", s.adminQuotaUpdate)
 	mux.HandleFunc("GET /admin/templates", s.adminTemplates)
 	mux.HandleFunc("GET /admin/templates/new", s.adminTemplatesNew)
 	mux.HandleFunc("POST /admin/templates", s.adminTemplatesCreate)
@@ -436,6 +457,67 @@ func (s *Server) adminUserDisabled(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
 }
 
+func (s *Server) adminQuotas(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	views, err := s.loadQuotaViews(r.Context(), user.ID)
+	if err != nil {
+		http.Error(w, "failed to load quotas", http.StatusInternalServerError)
+		return
+	}
+	s.render(w, http.StatusOK, "admin-quotas-page", pageData{Title: "Quotas | COWS", User: &user, Quotas: views, CSRFToken: s.ensureCSRF(w, r)})
+}
+
+func (s *Server) adminQuotaUpdate(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if !s.validCSRF(r) {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	form := quotaFormData{UserID: r.PathValue("id"), MaxCPUMillis: r.FormValue("max_cpu_millis"), MaxMemoryMiB: r.FormValue("max_memory_mib"), MaxStorageGiB: r.FormValue("max_storage_gib"), MaxWorkspaces: r.FormValue("max_workspaces")}
+	input, err := parseQuotaForm(form)
+	if err == nil {
+		_, err = s.quota.Set(r.Context(), user.ID, form.UserID, input)
+	}
+	if err != nil {
+		form.Error = quotaFormError(err)
+		views, _ := s.loadQuotaViews(r.Context(), user.ID)
+		s.render(w, http.StatusBadRequest, "admin-quotas-page", pageData{Title: "Quotas | COWS", User: &user, Quotas: views, Quota: form, CSRFToken: s.ensureCSRF(w, r)})
+		return
+	}
+	http.Redirect(w, r, "/admin/quotas", http.StatusSeeOther)
+}
+
+func (s *Server) loadQuotaViews(ctx context.Context, actorID string) ([]quotaView, error) {
+	users, err := s.auth.ListUsers(ctx, actorID)
+	if err != nil {
+		return nil, err
+	}
+	views := make([]quotaView, 0, len(users))
+	for _, user := range users {
+		assigned, err := s.quota.Get(ctx, actorID, user.ID)
+		if errors.Is(err, repository.ErrNotFound) {
+			views = append(views, quotaView{User: user})
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		views = append(views, quotaView{User: user, Quota: assigned, Assigned: true})
+	}
+	return views, nil
+}
+
 func (s *Server) adminTemplates(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAdministrator(w, r)
 	if !ok {
@@ -688,6 +770,26 @@ func parseResource(value string, multiplier int64) (int64, error) {
 	return parsed * multiplier, nil
 }
 
+func parseQuotaForm(form quotaFormData) (quota.Input, error) {
+	cpu, err := parsePositiveInt(form.MaxCPUMillis)
+	if err != nil {
+		return quota.Input{}, quota.ErrInvalidQuota
+	}
+	memory, err := parseResource(form.MaxMemoryMiB, 1<<20)
+	if err != nil {
+		return quota.Input{}, quota.ErrInvalidQuota
+	}
+	storage, err := parseResource(form.MaxStorageGiB, 1<<30)
+	if err != nil {
+		return quota.Input{}, quota.ErrInvalidQuota
+	}
+	workspaces, err := parsePositiveInt(form.MaxWorkspaces)
+	if err != nil {
+		return quota.Input{}, quota.ErrInvalidQuota
+	}
+	return quota.Input{MaxCPUMillis: cpu, MaxMemoryBytes: memory, MaxStorageBytes: storage, MaxWorkspaces: workspaces}, nil
+}
+
 func defaultTemplateForm() templateFormData {
 	return templateFormData{DefaultCPUMillis: "1000", MaxCPUMillis: "4000", DefaultMemoryMiB: "2048", MaxMemoryMiB: "8192", DefaultStorageGiB: "20", TerminalAccess: true, UserRole: true, Enabled: true}
 }
@@ -865,9 +967,24 @@ func workspaceFormError(err error) string {
 		return "That workspace template is not available for your account."
 	case errors.Is(err, repository.ErrConflict):
 		return "You already have a workspace with that name."
+	case errors.Is(err, quota.ErrQuotaUnavailable):
+		return "An administrator must assign your resource quota before creating a workspace."
+	case errors.Is(err, quota.ErrQuotaExceeded):
+		return "This workspace would exceed your assigned quota."
+	case errors.Is(err, quota.ErrCapacityUnavailable):
+		return "Host capacity is currently unavailable; try again later."
+	case errors.Is(err, quota.ErrCapacityInsufficient):
+		return "The host does not have enough remaining capacity for this workspace."
 	default:
 		return "The workspace could not be created."
 	}
+}
+
+func quotaFormError(err error) string {
+	if errors.Is(err, quota.ErrInvalidQuota) {
+		return "Enter positive CPU, memory, storage, and workspace limits within the allowed ranges."
+	}
+	return "The quota could not be saved."
 }
 
 func (s *Server) healthFragment(w http.ResponseWriter, r *http.Request) {

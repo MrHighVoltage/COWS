@@ -369,6 +369,67 @@ func (s *Store) UpdateWorkspaceObservedState(ctx context.Context, id, observedSt
 	return nil
 }
 
+func (s *Store) WorkspaceAllocations(ctx context.Context, ownerUserID string) (domain.AllocationSummary, error) {
+	return s.workspaceAllocations(ctx, " WHERE owner_user_id = ?", ownerUserID)
+}
+
+func (s *Store) AllWorkspaceAllocations(ctx context.Context) (domain.AllocationSummary, error) {
+	return s.workspaceAllocations(ctx, "")
+}
+
+func (s *Store) workspaceAllocations(ctx context.Context, condition string, args ...any) (domain.AllocationSummary, error) {
+	var summary domain.AllocationSummary
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(allocated_cpu_millis), 0),
+		COALESCE(SUM(allocated_memory_bytes), 0), COALESCE(SUM(allocated_storage_bytes), 0)
+		FROM workspaces`+condition, args...).Scan(&summary.WorkspaceCount, &summary.Resources.CPUMillis,
+		&summary.Resources.MemoryBytes, &summary.Resources.StorageBytes)
+	if err != nil {
+		return domain.AllocationSummary{}, fmt.Errorf("sum workspace allocations: %w", err)
+	}
+	return summary, nil
+}
+
+func (s *Store) FindUserQuota(ctx context.Context, userID string) (domain.UserQuota, error) {
+	return scanUserQuota(s.db.QueryRowContext(ctx, `SELECT user_id, max_cpu_millis, max_memory_bytes,
+		max_storage_bytes, max_workspaces, created_at, updated_at FROM user_quotas WHERE user_id = ?`, userID))
+}
+
+func (s *Store) ListUserQuotas(ctx context.Context) ([]domain.UserQuota, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT user_id, max_cpu_millis, max_memory_bytes,
+		max_storage_bytes, max_workspaces, created_at, updated_at FROM user_quotas ORDER BY user_id`)
+	if err != nil {
+		return nil, fmt.Errorf("list user quotas: %w", err)
+	}
+	defer rows.Close()
+	quotas := make([]domain.UserQuota, 0)
+	for rows.Next() {
+		quota, err := scanUserQuota(rows)
+		if err != nil {
+			return nil, err
+		}
+		quotas = append(quotas, quota)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate user quotas: %w", err)
+	}
+	return quotas, nil
+}
+
+func (s *Store) UpsertUserQuota(ctx context.Context, quota domain.UserQuota) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO user_quotas
+		(user_id, max_cpu_millis, max_memory_bytes, max_storage_bytes, max_workspaces, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(user_id) DO UPDATE SET max_cpu_millis = excluded.max_cpu_millis,
+		max_memory_bytes = excluded.max_memory_bytes, max_storage_bytes = excluded.max_storage_bytes,
+		max_workspaces = excluded.max_workspaces, updated_at = excluded.updated_at`, quota.UserID,
+		quota.MaxCPUMillis, quota.MaxMemoryBytes, quota.MaxStorageBytes, quota.MaxWorkspaces,
+		unixOrZero(quota.CreatedAt), unixOrZero(quota.UpdatedAt))
+	if err != nil {
+		return fmt.Errorf("upsert user quota: %w", err)
+	}
+	return nil
+}
+
 const workspaceSelect = `SELECT id, owner_user_id, template_id, name, desired_state, observed_state, runtime_id,
 	observed_error, allocated_cpu_millis, allocated_memory_bytes, allocated_storage_bytes, created_at, updated_at,
 	observed_at FROM workspaces`
@@ -417,6 +478,23 @@ func scanWorkspace(row scanner) (domain.Workspace, error) {
 		workspace.ObservedAt = time.Unix(observedAtUnix, 0).UTC()
 	}
 	return workspace, nil
+}
+
+func scanUserQuota(row scanner) (domain.UserQuota, error) {
+	var (
+		quota                    domain.UserQuota
+		createdUnix, updatedUnix int64
+	)
+	if err := row.Scan(&quota.UserID, &quota.MaxCPUMillis, &quota.MaxMemoryBytes, &quota.MaxStorageBytes,
+		&quota.MaxWorkspaces, &createdUnix, &updatedUnix); err != nil {
+		if err == sql.ErrNoRows {
+			return domain.UserQuota{}, repository.ErrNotFound
+		}
+		return domain.UserQuota{}, fmt.Errorf("scan user quota: %w", err)
+	}
+	quota.CreatedAt = time.Unix(createdUnix, 0).UTC()
+	quota.UpdatedAt = time.Unix(updatedUnix, 0).UTC()
+	return quota, nil
 }
 
 func unixOrZero(value time.Time) int64 {

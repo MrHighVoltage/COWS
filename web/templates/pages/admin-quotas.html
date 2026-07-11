@@ -1,0 +1,31 @@
+{{ define "admin-quotas-page" }}
+{{ template "base-start" . }}
+<section class="intro" aria-labelledby="quotas-title">
+  <p class="eyebrow">Administration</p>
+  <h1 id="quotas-title">User quotas</h1>
+  <p class="lede">Set hard allocation limits used before workspace creation.</p>
+</section>
+{{ if .Quota.Error }}<p class="alert alert-error" role="alert">{{ .Quota.Error }}</p>{{ end }}
+<section class="panel table-panel" aria-labelledby="quota-list-title">
+  <h2 id="quota-list-title">Assigned limits</h2>
+  <div class="table-scroll"><table><thead><tr><th>User</th><th>Current quota</th><th>Update</th></tr></thead><tbody>
+  {{ range .Quotas }}
+  <tr>
+    <td><strong>{{ .User.DisplayName }}</strong><span class="table-subtext">{{ .User.Username }}{{ if .User.Email }} · {{ .User.Email }}{{ end }}</span></td>
+    <td>{{ if .Assigned }}<span class="table-subtext">CPU {{ .Quota.MaxCPUMillis }} mCPU</span><span class="table-subtext">Memory {{ mib .Quota.MaxMemoryBytes }} MiB</span><span class="table-subtext">Storage {{ gib .Quota.MaxStorageBytes }} GiB</span><span class="table-subtext">Workspaces {{ .Quota.MaxWorkspaces }}</span>{{ else }}<span class="muted">Not assigned</span>{{ end }}</td>
+    <td>
+      <form class="quota-form" method="post" action="/admin/quotas/{{ .User.ID }}">
+        <input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}">
+        <input name="max_cpu_millis" type="number" min="1" max="1000000" placeholder="mCPU" value="{{ if .Assigned }}{{ .Quota.MaxCPUMillis }}{{ end }}" required aria-label="Maximum CPU in millicores">
+        <input name="max_memory_mib" type="number" min="1" placeholder="MiB" value="{{ if .Assigned }}{{ mib .Quota.MaxMemoryBytes }}{{ end }}" required aria-label="Maximum memory in MiB">
+        <input name="max_storage_gib" type="number" min="1" placeholder="GiB" value="{{ if .Assigned }}{{ gib .Quota.MaxStorageBytes }}{{ end }}" required aria-label="Maximum storage in GiB">
+        <input name="max_workspaces" type="number" min="1" max="1000000" placeholder="Count" value="{{ if .Assigned }}{{ .Quota.MaxWorkspaces }}{{ end }}" required aria-label="Maximum workspaces">
+        <button class="table-action" type="submit">Save</button>
+      </form>
+    </td>
+  </tr>
+  {{ else }}<tr><td colspan="3" class="muted">No users found.</td></tr>{{ end }}
+  </tbody></table></div>
+</section>
+{{ template "base-end" . }}
+{{ end }}
