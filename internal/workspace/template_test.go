@@ -116,3 +116,47 @@ func TestTemplateValidationAndDuplicateName(t *testing.T) {
 		t.Fatalf("get template: %v", err)
 	}
 }
+
+func TestWorkspaceCreationOwnershipAndDesiredObservedState(t *testing.T) {
+	service, authService, adminID := testService(t)
+	ctx := context.Background()
+	template, err := service.CreateTemplate(ctx, adminID, validTemplateInput())
+	if err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+	if _, err := authService.CreateUser(ctx, adminID, auth.CreateUserInput{Username: "student", Password: "another correct password", Role: domain.RoleUser}); err != nil {
+		t.Fatalf("create student: %v", err)
+	}
+	student, _, err := authService.Authenticate(ctx, "student", "another correct password")
+	if err != nil {
+		t.Fatalf("authenticate student: %v", err)
+	}
+	if err := authService.ChangePassword(ctx, student.ID, "another correct password", "changed student password"); err != nil {
+		t.Fatalf("change student password: %v", err)
+	}
+
+	created, err := service.CreateWorkspace(ctx, student.ID, CreateWorkspaceInput{Name: "My research environment", TemplateID: template.ID})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if created.OwnerUserID != student.ID || created.DesiredState != domain.DesiredWorkspaceStopped || created.ObservedState != "unknown" || created.AllocatedCPUMillis != template.DefaultCPUMillis {
+		t.Fatalf("unexpected workspace: %+v", created)
+	}
+	if err := service.SetDesiredState(ctx, student.ID, created.ID, domain.DesiredWorkspaceRunning); err != nil {
+		t.Fatalf("set desired state: %v", err)
+	}
+	if err := service.UpdateObservedState(ctx, created.ID, "running", "container-123", "", time.Unix(100, 0)); err != nil {
+		t.Fatalf("update observed state: %v", err)
+	}
+	observed, err := service.GetWorkspace(ctx, student.ID, created.ID)
+	if err != nil {
+		t.Fatalf("get owned workspace: %v", err)
+	}
+	if observed.DesiredState != domain.DesiredWorkspaceRunning || observed.ObservedState != "running" || observed.RuntimeID != "container-123" {
+		t.Fatalf("unexpected observed workspace: %+v", observed)
+	}
+	all, err := service.ListWorkspaces(ctx, adminID)
+	if err != nil || len(all) != 1 {
+		t.Fatalf("administrator workspace list: count=%d err=%v", len(all), err)
+	}
+}

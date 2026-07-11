@@ -309,6 +309,123 @@ func scanTemplate(row scanner) (domain.WorkspaceTemplate, error) {
 	return template, nil
 }
 
+func (s *Store) ListWorkspacesForUser(ctx context.Context, ownerUserID string) ([]domain.Workspace, error) {
+	return s.listWorkspaces(ctx, workspaceSelect+" WHERE owner_user_id = ? ORDER BY name", ownerUserID)
+}
+
+func (s *Store) ListAllWorkspaces(ctx context.Context) ([]domain.Workspace, error) {
+	return s.listWorkspaces(ctx, workspaceSelect+" ORDER BY owner_user_id, name")
+}
+
+func (s *Store) FindWorkspaceByID(ctx context.Context, id string) (domain.Workspace, error) {
+	return scanWorkspace(s.db.QueryRowContext(ctx, workspaceSelect+" WHERE id = ?", id))
+}
+
+func (s *Store) FindWorkspaceByOwnerAndName(ctx context.Context, ownerUserID, name string) (domain.Workspace, error) {
+	return scanWorkspace(s.db.QueryRowContext(ctx, workspaceSelect+" WHERE owner_user_id = ? AND name = ?", ownerUserID, name))
+}
+
+func (s *Store) CreateWorkspace(ctx context.Context, workspace domain.Workspace) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO workspaces
+		(id, owner_user_id, template_id, name, desired_state, observed_state, runtime_id, observed_error,
+		 allocated_cpu_millis, allocated_memory_bytes, allocated_storage_bytes, created_at, updated_at, observed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, workspace.ID, workspace.OwnerUserID, workspace.TemplateID,
+		workspace.Name, workspace.DesiredState, workspace.ObservedState, workspace.RuntimeID, workspace.ObservedError,
+		workspace.AllocatedCPUMillis, workspace.AllocatedMemoryBytes, workspace.AllocatedStorageBytes,
+		unixOrZero(workspace.CreatedAt), unixOrZero(workspace.UpdatedAt), unixOrZero(workspace.ObservedAt))
+	if err != nil {
+		return fmt.Errorf("create workspace: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) SetWorkspaceDesiredState(ctx context.Context, id string, state domain.DesiredWorkspaceState, updatedAt time.Time) error {
+	result, err := s.db.ExecContext(ctx, "UPDATE workspaces SET desired_state = ?, updated_at = ? WHERE id = ?", state, updatedAt.Unix(), id)
+	if err != nil {
+		return fmt.Errorf("set workspace desired state: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check workspace desired state update: %w", err)
+	}
+	if count == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) UpdateWorkspaceObservedState(ctx context.Context, id, observedState, runtimeID, observedError string, observedAt, updatedAt time.Time) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE workspaces SET observed_state = ?, runtime_id = ?, observed_error = ?, observed_at = ?, updated_at = ? WHERE id = ?`, observedState, runtimeID, observedError, observedAt.Unix(), updatedAt.Unix(), id)
+	if err != nil {
+		return fmt.Errorf("update workspace observed state: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check workspace observed state update: %w", err)
+	}
+	if count == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
+const workspaceSelect = `SELECT id, owner_user_id, template_id, name, desired_state, observed_state, runtime_id,
+	observed_error, allocated_cpu_millis, allocated_memory_bytes, allocated_storage_bytes, created_at, updated_at,
+	observed_at FROM workspaces`
+
+func (s *Store) listWorkspaces(ctx context.Context, query string, args ...any) ([]domain.Workspace, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list workspaces: %w", err)
+	}
+	defer rows.Close()
+	workspaces := make([]domain.Workspace, 0)
+	for rows.Next() {
+		workspace, err := scanWorkspace(rows)
+		if err != nil {
+			return nil, err
+		}
+		workspaces = append(workspaces, workspace)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate workspaces: %w", err)
+	}
+	return workspaces, nil
+}
+
+func scanWorkspace(row scanner) (domain.Workspace, error) {
+	var (
+		workspace      domain.Workspace
+		desiredState   string
+		createdUnix    int64
+		updatedUnix    int64
+		observedAtUnix int64
+	)
+	if err := row.Scan(&workspace.ID, &workspace.OwnerUserID, &workspace.TemplateID, &workspace.Name, &desiredState,
+		&workspace.ObservedState, &workspace.RuntimeID, &workspace.ObservedError, &workspace.AllocatedCPUMillis,
+		&workspace.AllocatedMemoryBytes, &workspace.AllocatedStorageBytes, &createdUnix, &updatedUnix,
+		&observedAtUnix); err != nil {
+		if err == sql.ErrNoRows {
+			return domain.Workspace{}, repository.ErrNotFound
+		}
+		return domain.Workspace{}, fmt.Errorf("scan workspace: %w", err)
+	}
+	workspace.DesiredState = domain.DesiredWorkspaceState(desiredState)
+	workspace.CreatedAt = time.Unix(createdUnix, 0).UTC()
+	workspace.UpdatedAt = time.Unix(updatedUnix, 0).UTC()
+	if observedAtUnix != 0 {
+		workspace.ObservedAt = time.Unix(observedAtUnix, 0).UTC()
+	}
+	return workspace, nil
+}
+
+func unixOrZero(value time.Time) int64 {
+	if value.IsZero() {
+		return 0
+	}
+	return value.Unix()
+}
+
 type scanner interface {
 	Scan(dest ...any) error
 }

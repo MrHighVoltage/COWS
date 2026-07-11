@@ -11,7 +11,8 @@ COWS is at **Milestone 2 in progress: templates and runtime inspection**. The
 current code provides local administrator bootstrap, password authentication,
 server-side sessions, CSRF-protected forms, basic user management, and
 administrator-managed workspace templates. It does not create containers or
-provide workspace access. It is not production-ready.
+provide workspace access to running containers yet. Workspace records can be
+created in stopped state. It is not production-ready.
 
 ## Goals
 
