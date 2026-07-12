@@ -142,6 +142,28 @@ func TestCapabilitiesDetectRootlessPodmanAndMissingCPULimits(t *testing.T) {
 	}
 }
 
+func TestCapabilitiesDetectCgroupV2ResourceLimits(t *testing.T) {
+	adapter := &Adapter{client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var body string
+		switch request.URL.Path {
+		case "/version":
+			body = `{"ApiVersion":"1.44"}`
+		case "/v1.44/info":
+			body = `{"NCPU":8,"MemTotal":8589934592,"MemoryLimit":true,"PidsLimit":true,"CpuCfsQuota":false,"CpuCfsPeriod":false,"CgroupVersion":"2","Rootless":true}`
+		default:
+			return dockerResponse(http.StatusNotFound, `not found`), nil
+		}
+		return dockerResponse(http.StatusOK, body), nil
+	})}}
+	capabilities, err := adapter.Capabilities(context.Background())
+	if err != nil {
+		t.Fatalf("capabilities: %v", err)
+	}
+	if !capabilities.SupportsCPUResourceLimits || !capabilities.SupportsResourceLimits {
+		t.Fatalf("unexpected cgroup v2 capabilities: %+v", capabilities)
+	}
+}
+
 func TestOpenShellUsesDockerExecUpgradeAndResize(t *testing.T) {
 	var calls []string
 	stream := &testStream{Reader: strings.NewReader("shell> ")}
