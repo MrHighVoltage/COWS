@@ -59,7 +59,10 @@ func (a *Adapter) Capabilities(ctx context.Context) (runtime.Capabilities, error
 	if err != nil {
 		return runtime.Capabilities{}, err
 	}
-	cpu := info.CPUCFSQuota && info.CPUCFSPeriod
+	// Docker-compatible runtimes report legacy CFS fields for cgroup v1. On
+	// cgroup v2, Podman reports those fields as false even when cpu.max is
+	// enforced by the delegated systemd cgroup.
+	cpu := (info.CPUCFSQuota && info.CPUCFSPeriod) || info.CgroupVersion == "2"
 	memory := info.MemoryLimit
 	pids := info.PidsLimit
 	return runtime.Capabilities{
@@ -315,6 +318,7 @@ type hostInfo struct {
 	PidsLimit       bool     `json:"PidsLimit"`
 	CPUCFSQuota     bool     `json:"CpuCfsQuota"`
 	CPUCFSPeriod    bool     `json:"CpuCfsPeriod"`
+	CgroupVersion   string   `json:"CgroupVersion"`
 	Rootless        bool     `json:"Rootless"`
 	SecurityOptions []string `json:"SecurityOptions"`
 }
