@@ -10,11 +10,11 @@ environments through one authenticated HTTPS endpoint.
 COWS is at **Milestone 3/4 in progress: workspace preparation and resource
 admission**. The
 current code provides local administrator bootstrap, password authentication,
-server-side sessions, CSRF-protected forms, basic user management, and
-administrator-managed workspace templates, Docker read-only inspection,
-workspace persistence, quotas, and fail-closed capacity checks. It does not
-create containers or provide workspace access to running containers yet. It is
-not production-ready.
+server-side sessions, CSRF-protected forms, basic user management,
+administrator-managed workspace templates, Docker inspection and lifecycle
+operations, workspace persistence, quotas, fail-closed capacity checks, and
+template-controlled timeout processing. It does not provide terminal, desktop,
+or proxied application access yet. It is not production-ready.
 
 ## Goals
 
@@ -55,9 +55,11 @@ The server defaults to `127.0.0.1:8080` and creates its SQLite database at
 `COWS_BOOTSTRAP_ADMIN_USERNAME` and `COWS_BOOTSTRAP_ADMIN_PASSWORD` together;
 the bootstrap is attempted only when no users exist. Use
 `COWS_COOKIE_SECURE=true` when serving through HTTPS.
-Docker inspection uses `/var/run/docker.sock` by default and can be changed
-with `COWS_DOCKER_SOCKET` or `-docker-socket`. The current Docker integration is
-read-only; it does not create or modify containers.
+Docker inspection and lifecycle operations use `/var/run/docker.sock` by
+default and can be changed with `COWS_DOCKER_SOCKET` or `-docker-socket`.
+COWS creates and manages only COWS-labeled containers using approved template
+images, server-side resource limits, and isolated networking. It does not
+expose container ports or provide interactive workspace access yet.
 Workspace capacity checks also require `COWS_HOST_STORAGE_BYTES` to be set to
 the initial storage amount COWS may allocate. The value seeds the persistent
 host settings row only when it does not exist; administrators can change host

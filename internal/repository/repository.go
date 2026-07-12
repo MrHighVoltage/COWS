@@ -58,6 +58,7 @@ type WorkspaceRepository interface {
 	CreateWorkspace(ctx context.Context, workspace domain.Workspace) error
 	SetWorkspaceDesiredState(ctx context.Context, id string, state domain.DesiredWorkspaceState, updatedAt time.Time) error
 	UpdateWorkspaceObservedState(ctx context.Context, id, observedState, runtimeID, observedError string, observedAt, updatedAt time.Time) error
+	UpdateWorkspaceLifecycle(ctx context.Context, id string, startedAt, lastConnectedAt, stoppedAt, containerDeletedAt, dataArchiveEligibleAt, updatedAt time.Time) error
 	WorkspaceAllocations(ctx context.Context, ownerUserID string) (domain.AllocationSummary, error)
 	AllWorkspaceAllocations(ctx context.Context) (domain.AllocationSummary, error)
 }

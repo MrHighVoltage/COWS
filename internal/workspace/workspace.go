@@ -12,12 +12,15 @@ import (
 
 	"github.com/cows-project/cows/internal/domain"
 	"github.com/cows-project/cows/internal/repository"
+	"github.com/cows-project/cows/internal/runtime"
 )
 
 var (
 	ErrInvalidWorkspace       = errors.New("invalid workspace")
 	ErrTemplateNotAvailable   = errors.New("workspace template is not available")
 	ErrWorkspaceNotAuthorized = errors.New("workspace access is not authorized")
+	ErrRuntimeUnavailable     = errors.New("workspace runtime unavailable")
+	ErrWorkspaceStateConflict = errors.New("workspace state conflict")
 )
 
 type CreateWorkspaceInput struct {
@@ -78,17 +81,20 @@ func (s *Service) CreateWorkspace(ctx context.Context, actorID string, input Cre
 	}
 	now := s.now().UTC()
 	workspace := domain.Workspace{
-		ID:                    id,
-		OwnerUserID:           user.ID,
-		TemplateID:            template.ID,
-		Name:                  name,
-		DesiredState:          domain.DesiredWorkspaceStopped,
-		ObservedState:         "unknown",
-		AllocatedCPUMillis:    template.DefaultCPUMillis,
-		AllocatedMemoryBytes:  template.DefaultMemoryBytes,
-		AllocatedStorageBytes: template.DefaultStorageBytes,
-		CreatedAt:             now,
-		UpdatedAt:             now,
+		ID:                              id,
+		OwnerUserID:                     user.ID,
+		TemplateID:                      template.ID,
+		Name:                            name,
+		DesiredState:                    domain.DesiredWorkspaceStopped,
+		ObservedState:                   "unknown",
+		AllocatedCPUMillis:              template.DefaultCPUMillis,
+		AllocatedMemoryBytes:            template.DefaultMemoryBytes,
+		AllocatedStorageBytes:           template.DefaultStorageBytes,
+		InitialConnectionTimeoutSeconds: template.InitialConnectionTimeoutSeconds,
+		StoppedRetentionSeconds:         template.StoppedRetentionSeconds,
+		DataRetentionSeconds:            template.DataRetentionSeconds,
+		CreatedAt:                       now,
+		UpdatedAt:                       now,
 	}
 	if err := s.store.CreateWorkspace(ctx, workspace); err != nil {
 		return domain.Workspace{}, err
@@ -136,6 +142,192 @@ func (s *Service) SetDesiredState(ctx context.Context, actorID, workspaceID stri
 	}
 	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "workspace.desired_state_changed", TargetType: "workspace", TargetID: workspace.ID, Metadata: map[string]string{"state": string(state)}})
 	return nil
+}
+
+func (s *Service) StartWorkspace(ctx context.Context, actorID, workspaceID string) error {
+	if s.runtime == nil {
+		return ErrRuntimeUnavailable
+	}
+	value, err := s.GetWorkspace(ctx, actorID, workspaceID)
+	if err != nil {
+		return err
+	}
+	if err := s.store.SetWorkspaceDesiredState(ctx, value.ID, domain.DesiredWorkspaceRunning, s.now().UTC()); err != nil {
+		return err
+	}
+	if value.ObservedState == string(runtime.StateRunning) {
+		return nil
+	}
+	if value.RuntimeID == "" || value.ObservedState == string(runtime.StateRemoved) {
+		spec, err := s.runtimeSpec(ctx, value)
+		if err != nil {
+			return err
+		}
+		handle, err := s.runtime.CreateWorkspace(ctx, spec)
+		if err != nil {
+			_ = s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateFailed), "", err.Error(), s.now().UTC(), s.now().UTC())
+			return err
+		}
+		value.RuntimeID = handle.RuntimeID
+		if err := s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateCreated), handle.RuntimeID, "", s.now().UTC(), s.now().UTC()); err != nil {
+			return err
+		}
+	}
+	if err := s.runtime.StartWorkspace(ctx, value.RuntimeID); err != nil {
+		_ = s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateCreated), value.RuntimeID, err.Error(), s.now().UTC(), s.now().UTC())
+		return err
+	}
+	now := s.now().UTC()
+	value.StartedAt = now
+	value.StoppedAt = time.Time{}
+	if err := s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateRunning), value.RuntimeID, "", now, now); err != nil {
+		return err
+	}
+	if err := s.store.UpdateWorkspaceLifecycle(ctx, value.ID, value.StartedAt, value.LastConnectedAt, value.StoppedAt, value.ContainerDeletedAt, value.DataArchiveEligibleAt, now); err != nil {
+		return err
+	}
+	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "workspace.started", TargetType: "workspace", TargetID: value.ID})
+	return nil
+}
+
+func (s *Service) StopWorkspace(ctx context.Context, actorID, workspaceID string) error {
+	if s.runtime == nil {
+		return ErrRuntimeUnavailable
+	}
+	value, err := s.GetWorkspace(ctx, actorID, workspaceID)
+	if err != nil {
+		return err
+	}
+	if err := s.store.SetWorkspaceDesiredState(ctx, value.ID, domain.DesiredWorkspaceStopped, s.now().UTC()); err != nil {
+		return err
+	}
+	if value.RuntimeID == "" || value.ObservedState == string(runtime.StateStopped) || value.ObservedState == string(runtime.StateExited) {
+		return nil
+	}
+	if err := s.runtime.StopWorkspace(ctx, value.RuntimeID, 10*time.Second); err != nil {
+		return err
+	}
+	now := s.now().UTC()
+	value.StoppedAt = now
+	if err := s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateStopped), value.RuntimeID, "", now, now); err != nil {
+		return err
+	}
+	if err := s.store.UpdateWorkspaceLifecycle(ctx, value.ID, value.StartedAt, value.LastConnectedAt, value.StoppedAt, value.ContainerDeletedAt, value.DataArchiveEligibleAt, now); err != nil {
+		return err
+	}
+	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "workspace.stopped", TargetType: "workspace", TargetID: value.ID})
+	return nil
+}
+
+func (s *Service) RestartWorkspace(ctx context.Context, actorID, workspaceID string) error {
+	if err := s.StopWorkspace(ctx, actorID, workspaceID); err != nil {
+		return err
+	}
+	return s.StartWorkspace(ctx, actorID, workspaceID)
+}
+
+func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID string) error {
+	if s.runtime == nil {
+		return ErrRuntimeUnavailable
+	}
+	value, err := s.GetWorkspace(ctx, actorID, workspaceID)
+	if err != nil {
+		return err
+	}
+	if value.RuntimeID == "" {
+		return nil
+	}
+	if value.ObservedState == string(runtime.StateRemoved) {
+		return nil
+	}
+	if value.ObservedState == string(runtime.StateRunning) {
+		return ErrWorkspaceStateConflict
+	}
+	if err := s.runtime.RemoveWorkspace(ctx, value.RuntimeID); err != nil {
+		return err
+	}
+	now := s.now().UTC()
+	value.ContainerDeletedAt = now
+	if value.DataRetentionSeconds > 0 {
+		value.DataArchiveEligibleAt = now.Add(time.Duration(value.DataRetentionSeconds) * time.Second)
+	}
+	if err := s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateRemoved), value.RuntimeID, "", now, now); err != nil {
+		return err
+	}
+	if err := s.store.UpdateWorkspaceLifecycle(ctx, value.ID, value.StartedAt, value.LastConnectedAt, value.StoppedAt, value.ContainerDeletedAt, value.DataArchiveEligibleAt, now); err != nil {
+		return err
+	}
+	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "workspace.container_deleted", TargetType: "workspace", TargetID: value.ID})
+	return nil
+}
+
+// RecordWorkspaceConnection is the hook used by future terminal, desktop, and
+// application gateways to cancel the no-connection timeout.
+func (s *Service) RecordWorkspaceConnection(ctx context.Context, actorID, workspaceID string) error {
+	value, err := s.GetWorkspace(ctx, actorID, workspaceID)
+	if err != nil {
+		return err
+	}
+	if value.ObservedState != string(runtime.StateRunning) {
+		return ErrWorkspaceStateConflict
+	}
+	now := s.now().UTC()
+	if err := s.store.UpdateWorkspaceLifecycle(ctx, value.ID, value.StartedAt, now, value.StoppedAt, value.ContainerDeletedAt, value.DataArchiveEligibleAt, now); err != nil {
+		return err
+	}
+	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "workspace.connected", TargetType: "workspace", TargetID: value.ID})
+	return nil
+}
+
+func (s *Service) RunTimeouts(ctx context.Context) error {
+	if s.runtime == nil {
+		return ErrRuntimeUnavailable
+	}
+	values, err := s.store.ListAllWorkspaces(ctx)
+	if err != nil {
+		return err
+	}
+	now := s.now().UTC()
+	for _, value := range values {
+		status := EvaluateTimeouts(value, now)
+		switch status.Action {
+		case TimeoutActionStop:
+			if value.RuntimeID == "" || value.ObservedState != string(runtime.StateRunning) {
+				continue
+			}
+			if err := s.runtime.StopWorkspace(ctx, value.RuntimeID, 10*time.Second); err != nil {
+				continue
+			}
+			_ = s.store.SetWorkspaceDesiredState(ctx, value.ID, domain.DesiredWorkspaceStopped, now)
+			value.StoppedAt = now
+			_ = s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateStopped), value.RuntimeID, "", now, now)
+			_ = s.store.UpdateWorkspaceLifecycle(ctx, value.ID, value.StartedAt, value.LastConnectedAt, value.StoppedAt, value.ContainerDeletedAt, value.DataArchiveEligibleAt, now)
+			s.recordAudit(ctx, domain.AuditEvent{EventType: "workspace.timeout_stopped", TargetType: "workspace", TargetID: value.ID})
+		case TimeoutActionDelete:
+			if value.RuntimeID == "" || (value.ObservedState != string(runtime.StateStopped) && value.ObservedState != string(runtime.StateExited)) {
+				continue
+			}
+			if err := s.runtime.RemoveWorkspace(ctx, value.RuntimeID); err != nil {
+				continue
+			}
+			value.ContainerDeletedAt = now
+			if value.DataRetentionSeconds > 0 {
+				value.DataArchiveEligibleAt = now.Add(time.Duration(value.DataRetentionSeconds) * time.Second)
+			}
+			_ = s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateRemoved), value.RuntimeID, "", now, now)
+			_ = s.store.UpdateWorkspaceLifecycle(ctx, value.ID, value.StartedAt, value.LastConnectedAt, value.StoppedAt, value.ContainerDeletedAt, value.DataArchiveEligibleAt, now)
+			s.recordAudit(ctx, domain.AuditEvent{EventType: "workspace.timeout_container_deleted", TargetType: "workspace", TargetID: value.ID})
+		}
+	}
+	return nil
+}
+
+func (s *Service) runtimeSpec(ctx context.Context, value domain.Workspace) (runtime.WorkspaceSpec, error) {
+	template, err := s.store.FindTemplateByID(ctx, value.TemplateID)
+	if err != nil {
+		return runtime.WorkspaceSpec{}, err
+	}
+	return runtime.WorkspaceSpec{WorkspaceID: value.ID, Image: runtime.Image{Reference: template.ImageReference, Digest: template.ImageDigest}, Limits: runtime.ResourceLimits{CPUMillis: value.AllocatedCPUMillis, MemoryBytes: value.AllocatedMemoryBytes, StorageBytes: value.AllocatedStorageBytes}, Labels: runtime.ManagedLabels(value.ID)}, nil
 }
 
 // UpdateObservedState is called by reconciliation code, not by browser

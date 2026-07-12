@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -109,17 +110,71 @@ func (a *Adapter) InspectWorkspace(ctx context.Context, runtimeID string) (runti
 	}, nil
 }
 
-func (a *Adapter) CreateWorkspace(context.Context, runtime.WorkspaceSpec) (runtime.WorkspaceHandle, error) {
-	return runtime.WorkspaceHandle{}, runtime.ErrNotSupported
+func (a *Adapter) CreateWorkspace(ctx context.Context, spec runtime.WorkspaceSpec) (runtime.WorkspaceHandle, error) {
+	if !validWorkspaceID(spec.WorkspaceID) || !validImage(spec.Image) {
+		return runtime.WorkspaceHandle{}, runtime.ErrConflict
+	}
+	imageReference := spec.Image.Reference
+	if spec.Image.Digest != "" {
+		if !validImageDigest(spec.Image.Digest) {
+			return runtime.WorkspaceHandle{}, runtime.ErrConflict
+		}
+		imageReference += "@" + spec.Image.Digest
+	}
+	nanoCPUs := spec.Limits.CPUMillis * 1_000_000
+	body := struct {
+		Image      string            `json:"Image"`
+		Labels     map[string]string `json:"Labels"`
+		HostConfig struct {
+			Memory      int64  `json:"Memory"`
+			NanoCPUs    int64  `json:"NanoCpus"`
+			NetworkMode string `json:"NetworkMode"`
+			PidsLimit   *int64 `json:"PidsLimit,omitempty"`
+		} `json:"HostConfig"`
+	}{Image: imageReference, Labels: copyLabels(spec.Labels)}
+	body.HostConfig.Memory = spec.Limits.MemoryBytes
+	body.HostConfig.NanoCPUs = nanoCPUs
+	body.HostConfig.NetworkMode = "none"
+	pidsLimit := int64(512)
+	body.HostConfig.PidsLimit = &pidsLimit
+	var response struct {
+		ID string `json:"Id"`
+	}
+	path := "/containers/create?name=" + url.QueryEscape("cows-"+spec.WorkspaceID)
+	if err := a.mutation(ctx, http.MethodPost, path, &body, &response); err != nil {
+		return runtime.WorkspaceHandle{}, err
+	}
+	if !validRuntimeID(response.ID) {
+		return runtime.WorkspaceHandle{}, fmt.Errorf("%w: Docker returned invalid container ID", runtime.ErrInvalidObservation)
+	}
+	return runtime.WorkspaceHandle{RuntimeID: response.ID, WorkspaceID: spec.WorkspaceID}, nil
 }
 
-func (a *Adapter) StartWorkspace(context.Context, string) error { return runtime.ErrNotSupported }
-
-func (a *Adapter) StopWorkspace(context.Context, string, time.Duration) error {
-	return runtime.ErrNotSupported
+func (a *Adapter) StartWorkspace(ctx context.Context, runtimeID string) error {
+	if !validRuntimeID(runtimeID) {
+		return runtime.ErrNotFound
+	}
+	return a.mutation(ctx, http.MethodPost, "/containers/"+url.PathEscape(runtimeID)+"/start", nil, nil)
 }
 
-func (a *Adapter) RemoveWorkspace(context.Context, string) error { return runtime.ErrNotSupported }
+func (a *Adapter) StopWorkspace(ctx context.Context, runtimeID string, timeout time.Duration) error {
+	if !validRuntimeID(runtimeID) {
+		return runtime.ErrNotFound
+	}
+	seconds := int64(timeout / time.Second)
+	if seconds < 0 {
+		seconds = 0
+	}
+	path := "/containers/" + url.PathEscape(runtimeID) + "/stop?t=" + fmt.Sprintf("%d", seconds)
+	return a.mutation(ctx, http.MethodPost, path, nil, nil)
+}
+
+func (a *Adapter) RemoveWorkspace(ctx context.Context, runtimeID string) error {
+	if !validRuntimeID(runtimeID) {
+		return runtime.ErrNotFound
+	}
+	return a.mutation(ctx, http.MethodDelete, "/containers/"+url.PathEscape(runtimeID), nil, nil)
+}
 
 type containerSummary struct {
 	ID     string            `json:"Id"`
@@ -160,16 +215,41 @@ func (a *Adapter) get(ctx context.Context, path string, output any) error {
 }
 
 func (a *Adapter) request(ctx context.Context, path string, output any) error {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker"+path, nil)
+	return a.requestMethod(ctx, http.MethodGet, path, nil, output)
+}
+
+func (a *Adapter) mutation(ctx context.Context, method, path string, input, output any) error {
+	version, err := a.version(ctx)
+	if err != nil {
+		return err
+	}
+	return a.requestMethod(ctx, method, "/v"+version+path, input, output)
+}
+
+func (a *Adapter) requestMethod(ctx context.Context, method, path string, input, output any) error {
+	var request *http.Request
+	var err error
+	if input != nil {
+		encoded, encodeErr := json.Marshal(input)
+		if encodeErr != nil {
+			return fmt.Errorf("encode Docker request: %w", encodeErr)
+		}
+		request, err = http.NewRequestWithContext(ctx, method, "http://docker"+path, bytes.NewReader(encoded))
+	} else {
+		request, err = http.NewRequestWithContext(ctx, method, "http://docker"+path, nil)
+	}
 	if err != nil {
 		return fmt.Errorf("create Docker request: %w", err)
+	}
+	if input != nil {
+		request.Header.Set("Content-Type", "application/json")
 	}
 	response, err := a.client.Do(request)
 	if err != nil {
 		return fmt.Errorf("%w: Docker request: %v", runtime.ErrUnavailable, err)
 	}
 	defer response.Body.Close()
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+	if (response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices) && response.StatusCode != http.StatusNotModified {
 		body, _ := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes))
 		base := runtime.ErrUnavailable
 		if response.StatusCode == http.StatusNotFound {
@@ -179,11 +259,52 @@ func (a *Adapter) request(ctx context.Context, path string, output any) error {
 		}
 		return fmt.Errorf("%w: Docker API returned %s: %s", base, response.Status, strings.TrimSpace(string(body)))
 	}
+	if output == nil || response.StatusCode == http.StatusNoContent || response.StatusCode == http.StatusNotModified {
+		return nil
+	}
 	decoder := json.NewDecoder(io.LimitReader(response.Body, maxResponseBytes))
 	if err := decoder.Decode(output); err != nil {
 		return fmt.Errorf("decode Docker response: %w", err)
 	}
 	return nil
+}
+
+func validImage(image runtime.Image) bool {
+	return image.Reference != "" && len(image.Reference) <= 255 && !strings.ContainsAny(image.Reference, " \t\r\n")
+}
+
+func validImageDigest(value string) bool {
+	if len(value) != len("sha256:")+64 || !strings.HasPrefix(value, "sha256:") {
+		return false
+	}
+	for _, char := range value[len("sha256:"):] {
+		if (char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validWorkspaceID(value string) bool {
+	if value == "" || len(value) > 100 {
+		return false
+	}
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '-' || char == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func copyLabels(labels map[string]string) map[string]string {
+	copy := make(map[string]string, len(labels))
+	for key, value := range labels {
+		copy[key] = value
+	}
+	return copy
 }
 
 func stateFromDocker(value string) runtime.State {
