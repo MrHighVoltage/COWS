@@ -69,6 +69,29 @@ state, records anomalies, and applies a documented policy to orphaned or
 missing objects. Lifecycle operations should be idempotent where the runtime
 allows it.
 
+## Workspace timeout model
+
+Timeouts are administrator-controlled template policy, stored as durations in
+the workspace record when the workspace is created. This makes the effective
+policy visible and stable even if an administrator later changes a template.
+The initial lifecycle policy has three independent phases:
+
+1. If a running workspace has never recorded an authenticated user connection
+   and its initial connection deadline expires, COWS stops the container and
+   retains the workspace and container record.
+2. Once a container is stopped, its stopped deadline determines when COWS may
+   delete the container. The workspace control-plane record remains so the
+   result is observable and reconciliation can finish safely.
+3. After container deletion, the data-retention deadline determines when
+   leftover data, such as named volumes, becomes archive-eligible. The current
+   milestone only records that eligibility; it performs no archive or deletion
+   action on user data.
+
+The lifecycle worker evaluates these deadlines on the server. A browser timer
+is never authoritative. User pages show the effective durations, current phase,
+and any due or upcoming deadline. The policy model leaves room for future
+warning events and email delivery without making email a lifecycle dependency.
+
 ## Packages and ownership
 
 The initial package layout stays small:
@@ -98,8 +121,9 @@ SQLite uses WAL mode, foreign keys, a busy timeout, application-controlled
 migrations, and a local supported filesystem. The first schema migration only
 proves the migration mechanism. The later control-plane schema is expected to
 contain users, roles, templates, template access rules, workspaces, desired and
-observed state, quota assignments, runtime identifiers, access sessions, policy
-configuration, hosts, and structured audit events.
+observed state, effective timeout policy and lifecycle timestamps, quota
+assignments, runtime identifiers, access sessions, policy configuration, hosts,
+and structured audit events.
 
 Repository methods should represent domain operations rather than expose SQL
 details. PostgreSQL is a future option when multiple active control-plane
@@ -107,8 +131,9 @@ instances or higher availability requirements justify it.
 
 Workspace templates are administrator-controlled records. Their current policy
 surface contains an image reference and optional immutable digest, CPU/memory/
-storage defaults and maxima, supported access-method names, allowed roles, and
-enabled state. JSON columns store the small access-method and role lists for the
+storage defaults and maxima, supported access-method names, allowed roles,
+enabled state, and initial-connection, stopped-retention, and data-retention
+durations. JSON columns store the small access-method and role lists for the
 initial SQLite deployment; browser input is converted to typed values and
 validated before persistence. Runtime arguments, mounts, capabilities, devices,
 host networking, and arbitrary environment values are intentionally absent.

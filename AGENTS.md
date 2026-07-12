@@ -4,7 +4,10 @@
 
 COWS means **Containerized On-Demand Workspace System**. Always write the
 project and repository name as uppercase `COWS`. Read `PROJECT.md`,
-`ARCHITECTURE.md`, `SECURITY.md`, and `ROADMAP.md` before changing behavior.
+`ARCHITECTURE.md`, `SECURITY.md`, `ROADMAP.md`, and relevant decision records
+before changing behavior. Workspace lifecycle and timeout work must follow
+`docs/decisions/0004-workspace-state-model.md` and
+`docs/decisions/0006-workspace-timeouts.md`.
 
 ## Technology constraints
 
@@ -30,6 +33,12 @@ capacity data, and do not log secrets or user content.
 Do not implement future terminal, desktop, proxy, file-manager, or runtime
 features prematurely. Do not expose public workspace ports.
 
+Workspace timeout policies are backend-enforced and must not depend on browser
+timers. Keep the initial no-connection stop, stopped-container deletion, and
+post-deletion data-archive eligibility timestamps distinct. Do not implement
+email delivery or archive actions until their dedicated milestones; preserve
+clear future notification hooks and audit semantics.
+
 ## Development commands
 
 ```sh
@@ -48,4 +57,6 @@ Keep changes small and reviewable. Use table-driven tests and `httptest` where
 appropriate. Explain non-obvious behavior with short comments that describe
 why it exists. Update architecture/security documentation when boundaries or
 data flow change. Keep future work in `ROADMAP.md` rather than adding
-speculative packages. Preserve unrelated user changes in a dirty worktree.
+speculative packages. Add tests for timeout boundaries, restart/reconcile
+behavior, authorization, and irreversible operations. Preserve unrelated user
+changes in a dirty worktree.

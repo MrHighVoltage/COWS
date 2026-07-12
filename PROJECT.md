@@ -60,6 +60,19 @@ The scheduler initially performs deterministic quota and host-capacity checks,
 with no unsafe overcommit by default. Accounting policy must state whether
 stopped workspaces continue to reserve resources.
 
+Workspace lifecycle policies must support three administrator-defined durations:
+
+- an initial connection timeout after which a workspace with no user connection
+  is stopped but its container is retained;
+- a stopped-container retention timeout after which the stopped container may be
+  deleted; and
+- a data-retention timeout after deletion after which remaining workspace data,
+  such as volumes, becomes eligible for archival.
+
+These policies are visible to users on workspace pages. COWS does not archive
+data or send email in the initial implementation, but policy evaluation must
+leave explicit hooks for future warning notifications and audit events.
+
 The database is control-plane state, not a high-frequency metrics store. Runtime
 observations remain authoritative for container existence and running state.
 
@@ -85,3 +98,9 @@ observations remain authoritative for container existence and running state.
   application sessions.
 - **Managed container**: A runtime object identified by COWS labels or their
   Podman equivalent.
+- **Initial connection timeout**: The maximum time a newly started workspace
+  may remain without an authenticated user connection before COWS stops it.
+- **Stopped retention**: The period a stopped container remains available
+  before deletion becomes due.
+- **Data retention**: The period after container deletion before leftover data
+  becomes eligible for an archive action.

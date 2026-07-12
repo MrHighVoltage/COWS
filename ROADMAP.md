@@ -47,9 +47,13 @@ Podman remain deliberately deferred.
 Workspace persistence, owner/template foreign keys, desired/observed state,
 user creation/listing, quota assignment, and deterministic quota/host-capacity
 admission checks are now present, including persistent administrator-managed
-host capacity and reserved-resource settings. Add start/stop/restart/delete,
+host capacity and reserved-resource settings. Add administrator-defined initial
+connection, stopped-container retention, and post-deletion data-retention
+timeouts. Show effective timeouts to users and prepare warning-event hooks, but
+do not send email or archive data yet. Then add start/stop/restart/delete,
 runtime-enforced limits, reconciliation, and administrator overrides. Exit
-requires idempotence and failure-path tests.
+requires idempotence, deadline-boundary, and irreversible-operation failure-path
+tests.
 
 ## Milestone 4: Terminal access
 
@@ -73,6 +77,10 @@ limits. Do not create a generic reverse proxy.
 Add live resource display, host capacity views, idle shutdown, expiration,
 cleanup policies, and administrator capacity inspection. Keep high-frequency
 samples out of the main SQLite control-plane tables.
+
+Timeout policy execution belongs to Milestone 3. Milestone 7 may add richer
+idle detection and resource-driven policies, but must not replace the explicit
+timeout phases with browser-only or metrics-only behavior.
 
 ## Milestone 8: Restricted file manager
 
