@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -201,6 +202,14 @@ func TestTemplateConfigurationSnapshotsAndAllocatesPorts(t *testing.T) {
 	allocations, err := store.ListWorkspacePortAllocations(context.Background(), value.ID)
 	if err != nil || len(allocations) != 1 || allocations[0].HostPort < 10000 || allocations[0].HostPort > 10099 {
 		t.Fatalf("workspace port allocation: %+v err=%v", allocations, err)
+	}
+	fake := &lifecycleRuntime{}
+	runtimeService := NewWithRuntime(store, fake)
+	if err := runtimeService.StartWorkspace(context.Background(), user.ID, value.ID); err != nil {
+		t.Fatalf("start configured workspace: %v", err)
+	}
+	if fake.lastSpec.NetworkMode != "bridge" || len(fake.lastSpec.Environment) != 2 || fake.lastSpec.Environment[1].Value != strconv.Itoa(allocations[0].HostPort) || len(fake.lastSpec.Mounts) != 1 || len(fake.lastSpec.Ports) != 1 {
+		t.Fatalf("resolved runtime spec: %+v", fake.lastSpec)
 	}
 }
 

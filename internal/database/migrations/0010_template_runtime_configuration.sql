@@ -3,6 +3,8 @@ ALTER TABLE workspace_templates ADD COLUMN configuration_json TEXT NOT NULL DEFA
 
 ALTER TABLE workspaces ADD COLUMN template_revision INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE workspaces ADD COLUMN template_configuration_json TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE workspaces ADD COLUMN template_image_reference TEXT NOT NULL DEFAULT '';
+ALTER TABLE workspaces ADD COLUMN template_image_digest TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS workspace_port_allocations (
     workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,

@@ -46,7 +46,7 @@ for command, environment, managed mounts, and internal services. The backend
 snapshots this document into each workspace and resolves a small allowlist of
 COWS placeholders only after authorizing the request and allocating resources.
 Users submit neither Docker arguments nor rendered values. Service host ports
-are reserved in SQLite from administrator-defined ranges and are bound to
+are reserved in SQLite with uniqueness constraints from administrator-defined ranges and are bound to
 loopback by the Docker-compatible adapter. This prepares future terminal,
 desktop, and application gateways without exposing container ports directly.
 

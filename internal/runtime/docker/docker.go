@@ -131,6 +131,9 @@ func (a *Adapter) CreateWorkspace(ctx context.Context, spec runtime.WorkspaceSpe
 	if !validWorkspaceID(spec.WorkspaceID) || !validImage(spec.Image) {
 		return runtime.WorkspaceHandle{}, runtime.ErrConflict
 	}
+	if !validRuntimeConfiguration(spec) {
+		return runtime.WorkspaceHandle{}, runtime.ErrConflict
+	}
 	capabilities, err := a.Capabilities(ctx)
 	if err != nil {
 		return runtime.WorkspaceHandle{}, err
@@ -146,21 +149,63 @@ func (a *Adapter) CreateWorkspace(ctx context.Context, spec runtime.WorkspaceSpe
 		imageReference += "@" + spec.Image.Digest
 	}
 	nanoCPUs := spec.Limits.CPUMillis * 1_000_000
+	networkMode := spec.NetworkMode
+	if networkMode == "" {
+		networkMode = "none"
+	}
+	environment := make([]string, 0, len(spec.Environment))
+	for _, value := range spec.Environment {
+		environment = append(environment, value.Name+"="+value.Value)
+	}
+	mounts := make([]struct {
+		Type     string `json:"Type"`
+		Source   string `json:"Source"`
+		Target   string `json:"Target"`
+		ReadOnly bool   `json:"ReadOnly"`
+	}, 0, len(spec.Mounts))
+	for _, value := range spec.Mounts {
+		mounts = append(mounts, struct {
+			Type     string `json:"Type"`
+			Source   string `json:"Source"`
+			Target   string `json:"Target"`
+			ReadOnly bool   `json:"ReadOnly"`
+		}{Type: "volume", Source: "cows-" + spec.WorkspaceID + "-" + value.Name, Target: value.ContainerPath, ReadOnly: value.ReadOnly})
+	}
+	portBindings := make(map[string][]struct {
+		HostIP   string `json:"HostIp"`
+		HostPort string `json:"HostPort"`
+	}, len(spec.Ports))
+	exposedPorts := make(map[string]struct{}, len(spec.Ports))
+	for _, value := range spec.Ports {
+		key := strconv.Itoa(value.ContainerPort) + "/" + value.Protocol
+		exposedPorts[key] = struct{}{}
+		portBindings[key] = []struct {
+			HostIP   string `json:"HostIp"`
+			HostPort string `json:"HostPort"`
+		}{{HostIP: value.HostIP, HostPort: strconv.Itoa(value.HostPort)}}
+	}
 	body := struct {
-		Image      string            `json:"Image"`
-		Labels     map[string]string `json:"Labels"`
-		HostConfig struct {
-			Memory      int64  `json:"Memory"`
-			NanoCPUs    int64  `json:"NanoCpus"`
-			NetworkMode string `json:"NetworkMode"`
-			PidsLimit   *int64 `json:"PidsLimit,omitempty"`
+		Image        string              `json:"Image"`
+		Labels       map[string]string   `json:"Labels"`
+		Cmd          []string            `json:"Cmd,omitempty"`
+		Env          []string            `json:"Env,omitempty"`
+		ExposedPorts map[string]struct{} `json:"ExposedPorts,omitempty"`
+		HostConfig   struct {
+			Memory       int64  `json:"Memory"`
+			NanoCPUs     int64  `json:"NanoCpus"`
+			NetworkMode  string `json:"NetworkMode"`
+			PidsLimit    *int64 `json:"PidsLimit,omitempty"`
+			Mounts       any    `json:"Mounts,omitempty"`
+			PortBindings any    `json:"PortBindings,omitempty"`
 		} `json:"HostConfig"`
-	}{Image: imageReference, Labels: copyLabels(spec.Labels)}
+	}{Image: imageReference, Labels: copyLabels(spec.Labels), Cmd: append([]string(nil), spec.Command...), Env: environment, ExposedPorts: exposedPorts}
 	body.HostConfig.Memory = spec.Limits.MemoryBytes
 	body.HostConfig.NanoCPUs = nanoCPUs
-	body.HostConfig.NetworkMode = "none"
+	body.HostConfig.NetworkMode = networkMode
 	pidsLimit := int64(512)
 	body.HostConfig.PidsLimit = &pidsLimit
+	body.HostConfig.Mounts = mounts
+	body.HostConfig.PortBindings = portBindings
 	var response struct {
 		ID string `json:"Id"`
 	}
@@ -172,6 +217,48 @@ func (a *Adapter) CreateWorkspace(ctx context.Context, spec runtime.WorkspaceSpe
 		return runtime.WorkspaceHandle{}, fmt.Errorf("%w: Docker returned invalid container ID", runtime.ErrInvalidObservation)
 	}
 	return runtime.WorkspaceHandle{RuntimeID: response.ID, WorkspaceID: spec.WorkspaceID}, nil
+}
+
+func validRuntimeConfiguration(spec runtime.WorkspaceSpec) bool {
+	seenEnvironment := make(map[string]struct{}, len(spec.Environment))
+	for _, value := range spec.Environment {
+		if !validEnvironmentName(value.Name) || strings.ContainsAny(value.Value, "\x00\r\n") {
+			return false
+		}
+		if _, ok := seenEnvironment[value.Name]; ok {
+			return false
+		}
+		seenEnvironment[value.Name] = struct{}{}
+	}
+	seenMounts := make(map[string]struct{}, len(spec.Mounts))
+	for _, value := range spec.Mounts {
+		if !validWorkspaceID(value.Name) || value.ContainerPath == "" || value.ContainerPath[0] != '/' || strings.Contains(value.ContainerPath, "..") || strings.ContainsAny(value.ContainerPath, "\x00\r\n") {
+			return false
+		}
+		if _, ok := seenMounts[value.Name]; ok {
+			return false
+		}
+		seenMounts[value.Name] = struct{}{}
+	}
+	for _, value := range spec.Ports {
+		if value.Protocol != "tcp" && value.Protocol != "udp" || value.ContainerPort < 1 || value.ContainerPort > 65535 || value.HostPort < 1024 || value.HostPort > 65535 || value.HostIP != "127.0.0.1" {
+			return false
+		}
+	}
+	return true
+}
+
+func validEnvironmentName(value string) bool {
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	for index, char := range value {
+		if (char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9' && index > 0) || (char == '_' && index > 0) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (a *Adapter) StartWorkspace(ctx context.Context, runtimeID string) error {

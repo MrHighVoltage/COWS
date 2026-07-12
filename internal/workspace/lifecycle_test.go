@@ -18,6 +18,7 @@ type lifecycleRuntime struct {
 	stopped  int
 	removed  int
 	lastID   string
+	lastSpec runtime.WorkspaceSpec
 	observed []runtime.ObservedWorkspace
 }
 
@@ -33,6 +34,7 @@ func (r *lifecycleRuntime) ListManaged(context.Context) ([]runtime.ObservedWorks
 func (r *lifecycleRuntime) CreateWorkspace(_ context.Context, spec runtime.WorkspaceSpec) (runtime.WorkspaceHandle, error) {
 	r.created++
 	r.lastID = "runtime-123"
+	r.lastSpec = spec
 	return runtime.WorkspaceHandle{RuntimeID: r.lastID, WorkspaceID: spec.WorkspaceID}, nil
 }
 func (r *lifecycleRuntime) StartWorkspace(context.Context, string) error { r.started++; return nil }
