@@ -150,7 +150,7 @@ func (s *Service) requireAdministrator(ctx context.Context, actorID string) (dom
 }
 
 func validInput(input Input) bool {
-	return input.MaxCPUMillis > 0 && input.MaxCPUMillis <= 1_000_000 && input.MaxMemoryBytes > 0 && input.MaxMemoryBytes <= 1<<50 && input.MaxStorageBytes > 0 && input.MaxStorageBytes <= 1<<60 && input.MaxWorkspaces > 0 && input.MaxWorkspaces <= 1_000_000
+	return input.MaxCPUMillis >= 0 && input.MaxCPUMillis <= 1_000_000 && input.MaxMemoryBytes >= 0 && input.MaxMemoryBytes <= 1<<50 && input.MaxStorageBytes >= 0 && input.MaxStorageBytes <= 1<<60 && input.MaxWorkspaces >= 0 && input.MaxWorkspaces <= 1_000_000
 }
 
 type Scheduler struct {
@@ -166,18 +166,25 @@ func (s *Scheduler) CheckCreate(ctx context.Context, userID string, request doma
 	if request.CPUMillis <= 0 || request.MemoryBytes <= 0 || request.StorageBytes <= 0 {
 		return ErrInvalidQuota
 	}
-	userQuota, err := s.store.FindUserQuota(ctx, userID)
-	if errors.Is(err, repository.ErrNotFound) {
-		return ErrQuotaUnavailable
-	}
+	user, err := s.store.FindUserByID(ctx, userID)
 	if err != nil {
+		return fmt.Errorf("load quota user: %w", err)
+	}
+	userQuota, err := s.store.FindUserQuota(ctx, userID)
+	quotaAssigned := true
+	if errors.Is(err, repository.ErrNotFound) {
+		quotaAssigned = false
+		if !user.IsAdministrator() {
+			return ErrQuotaUnavailable
+		}
+	} else if err != nil {
 		return fmt.Errorf("load user quota: %w", err)
 	}
 	userAllocations, err := s.store.WorkspaceAllocations(ctx, userID)
 	if err != nil {
 		return err
 	}
-	if userAllocations.WorkspaceCount+1 > userQuota.MaxWorkspaces || exceeds(userAllocations.Resources.CPUMillis, request.CPUMillis, userQuota.MaxCPUMillis) || exceeds(userAllocations.Resources.MemoryBytes, request.MemoryBytes, userQuota.MaxMemoryBytes) || exceeds(userAllocations.Resources.StorageBytes, request.StorageBytes, userQuota.MaxStorageBytes) {
+	if quotaAssigned && exceedsQuota(userAllocations, request, userQuota) {
 		return ErrQuotaExceeded
 	}
 	if s.capacity == nil {
@@ -210,5 +217,12 @@ func validHostSettings(input HostSettingsInput) bool {
 }
 
 func exceeds(current, requested, limit int64) bool {
-	return current > limit-requested
+	return limit > 0 && current > limit-requested
+}
+
+func exceedsQuota(current domain.AllocationSummary, request domain.ResourceRequest, limit domain.UserQuota) bool {
+	return (limit.MaxWorkspaces > 0 && current.WorkspaceCount+1 > limit.MaxWorkspaces) ||
+		exceeds(current.Resources.CPUMillis, request.CPUMillis, limit.MaxCPUMillis) ||
+		exceeds(current.Resources.MemoryBytes, request.MemoryBytes, limit.MaxMemoryBytes) ||
+		exceeds(current.Resources.StorageBytes, request.StorageBytes, limit.MaxStorageBytes)
 }

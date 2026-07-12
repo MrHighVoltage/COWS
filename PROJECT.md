@@ -60,6 +60,11 @@ The scheduler initially performs deterministic quota and host-capacity checks,
 with no unsafe overcommit by default. Accounting policy must state whether
 stopped workspaces continue to reserve resources.
 
+An ordinary user must have an assigned quota before creating a workspace. An
+administrator without a quota assignment is unrestricted by COWS user quotas.
+Within an assigned quota, zero means unlimited for that resource; physical host
+capacity and reserved host capacity still apply to all accounts.
+
 Workspace lifecycle policies must support three administrator-defined durations:
 
 - an initial connection timeout after which a workspace with no user connection

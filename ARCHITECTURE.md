@@ -148,6 +148,9 @@ records through service-layer authorization.
 Quota checks use recorded allocations for all existing workspaces, including
 stopped records. A request must fit the user's CPU, memory, storage, and
 workspace-count quota and the remaining host capacity after reserved capacity.
+Missing quotas block ordinary users but do not restrict administrators. A zero
+value in an assigned quota means unlimited for that dimension; host capacity
+checks still apply to administrators.
 The scheduler does not overcommit by default. Docker reports CPU and memory;
 allocatable storage is an explicit host setting because Docker's host info
 response does not provide a portable allocatable-storage contract. The
