@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/cows-project/cows/internal/auth"
 	"github.com/cows-project/cows/internal/domain"
 	"github.com/cows-project/cows/internal/quota"
@@ -27,8 +28,11 @@ import (
 )
 
 const (
-	sessionCookieName = "cows_session"
-	csrfCookieName    = "cows_csrf"
+	sessionCookieName            = "cows_session"
+	csrfCookieName               = "cows_csrf"
+	terminalIdleTimeout          = 15 * time.Minute
+	terminalMaxLifetime          = time.Hour
+	terminalSessionCheckInterval = 30 * time.Second
 )
 
 type Options struct {
@@ -126,25 +130,26 @@ type templateFormData struct {
 }
 
 type pageData struct {
-	Title        string
-	User         *domain.User
-	Health       healthSnapshot
-	CSRFToken    string
-	Error        string
-	Users        []domain.User
-	Form         userFormData
-	Templates    []domain.WorkspaceTemplate
-	Template     templateFormData
-	Password     passwordFormData
-	Inspection   *runtime.Inspection
-	RuntimeError string
-	Workspaces   []domain.Workspace
-	Workspace    workspaceFormData
-	Quotas       []quotaView
-	Quota        quotaFormData
-	Settings     *domain.HostSettings
-	SettingsForm settingsFormData
-	Allocation   *allocationView
+	Title           string
+	User            *domain.User
+	Health          healthSnapshot
+	CSRFToken       string
+	Error           string
+	Users           []domain.User
+	Form            userFormData
+	Templates       []domain.WorkspaceTemplate
+	Template        templateFormData
+	Password        passwordFormData
+	Inspection      *runtime.Inspection
+	RuntimeError    string
+	Workspaces      []domain.Workspace
+	Workspace       workspaceFormData
+	Quotas          []quotaView
+	Quota           quotaFormData
+	Settings        *domain.HostSettings
+	SettingsForm    settingsFormData
+	Allocation      *allocationView
+	ActiveWorkspace *domain.Workspace
 }
 
 func New(db *sql.DB, authService *auth.Service, templateService *workspace.Service, quotaService *quota.Service, runtimeAdapter runtime.Runtime, options Options) (*Server, error) {
@@ -198,6 +203,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /workspaces/{id}/stop", s.workspaceStop)
 	mux.HandleFunc("POST /workspaces/{id}/restart", s.workspaceRestart)
 	mux.HandleFunc("POST /workspaces/{id}/delete", s.workspaceDelete)
+	mux.HandleFunc("GET /workspaces/{id}/terminal", s.workspaceTerminalPage)
+	mux.HandleFunc("GET /workspaces/{id}/terminal/ws", s.workspaceTerminalWebSocket)
 	mux.HandleFunc("GET /admin/users", s.adminUsers)
 	mux.HandleFunc("GET /admin/users/new", s.adminUsersNew)
 	mux.HandleFunc("POST /admin/users", s.adminUsersCreate)
@@ -465,6 +472,161 @@ func (s *Server) workspaceAction(w http.ResponseWriter, r *http.Request, action 
 		return
 	}
 	http.Redirect(w, r, "/workspaces", http.StatusSeeOther)
+}
+
+func (s *Server) workspaceTerminalPage(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	value, err := s.workspace.GetWorkspace(r.Context(), user.ID, r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "workspace not found", http.StatusNotFound)
+		return
+	}
+	s.render(w, http.StatusOK, "workspace-terminal-page", pageData{Title: "Terminal | COWS", User: user, ActiveWorkspace: &value})
+}
+
+type terminalResizeMessage struct {
+	Type string `json:"type"`
+	Cols int    `json:"cols"`
+	Rows int    `json:"rows"`
+}
+
+type terminalInputMessage struct {
+	Type websocket.MessageType
+	Data []byte
+	Err  error
+}
+
+type terminalOutputMessage struct {
+	Data []byte
+	Err  error
+}
+
+func (s *Server) workspaceTerminalWebSocket(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	terminal, err := s.workspace.OpenTerminal(r.Context(), user.ID, r.PathValue("id"))
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, repository.ErrNotFound) {
+			status = http.StatusNotFound
+		} else if errors.Is(err, workspace.ErrWorkspaceNotAuthorized) || errors.Is(err, workspace.ErrTerminalNotAvailable) {
+			status = http.StatusForbidden
+		}
+		http.Error(w, terminalErrorText(err), status)
+		return
+	}
+	defer terminal.Close()
+	defer s.workspace.RecordTerminalDisconnect(context.Background(), user.ID, r.PathValue("id"))
+
+	conn, err := websocket.Accept(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.CloseNow()
+	conn.SetReadLimit(64 * 1024)
+
+	ctx, cancel := context.WithTimeout(r.Context(), terminalMaxLifetime)
+	defer cancel()
+	sessionCookie, err := r.Cookie(sessionCookieName)
+	if err != nil || sessionCookie.Value == "" {
+		return
+	}
+	input := make(chan terminalInputMessage, 1)
+	output := make(chan terminalOutputMessage, 1)
+	go readTerminalInput(ctx, conn, input)
+	go readTerminalOutput(ctx, terminal, output)
+
+	idleTimer := time.NewTimer(terminalIdleTimeout)
+	defer idleTimer.Stop()
+	sessionTicker := time.NewTicker(terminalSessionCheckInterval)
+	defer sessionTicker.Stop()
+	resetIdle := func() {
+		if !idleTimer.Stop() {
+			select {
+			case <-idleTimer.C:
+			default:
+			}
+		}
+		idleTimer.Reset(terminalIdleTimeout)
+	}
+	for {
+		select {
+		case message := <-output:
+			if message.Err != nil {
+				return
+			}
+			if err := conn.Write(ctx, websocket.MessageBinary, message.Data); err != nil {
+				return
+			}
+			resetIdle()
+		case message := <-input:
+			if message.Err != nil {
+				return
+			}
+			var resize terminalResizeMessage
+			if message.Type == websocket.MessageText && json.Unmarshal(message.Data, &resize) == nil && resize.Type == "resize" {
+				if err := terminal.Resize(ctx, resize.Cols, resize.Rows); err != nil {
+					return
+				}
+				resetIdle()
+				continue
+			}
+			if _, err := terminal.Write(message.Data); err != nil {
+				return
+			}
+			resetIdle()
+		case <-idleTimer.C:
+			return
+		case <-ctx.Done():
+			return
+		case <-sessionTicker.C:
+			current, err := s.auth.UserForSession(ctx, sessionCookie.Value)
+			if err != nil || current.ID != user.ID || current.Disabled || current.MustChangePassword {
+				return
+			}
+		}
+	}
+}
+
+func readTerminalInput(ctx context.Context, conn *websocket.Conn, output chan<- terminalInputMessage) {
+	for {
+		typ, data, err := conn.Read(ctx)
+		select {
+		case output <- terminalInputMessage{Type: typ, Data: data, Err: err}:
+		case <-ctx.Done():
+			return
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func readTerminalOutput(ctx context.Context, terminal runtime.Terminal, output chan<- terminalOutputMessage) {
+	buffer := make([]byte, 32*1024)
+	for {
+		count, err := terminal.Read(buffer)
+		if count > 0 {
+			data := append([]byte(nil), buffer[:count]...)
+			select {
+			case output <- terminalOutputMessage{Data: data}:
+			case <-ctx.Done():
+				return
+			}
+		}
+		if err != nil {
+			select {
+			case output <- terminalOutputMessage{Err: err}:
+			case <-ctx.Done():
+			}
+			return
+		}
+	}
 }
 
 func (s *Server) logoutPost(w http.ResponseWriter, r *http.Request) {
@@ -1302,6 +1464,19 @@ func workspaceActionError(action string, err error) string {
 		return "This Docker operation is not supported by the configured runtime."
 	default:
 		return "The workspace could not be " + workspaceActionVerb(action) + "."
+	}
+}
+
+func terminalErrorText(err error) string {
+	switch {
+	case errors.Is(err, workspace.ErrRuntimeUnavailable), errors.Is(err, runtime.ErrUnavailable):
+		return "The container runtime is unavailable."
+	case errors.Is(err, workspace.ErrWorkspaceStateConflict):
+		return "The workspace must be running before a terminal can be opened."
+	case errors.Is(err, workspace.ErrTerminalNotAvailable):
+		return "Terminal access is not enabled for this workspace template."
+	default:
+		return "The terminal session could not be opened."
 	}
 }
 

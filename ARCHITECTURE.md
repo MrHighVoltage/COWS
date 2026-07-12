@@ -43,6 +43,16 @@ Terminal, desktop, and proxy sessions are authenticated COWS sessions whose
 targets are selected from server-side workspace records and template policy.
 They are not generic reverse proxies.
 
+The terminal gateway is the first implemented access gateway. After checking
+the session, workspace ownership or administrator permission, observed running
+state, and the template's terminal access method, it asks the runtime adapter
+for a fixed `/bin/sh -l` session. The browser receives only terminal input and
+output over a COWS WebSocket; it never supplies a runtime ID or command.
+Terminal sessions have a 15-minute idle timeout, a one-hour maximum lifetime,
+resize forwarding, and start/end audit events. The Docker-compatible adapter
+uses the runtime exec API's upgraded stream and keeps the runtime-specific
+transport details inside the adapter.
+
 ## Request and state flow
 
 ```mermaid

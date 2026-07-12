@@ -30,8 +30,11 @@ port, image, mount, capability, device, or runtime argument. Keep the runtime
 socket behind the runtime interface, fail closed on missing authorization or
 capacity data, and do not log secrets or user content.
 
-Do not implement future terminal, desktop, proxy, file-manager, or runtime
-features prematurely. Do not expose public workspace ports.
+Terminal access is implemented through the runtime shell capability and must
+retain fixed server-selected commands, ownership/template/state checks,
+WebSocket session limits, resize validation, and audit events. Do not expose
+public workspace ports. Do not implement future desktop, proxy, file-manager,
+or multi-host runtime features prematurely.
 
 Workspace timeout policies are backend-enforced and must not depend on browser
 timers. Keep the initial no-connection stop, stopped-container deletion, and
@@ -58,5 +61,5 @@ appropriate. Explain non-obvious behavior with short comments that describe
 why it exists. Update architecture/security documentation when boundaries or
 data flow change. Keep future work in `ROADMAP.md` rather than adding
 speculative packages. Add tests for timeout boundaries, restart/reconcile
-behavior, authorization, and irreversible operations. Preserve unrelated user
-changes in a dirty worktree.
+behavior, authorization, terminal isolation, and irreversible operations.
+Preserve unrelated user changes in a dirty worktree.

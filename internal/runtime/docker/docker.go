@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,7 +26,8 @@ const (
 var apiVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+$`)
 
 type Adapter struct {
-	client *http.Client
+	client       *http.Client
+	streamClient *http.Client
 }
 
 func New(socketPath string) (*Adapter, error) {
@@ -38,7 +40,10 @@ func New(socketPath string) (*Adapter, error) {
 			return (&net.Dialer{Timeout: defaultRequestTimeout}).DialContext(ctx, "unix", socketPath)
 		},
 	}
-	return &Adapter{client: &http.Client{Transport: transport, Timeout: defaultRequestTimeout}}, nil
+	return &Adapter{
+		client:       &http.Client{Transport: transport, Timeout: defaultRequestTimeout},
+		streamClient: &http.Client{Transport: transport},
+	}, nil
 }
 
 func (a *Adapter) Name(ctx context.Context) (string, error) {
@@ -190,6 +195,87 @@ func (a *Adapter) RemoveWorkspace(ctx context.Context, runtimeID string) error {
 		return runtime.ErrNotFound
 	}
 	return a.mutation(ctx, http.MethodDelete, "/containers/"+url.PathEscape(runtimeID), nil, nil)
+}
+
+func (a *Adapter) OpenShell(ctx context.Context, runtimeID string, command []string) (runtime.Terminal, error) {
+	if !validRuntimeID(runtimeID) || len(command) == 0 || len(command) > 8 {
+		return nil, runtime.ErrConflict
+	}
+	for _, value := range command {
+		if value == "" || len(value) > 128 || strings.ContainsAny(value, "\x00\r\n") {
+			return nil, runtime.ErrConflict
+		}
+	}
+	var created struct {
+		ID string `json:"Id"`
+	}
+	body := struct {
+		AttachStdin  bool     `json:"AttachStdin"`
+		AttachStdout bool     `json:"AttachStdout"`
+		AttachStderr bool     `json:"AttachStderr"`
+		Tty          bool     `json:"Tty"`
+		Cmd          []string `json:"Cmd"`
+	}{AttachStdin: true, AttachStdout: true, AttachStderr: true, Tty: true, Cmd: command}
+	if err := a.mutation(ctx, http.MethodPost, "/containers/"+url.PathEscape(runtimeID)+"/exec", &body, &created); err != nil {
+		return nil, err
+	}
+	if !validRuntimeID(created.ID) {
+		return nil, fmt.Errorf("%w: Docker returned invalid exec ID", runtime.ErrInvalidObservation)
+	}
+	version, err := a.version(ctx)
+	if err != nil {
+		return nil, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://docker/v"+version+"/exec/"+url.PathEscape(created.ID)+"/start", strings.NewReader(`{"Detach":false,"Tty":true}`))
+	if err != nil {
+		return nil, fmt.Errorf("create Docker exec request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Connection", "Upgrade")
+	request.Header.Set("Upgrade", "tcp")
+	client := a.streamClient
+	if client == nil {
+		client = a.client
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("%w: Docker exec stream: %v", runtime.ErrUnavailable, err)
+	}
+	if response.StatusCode != http.StatusSwitchingProtocols {
+		defer response.Body.Close()
+		body, _ := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes))
+		base := runtime.ErrUnavailable
+		if response.StatusCode == http.StatusNotFound {
+			base = runtime.ErrNotFound
+		} else if response.StatusCode == http.StatusConflict {
+			base = runtime.ErrConflict
+		}
+		return nil, fmt.Errorf("%w: Docker exec returned %s: %s", base, response.Status, strings.TrimSpace(string(body)))
+	}
+	stream, ok := response.Body.(io.ReadWriteCloser)
+	if !ok {
+		response.Body.Close()
+		return nil, fmt.Errorf("%w: Docker did not return a writable exec stream", runtime.ErrUnavailable)
+	}
+	return &terminal{stream: stream, adapter: a, execID: created.ID}, nil
+}
+
+type terminal struct {
+	stream  io.ReadWriteCloser
+	adapter *Adapter
+	execID  string
+}
+
+func (t *terminal) Read(value []byte) (int, error)  { return t.stream.Read(value) }
+func (t *terminal) Write(value []byte) (int, error) { return t.stream.Write(value) }
+func (t *terminal) Close() error                    { return t.stream.Close() }
+
+func (t *terminal) Resize(ctx context.Context, cols, rows int) error {
+	if cols < 1 || cols > 500 || rows < 1 || rows > 500 {
+		return runtime.ErrConflict
+	}
+	path := "/exec/" + url.PathEscape(t.execID) + "/resize?h=" + strconv.Itoa(rows) + "&w=" + strconv.Itoa(cols)
+	return t.adapter.mutation(ctx, http.MethodPost, path, nil, nil)
 }
 
 type containerSummary struct {

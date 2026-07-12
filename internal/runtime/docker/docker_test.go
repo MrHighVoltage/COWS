@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -140,6 +141,66 @@ func TestCapabilitiesDetectRootlessPodmanAndMissingCPULimits(t *testing.T) {
 		t.Fatalf("rootless create error = %v, want unsupported resource limits", err)
 	}
 }
+
+func TestOpenShellUsesDockerExecUpgradeAndResize(t *testing.T) {
+	var calls []string
+	stream := &testStream{Reader: strings.NewReader("shell> ")}
+	adapter := &Adapter{client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls = append(calls, request.Method+" "+request.URL.Path+"?"+request.URL.RawQuery)
+		switch request.URL.Path {
+		case "/version":
+			return dockerResponse(http.StatusOK, `{"ApiVersion":"1.45"}`), nil
+		case "/v1.45/containers/abcdef0123456789/exec":
+			return dockerResponse(http.StatusCreated, `{"Id":"abc123"}`), nil
+		case "/v1.45/exec/abc123/start":
+			if request.Header.Get("Upgrade") != "tcp" || request.Header.Get("Connection") != "Upgrade" {
+				t.Fatalf("exec start did not request an upgraded stream: %+v", request.Header)
+			}
+			return &http.Response{StatusCode: http.StatusSwitchingProtocols, Status: "101 Switching Protocols", Body: stream, Header: http.Header{"Connection": {"Upgrade"}, "Upgrade": {"tcp"}}}, nil
+		case "/v1.45/exec/abc123/resize":
+			if request.URL.Query().Get("w") != "120" || request.URL.Query().Get("h") != "40" {
+				t.Fatalf("unexpected resize query: %s", request.URL.RawQuery)
+			}
+			return dockerResponse(http.StatusOK, ``), nil
+		default:
+			return dockerResponse(http.StatusNotFound, `not found`), nil
+		}
+	})}}
+	terminal, err := adapter.OpenShell(context.Background(), "abcdef0123456789", []string{"/bin/sh", "-l"})
+	if err != nil {
+		t.Fatalf("open shell: %v", err)
+	}
+	defer terminal.Close()
+	buffer := make([]byte, 32)
+	count, err := terminal.Read(buffer)
+	if err != nil || string(buffer[:count]) != "shell> " {
+		t.Fatalf("terminal read = %q, err=%v", string(buffer[:count]), err)
+	}
+	if _, err := terminal.Write([]byte("printf ok\n")); err != nil {
+		t.Fatalf("terminal write: %v", err)
+	}
+	if err := terminal.Resize(context.Background(), 120, 40); err != nil {
+		t.Fatalf("terminal resize: %v", err)
+	}
+	if got, want := string(stream.Written.Bytes()), "printf ok\n"; got != want {
+		t.Fatalf("stream input = %q, want %q", got, want)
+	}
+	if len(calls) != 6 {
+		t.Fatalf("Docker API calls = %d, want 6: %v", len(calls), calls)
+	}
+}
+
+func dockerResponse(status int, body string) *http.Response {
+	return &http.Response{StatusCode: status, Status: http.StatusText(status), Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}
+}
+
+type testStream struct {
+	*strings.Reader
+	Written bytes.Buffer
+}
+
+func (s *testStream) Write(value []byte) (int, error) { return s.Written.Write(value) }
+func (s *testStream) Close() error                    { return nil }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 

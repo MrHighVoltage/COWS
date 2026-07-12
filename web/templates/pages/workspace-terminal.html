@@ -1,0 +1,19 @@
+{{ define "workspace-terminal-page" }}
+{{ template "base-start" . }}
+<link rel="stylesheet" href="/static/vendor/xterm/xterm.css">
+<section class="intro" aria-labelledby="terminal-title">
+  <p class="eyebrow">Workspace terminal</p>
+  <div class="title-row">
+    <div><h1 id="terminal-title">{{ .ActiveWorkspace.Name }}</h1><p class="lede">Authenticated shell session through COWS.</p></div>
+    <a class="secondary-button button-link" href="/workspaces">Back to workspaces</a>
+  </div>
+</section>
+<section class="panel terminal-panel" data-terminal data-terminal-url="/workspaces/{{ .ActiveWorkspace.ID }}/terminal/ws" aria-labelledby="terminal-panel-title">
+  <div class="panel-heading"><div><h2 id="terminal-panel-title">Shell</h2><p class="muted">The session expires after inactivity or one hour.</p></div><span id="terminal-status" class="badge">Connecting</span></div>
+  <div id="terminal" class="terminal" role="application" aria-label="Workspace terminal"></div>
+  <p id="terminal-error" class="alert alert-error" role="alert" hidden></p>
+</section>
+<script src="/static/vendor/xterm/xterm.js"></script>
+<script src="/static/js/terminal.js"></script>
+{{ template "base-end" . }}
+{{ end }}

@@ -62,9 +62,12 @@ status, and automatically refreshed state.
 
 ## Milestone 4: Terminal access
 
-Integrate xterm.js with an authenticated WebSocket, approved shell execution,
-resize handling, session expiry, cleanup, and audit events. No arbitrary command
-or runtime target may come from the browser.
+Completed initial implementation: local xterm.js 5.3.0 assets, an authenticated
+WebSocket, approved `/bin/sh -l` execution, resize handling, idle and maximum
+session expiry, cleanup, audit events, and Docker exec stream adapter tests.
+Exit criteria for this checkpoint are met. Browser accessibility review and
+runtime integration tests against supported Docker and Podman configurations
+remain hardening work.
 
 ## Milestone 5: Graphical desktop access
 
