@@ -46,6 +46,11 @@ partial operations, and compromised or misconfigured images.
 - Runtime capabilities are least privilege. Privileged mode, host networking,
   unrestricted host mounts, arbitrary capabilities, and direct devices are not
   user-selectable.
+- Timeout policies are administrator-controlled and evaluated by the backend;
+  users cannot extend them by changing browser data or suppressing timers.
+- Container deletion and future data archival are separate actions. Archive
+  eligibility must never be treated as authorization to read or delete data,
+  and any future archive implementation must be separately audited.
 
 ## Access gateway risks
 
@@ -77,6 +82,12 @@ resources. They are persisted in SQLite, protected by administrator
 authorization and CSRF checks, and audited. The startup configuration value
 only initializes missing settings; it does not silently overwrite web-managed
 values. A zero storage capacity intentionally fails workspace admission closed.
+
+Lifecycle timeout processing must fail closed around ambiguous state. If COWS
+cannot establish whether a workspace was connected, stopped, or deleted, it
+must not perform an irreversible deletion or archival action. Future email
+warnings must not include secrets, tokens, terminal contents, or sensitive
+workspace data.
 
 The current scheduler reserves allocations for stopped workspaces and requires
 an explicit host-storage capacity. It does not support overcommit, GPU
