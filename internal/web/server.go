@@ -81,6 +81,14 @@ type quotaFormData struct {
 	Error         string
 }
 
+type settingsFormData struct {
+	HostStorageGiB     string
+	ReservedCPUMillis  string
+	ReservedMemoryMiB  string
+	ReservedStorageGiB string
+	Error              string
+}
+
 type quotaView struct {
 	User     domain.User
 	Quota    domain.UserQuota
@@ -125,6 +133,8 @@ type pageData struct {
 	Workspace    workspaceFormData
 	Quotas       []quotaView
 	Quota        quotaFormData
+	Settings     *domain.HostSettings
+	SettingsForm settingsFormData
 }
 
 func New(db *sql.DB, authService *auth.Service, templateService *workspace.Service, quotaService *quota.Service, runtimeAdapter runtime.Runtime, options Options) (*Server, error) {
@@ -167,6 +177,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/users/{id}/disabled", s.adminUserDisabled)
 	mux.HandleFunc("GET /admin/quotas", s.adminQuotas)
 	mux.HandleFunc("POST /admin/quotas/{id}", s.adminQuotaUpdate)
+	mux.HandleFunc("GET /admin/settings", s.adminSettings)
+	mux.HandleFunc("POST /admin/settings", s.adminSettingsUpdate)
 	mux.HandleFunc("GET /admin/templates", s.adminTemplates)
 	mux.HandleFunc("GET /admin/templates/new", s.adminTemplatesNew)
 	mux.HandleFunc("POST /admin/templates", s.adminTemplatesCreate)
@@ -498,6 +510,69 @@ func (s *Server) adminQuotaUpdate(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin/quotas", http.StatusSeeOther)
 }
 
+func (s *Server) adminSettings(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	if s.quota == nil {
+		http.Error(w, "quota service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	settings, err := s.quota.GetHostSettings(r.Context(), user.ID)
+	if errors.Is(err, repository.ErrNotFound) {
+		http.Error(w, "host settings have not been initialized", http.StatusServiceUnavailable)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to load host settings", http.StatusInternalServerError)
+		return
+	}
+	s.render(w, http.StatusOK, "admin-settings-page", pageData{
+		Title: "Host settings | COWS", User: &user, Settings: &settings,
+		SettingsForm: settingsFormFromDomain(settings), CSRFToken: s.ensureCSRF(w, r),
+	})
+}
+
+func (s *Server) adminSettingsUpdate(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if !s.validCSRF(r) {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	form := settingsFormData{
+		HostStorageGiB: r.FormValue("host_storage_gib"), ReservedCPUMillis: r.FormValue("reserved_cpu_millis"),
+		ReservedMemoryMiB: r.FormValue("reserved_memory_mib"), ReservedStorageGiB: r.FormValue("reserved_storage_gib"),
+	}
+	input, err := parseSettingsForm(form)
+	if err == nil && s.quota == nil {
+		err = errors.New("quota service unavailable")
+	}
+	if err == nil {
+		_, err = s.quota.SetHostSettings(r.Context(), user.ID, input)
+	}
+	if err != nil {
+		form.Error = settingsFormError(err)
+		var settings *domain.HostSettings
+		if s.quota != nil {
+			if current, loadErr := s.quota.GetHostSettings(r.Context(), user.ID); loadErr == nil {
+				settings = &current
+			}
+		}
+		s.render(w, http.StatusBadRequest, "admin-settings-page", pageData{Title: "Host settings | COWS", User: &user, Settings: settings, SettingsForm: form, CSRFToken: s.ensureCSRF(w, r)})
+		return
+	}
+	http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)
+}
+
 func (s *Server) loadQuotaViews(ctx context.Context, actorID string) ([]quotaView, error) {
 	users, err := s.auth.ListUsers(ctx, actorID)
 	if err != nil {
@@ -790,6 +865,51 @@ func parseQuotaForm(form quotaFormData) (quota.Input, error) {
 	return quota.Input{MaxCPUMillis: cpu, MaxMemoryBytes: memory, MaxStorageBytes: storage, MaxWorkspaces: workspaces}, nil
 }
 
+func parseSettingsForm(form settingsFormData) (quota.HostSettingsInput, error) {
+	storage, err := parseNonNegativeResource(form.HostStorageGiB, 1<<30)
+	if err != nil {
+		return quota.HostSettingsInput{}, quota.ErrInvalidQuota
+	}
+	cpu, err := parseNonNegativeInt(form.ReservedCPUMillis)
+	if err != nil {
+		return quota.HostSettingsInput{}, quota.ErrInvalidQuota
+	}
+	memory, err := parseNonNegativeResource(form.ReservedMemoryMiB, 1<<20)
+	if err != nil {
+		return quota.HostSettingsInput{}, quota.ErrInvalidQuota
+	}
+	reservedStorage, err := parseNonNegativeResource(form.ReservedStorageGiB, 1<<30)
+	if err != nil {
+		return quota.HostSettingsInput{}, quota.ErrInvalidQuota
+	}
+	return quota.HostSettingsInput{HostStorageBytes: storage, ReservedCPUMillis: cpu, ReservedMemoryBytes: memory, ReservedStorageBytes: reservedStorage}, nil
+}
+
+func parseNonNegativeInt(value string) (int64, error) {
+	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil || parsed < 0 {
+		return 0, errors.New("value must be zero or positive")
+	}
+	return parsed, nil
+}
+
+func parseNonNegativeResource(value string, multiplier int64) (int64, error) {
+	parsed, err := parseNonNegativeInt(value)
+	if err != nil || parsed > (1<<62)/multiplier {
+		return 0, errors.New("resource value is invalid")
+	}
+	return parsed * multiplier, nil
+}
+
+func settingsFormFromDomain(settings domain.HostSettings) settingsFormData {
+	return settingsFormData{
+		HostStorageGiB:     strconv.FormatInt(settings.HostStorageBytes/(1<<30), 10),
+		ReservedCPUMillis:  strconv.FormatInt(settings.ReservedCPUMillis, 10),
+		ReservedMemoryMiB:  strconv.FormatInt(settings.ReservedMemoryBytes/(1<<20), 10),
+		ReservedStorageGiB: strconv.FormatInt(settings.ReservedStorageBytes/(1<<30), 10),
+	}
+}
+
 func defaultTemplateForm() templateFormData {
 	return templateFormData{DefaultCPUMillis: "1000", MaxCPUMillis: "4000", DefaultMemoryMiB: "2048", MaxMemoryMiB: "8192", DefaultStorageGiB: "20", TerminalAccess: true, UserRole: true, Enabled: true}
 }
@@ -985,6 +1105,13 @@ func quotaFormError(err error) string {
 		return "Enter positive CPU, memory, storage, and workspace limits within the allowed ranges."
 	}
 	return "The quota could not be saved."
+}
+
+func settingsFormError(err error) string {
+	if errors.Is(err, quota.ErrInvalidQuota) {
+		return "Enter zero or positive values within the allowed ranges. Reserved storage cannot exceed configured storage capacity."
+	}
+	return "The host settings could not be saved."
 }
 
 func (s *Server) healthFragment(w http.ResponseWriter, r *http.Request) {

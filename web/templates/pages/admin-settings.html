@@ -1,0 +1,34 @@
+{{ define "admin-settings-page" }}
+{{ template "base-start" . }}
+<section class="intro" aria-labelledby="settings-title">
+  <p class="eyebrow">Administration</p>
+  <h1 id="settings-title">Host settings</h1>
+  <p class="lede">Configure the resources COWS may allocate. Changes take effect for new workspace admission checks without restarting the service.</p>
+</section>
+{{ if .SettingsForm.Error }}<p class="alert alert-error" role="alert">{{ .SettingsForm.Error }}</p>{{ end }}
+<form class="form-panel" method="post" action="/admin/settings">
+  <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
+  <div class="form-grid">
+    <div>
+      <label for="host-storage-gib">Allocatable host storage (GiB)</label>
+      <input id="host-storage-gib" name="host_storage_gib" type="number" min="0" max="1073741824" value="{{ .SettingsForm.HostStorageGiB }}" required>
+      <span class="muted">Zero means unknown and blocks workspace creation.</span>
+    </div>
+    <div>
+      <label for="reserved-cpu-millis">Reserved CPU (mCPU)</label>
+      <input id="reserved-cpu-millis" name="reserved_cpu_millis" type="number" min="0" max="1000000" value="{{ .SettingsForm.ReservedCPUMillis }}" required>
+      <span class="muted">Held back from workspace allocations.</span>
+    </div>
+    <div>
+      <label for="reserved-memory-mib">Reserved memory (MiB)</label>
+      <input id="reserved-memory-mib" name="reserved_memory_mib" type="number" min="0" max="1099511627776" value="{{ .SettingsForm.ReservedMemoryMiB }}" required>
+    </div>
+    <div>
+      <label for="reserved-storage-gib">Reserved storage (GiB)</label>
+      <input id="reserved-storage-gib" name="reserved_storage_gib" type="number" min="0" max="1073741824" value="{{ .SettingsForm.ReservedStorageGiB }}" required>
+    </div>
+  </div>
+  <div class="form-actions"><button class="primary-button" type="submit">Save host settings</button></div>
+</form>
+{{ template "base-end" . }}
+{{ end }}

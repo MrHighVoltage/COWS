@@ -31,6 +31,13 @@ type Input struct {
 	MaxWorkspaces   int64
 }
 
+type HostSettingsInput struct {
+	HostStorageBytes     int64
+	ReservedCPUMillis    int64
+	ReservedMemoryBytes  int64
+	ReservedStorageBytes int64
+}
+
 func New(store repository.Store) *Service {
 	return &Service{store: store, now: time.Now}
 }
@@ -78,6 +85,59 @@ func (s *Service) Set(ctx context.Context, actorID, userID string, input Input) 
 	return existing, nil
 }
 
+// EnsureHostSettings creates the initial settings row without replacing an
+// administrator's persisted values on later process starts.
+func (s *Service) EnsureHostSettings(ctx context.Context, defaults HostSettingsInput) (domain.HostSettings, error) {
+	settings, err := s.store.FindHostSettings(ctx)
+	if err == nil {
+		return settings, nil
+	}
+	if !errors.Is(err, repository.ErrNotFound) {
+		return domain.HostSettings{}, err
+	}
+	if !validHostSettings(defaults) {
+		return domain.HostSettings{}, ErrInvalidQuota
+	}
+	now := s.now().UTC()
+	settings = domain.HostSettings{ID: 1, HostStorageBytes: defaults.HostStorageBytes, ReservedCPUMillis: defaults.ReservedCPUMillis, ReservedMemoryBytes: defaults.ReservedMemoryBytes, ReservedStorageBytes: defaults.ReservedStorageBytes, CreatedAt: now, UpdatedAt: now}
+	if err := s.store.UpsertHostSettings(ctx, settings); err != nil {
+		return domain.HostSettings{}, err
+	}
+	return settings, nil
+}
+
+func (s *Service) GetHostSettings(ctx context.Context, actorID string) (domain.HostSettings, error) {
+	if _, err := s.requireAdministrator(ctx, actorID); err != nil {
+		return domain.HostSettings{}, err
+	}
+	return s.store.FindHostSettings(ctx)
+}
+
+func (s *Service) SetHostSettings(ctx context.Context, actorID string, input HostSettingsInput) (domain.HostSettings, error) {
+	if _, err := s.requireAdministrator(ctx, actorID); err != nil {
+		return domain.HostSettings{}, err
+	}
+	if !validHostSettings(input) || (input.HostStorageBytes > 0 && input.ReservedStorageBytes > input.HostStorageBytes) {
+		return domain.HostSettings{}, ErrInvalidQuota
+	}
+	existing, err := s.store.FindHostSettings(ctx)
+	if errors.Is(err, repository.ErrNotFound) {
+		existing = domain.HostSettings{ID: 1, CreatedAt: s.now().UTC()}
+	} else if err != nil {
+		return domain.HostSettings{}, err
+	}
+	existing.HostStorageBytes = input.HostStorageBytes
+	existing.ReservedCPUMillis = input.ReservedCPUMillis
+	existing.ReservedMemoryBytes = input.ReservedMemoryBytes
+	existing.ReservedStorageBytes = input.ReservedStorageBytes
+	existing.UpdatedAt = s.now().UTC()
+	if err := s.store.UpsertHostSettings(ctx, existing); err != nil {
+		return domain.HostSettings{}, err
+	}
+	_ = s.store.RecordAuditEvent(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "host_settings.updated", TargetType: "host", TargetID: "1"})
+	return existing, nil
+}
+
 func (s *Service) requireAdministrator(ctx context.Context, actorID string) (domain.User, error) {
 	user, err := s.store.FindUserByID(ctx, actorID)
 	if err != nil {
@@ -96,34 +156,10 @@ func validInput(input Input) bool {
 type Scheduler struct {
 	store    repository.Store
 	capacity runtime.CapacityProvider
-	reserved runtime.HostCapacity
 }
 
-type CapacityOverride struct {
-	provider     runtime.CapacityProvider
-	storageBytes int64
-}
-
-func NewCapacityOverride(provider runtime.CapacityProvider, storageBytes int64) runtime.CapacityProvider {
-	return CapacityOverride{provider: provider, storageBytes: storageBytes}
-}
-
-func (c CapacityOverride) HostCapacity(ctx context.Context) (runtime.HostCapacity, error) {
-	if c.provider == nil {
-		return runtime.HostCapacity{}, runtime.ErrUnavailable
-	}
-	capacity, err := c.provider.HostCapacity(ctx)
-	if err != nil {
-		return runtime.HostCapacity{}, err
-	}
-	if c.storageBytes > 0 {
-		capacity.StorageBytes = c.storageBytes
-	}
-	return capacity, nil
-}
-
-func NewScheduler(store repository.Store, capacity runtime.CapacityProvider, reserved runtime.HostCapacity) *Scheduler {
-	return &Scheduler{store: store, capacity: capacity, reserved: reserved}
+func NewScheduler(store repository.Store, capacity runtime.CapacityProvider) *Scheduler {
+	return &Scheduler{store: store, capacity: capacity}
 }
 
 func (s *Scheduler) CheckCreate(ctx context.Context, userID string, request domain.ResourceRequest) error {
@@ -147,18 +183,30 @@ func (s *Scheduler) CheckCreate(ctx context.Context, userID string, request doma
 	if s.capacity == nil {
 		return ErrCapacityUnavailable
 	}
-	host, err := s.capacity.HostCapacity(ctx)
-	if err != nil || host.CPUMillis <= 0 || host.MemoryBytes <= 0 || host.StorageBytes <= 0 {
+	settings, err := s.store.FindHostSettings(ctx)
+	if err != nil {
 		return ErrCapacityUnavailable
 	}
+	host, err := s.capacity.HostCapacity(ctx)
+	if err != nil || host.CPUMillis <= 0 || host.MemoryBytes <= 0 {
+		return ErrCapacityUnavailable
+	}
+	if settings.HostStorageBytes <= 0 {
+		return ErrCapacityUnavailable
+	}
+	host.StorageBytes = settings.HostStorageBytes
 	allAllocations, err := s.store.AllWorkspaceAllocations(ctx)
 	if err != nil {
 		return err
 	}
-	if exceeds(s.reserved.CPUMillis+allAllocations.Resources.CPUMillis, request.CPUMillis, host.CPUMillis) || exceeds(s.reserved.MemoryBytes+allAllocations.Resources.MemoryBytes, request.MemoryBytes, host.MemoryBytes) || exceeds(s.reserved.StorageBytes+allAllocations.Resources.StorageBytes, request.StorageBytes, host.StorageBytes) {
+	if exceeds(settings.ReservedCPUMillis+allAllocations.Resources.CPUMillis, request.CPUMillis, host.CPUMillis) || exceeds(settings.ReservedMemoryBytes+allAllocations.Resources.MemoryBytes, request.MemoryBytes, host.MemoryBytes) || exceeds(settings.ReservedStorageBytes+allAllocations.Resources.StorageBytes, request.StorageBytes, host.StorageBytes) {
 		return ErrCapacityInsufficient
 	}
 	return nil
+}
+
+func validHostSettings(input HostSettingsInput) bool {
+	return input.HostStorageBytes >= 0 && input.HostStorageBytes <= 1<<60 && input.ReservedCPUMillis >= 0 && input.ReservedCPUMillis <= 1_000_000 && input.ReservedMemoryBytes >= 0 && input.ReservedMemoryBytes <= 1<<50 && input.ReservedStorageBytes >= 0 && input.ReservedStorageBytes <= 1<<60
 }
 
 func exceeds(current, requested, limit int64) bool {

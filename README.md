@@ -59,8 +59,11 @@ Docker inspection uses `/var/run/docker.sock` by default and can be changed
 with `COWS_DOCKER_SOCKET` or `-docker-socket`. The current Docker integration is
 read-only; it does not create or modify containers.
 Workspace capacity checks also require `COWS_HOST_STORAGE_BYTES` to be set to
-the storage amount COWS may allocate. Zero leaves storage capacity unknown and
-causes workspace creation to fail closed.
+the initial storage amount COWS may allocate. The value seeds the persistent
+host settings row only when it does not exist; administrators can change host
+storage and reserved CPU, memory, and storage in **Settings** without
+restarting COWS. Zero leaves storage capacity unknown and causes workspace
+creation to fail closed.
 
 ## Security warning
 
