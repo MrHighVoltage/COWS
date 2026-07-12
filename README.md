@@ -60,6 +60,10 @@ default and can be changed with `COWS_DOCKER_SOCKET` or `-docker-socket`.
 COWS creates and manages only COWS-labeled containers using approved template
 images, server-side resource limits, and isolated networking. It does not
 expose container ports or provide interactive workspace access yet.
+Rootless Podman can be used through its Docker-compatible API socket, for
+example `/run/user/1000/podman/podman.sock`; COWS checks runtime-reported
+capabilities and refuses workspace creation when required limits cannot be
+enforced.
 Workspace capacity checks also require `COWS_HOST_STORAGE_BYTES` to be set to
 the initial storage amount COWS may allocate. The value seeds the persistent
 host settings row only when it does not exist; administrators can change host

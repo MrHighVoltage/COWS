@@ -135,6 +135,10 @@ func TestCapabilitiesDetectRootlessPodmanAndMissingCPULimits(t *testing.T) {
 	if capabilities.SupportsCPUResourceLimits || !capabilities.SupportsMemoryResourceLimits || !capabilities.SupportsPIDLimits || capabilities.SupportsResourceLimits {
 		t.Fatalf("unexpected rootless capabilities: %+v", capabilities)
 	}
+	_, err = adapter.CreateWorkspace(context.Background(), runtime.WorkspaceSpec{WorkspaceID: "workspace-123", Image: runtime.Image{Reference: "registry.example/research:1"}, Limits: runtime.ResourceLimits{CPUMillis: 1000, MemoryBytes: 2 << 30}})
+	if !errors.Is(err, runtime.ErrNotSupported) {
+		t.Fatalf("rootless create error = %v, want unsupported resource limits", err)
+	}
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
