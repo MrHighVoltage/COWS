@@ -11,7 +11,7 @@ container runtime itself part of the user-facing security boundary.
 
 - Students and researchers who need repeatable software environments.
 - Platform administrators who operate a Linux host and its container runtime.
-- Institutions that may later connect COWS to an OpenID Connect provider.
+- Institutions operating a COWS control plane for their users.
 
 The first deployment may use an open-source chip-design image, but COWS is
 general-purpose and must not encode assumptions about chip design, EDA, or a
