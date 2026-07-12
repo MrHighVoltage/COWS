@@ -111,8 +111,8 @@ workspace, a runtime socket, a host path, or container secrets.
 Local username/password authentication, mandatory first-login password change,
 stored email fields, server-side opaque sessions, CSRF protected forms,
 administrator checks, login rate limiting, and basic audit persistence now
-exist. The implementation has no OpenID Connect, password recovery, account
-deletion workflow, terminal, desktop, proxy, file manager, or production HTTPS
+exist. The implementation has no password recovery, account deletion workflow,
+terminal, desktop, proxy, file manager, or production HTTPS
 configuration. Docker lifecycle operations are limited to approved images,
 labels, resource limits, and isolated network policy; runtime reconciliation
 and interactive access still need further review. Audit failures and

@@ -93,12 +93,6 @@ Add approved roots, safe listings, uploads/downloads, generated ZIPs, and only
 then safe extraction if justified. Add path, symlink, archive, size, count, and
 temporary-storage tests before enabling it.
 
-## Milestone 9: Institutional authentication
-
-Add OpenID Connect, account linking/provisioning policy, role mapping, and a
-recovery-administrator strategy. Local recovery access must remain deliberate
-and secure.
-
 ## Later
 
 Evaluate a privileged multi-host COWS agent, host pools, PostgreSQL, high
