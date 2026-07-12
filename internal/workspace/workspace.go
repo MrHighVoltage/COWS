@@ -170,7 +170,7 @@ func (s *Service) StartWorkspace(ctx context.Context, actorID, workspaceID strin
 	if value.ObservedState == string(runtime.StateRunning) {
 		return s.finishOperation(ctx, value.ID, "start", "succeeded", "", operationStarted)
 	}
-	if value.RuntimeID == "" || value.ObservedState == string(runtime.StateRemoved) {
+	if value.RuntimeID == "" || value.ObservedState == string(runtime.StateRemoved) || value.ObservedState == "missing" {
 		spec, err := s.runtimeSpec(ctx, value)
 		if err != nil {
 			return err
@@ -222,7 +222,7 @@ func (s *Service) StopWorkspace(ctx context.Context, actorID, workspaceID string
 	if err := s.beginOperation(ctx, value.ID, "stop", operationStarted); err != nil {
 		return err
 	}
-	if value.RuntimeID == "" || value.ObservedState == string(runtime.StateStopped) || value.ObservedState == string(runtime.StateExited) {
+	if value.RuntimeID == "" || value.ObservedState == string(runtime.StateStopped) || value.ObservedState == string(runtime.StateExited) || value.ObservedState == "missing" {
 		return s.finishOperation(ctx, value.ID, "stop", "succeeded", "", operationStarted)
 	}
 	if err := s.runtime.StopWorkspace(ctx, value.RuntimeID, 10*time.Second); err != nil {
@@ -422,6 +422,16 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		if err := s.store.UpdateWorkspaceLifecycle(ctx, value.ID, startedAt, value.LastConnectedAt, stoppedAt, value.ContainerDeletedAt, value.DataArchiveEligibleAt, now); err != nil {
 			return err
 		}
+	}
+	knownWorkspaceIDs := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		knownWorkspaceIDs[value.ID] = struct{}{}
+	}
+	for _, observed := range inspection.Workspaces {
+		if _, ok := knownWorkspaceIDs[observed.WorkspaceID]; ok {
+			continue
+		}
+		s.recordAudit(ctx, domain.AuditEvent{EventType: "runtime.orphaned_container", TargetType: "runtime", TargetID: observed.RuntimeID, Metadata: map[string]string{"workspace_id": observed.WorkspaceID, "state": string(observed.State)}})
 	}
 	return nil
 }
