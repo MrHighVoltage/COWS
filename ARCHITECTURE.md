@@ -141,9 +141,15 @@ host networking, and arbitrary environment values are intentionally absent.
 Workspaces reference an owner and template through foreign keys. Creation
 stores the template's default allocations and desired state `stopped`; it does
 not contact Docker. Observed state, runtime ID, and reconciliation errors are
-stored separately and may only be updated by reconciliation code. Ordinary
-users can list and access their own records; administrators can inspect all
-records through service-layer authorization.
+stored separately and may only be updated by authorized runtime lifecycle or
+reconciliation code. Ordinary users can list and access their own records;
+administrators can inspect all records through service-layer authorization.
+
+The reconciliation worker periodically performs a validated runtime inspection
+and persists observed state. Docker/Podman `exited` is normalized to COWS
+`stopped`; a managed object that is absent is recorded as `missing` without
+being treated as deleted. Timeout actions run only after a successful
+reconciliation pass.
 
 Quota checks use recorded allocations for all existing workspaces, including
 stopped records. A request must fit the user's CPU, memory, storage, and

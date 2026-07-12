@@ -322,6 +322,78 @@ func (s *Service) RunTimeouts(ctx context.Context) error {
 	return nil
 }
 
+// Reconcile persists runtime truth without changing desired state. A missing
+// container is recorded as missing, not deleted, because the absence may be a
+// transient runtime or permission failure.
+func (s *Service) Reconcile(ctx context.Context) error {
+	if s.runtime == nil {
+		return ErrRuntimeUnavailable
+	}
+	inspection, err := runtime.Inspect(ctx, s.runtime)
+	if err != nil {
+		return err
+	}
+	observedByWorkspace := make(map[string]runtime.ObservedWorkspace, len(inspection.Workspaces))
+	for _, observed := range inspection.Workspaces {
+		observedByWorkspace[observed.WorkspaceID] = observed
+	}
+	values, err := s.store.ListAllWorkspaces(ctx)
+	if err != nil {
+		return err
+	}
+	now := s.now().UTC()
+	for _, value := range values {
+		observed, ok := observedByWorkspace[value.ID]
+		if !ok {
+			if value.RuntimeID == "" || value.ObservedState == string(runtime.StateRemoved) {
+				continue
+			}
+			_ = s.store.UpdateWorkspaceObservedState(ctx, value.ID, "missing", value.RuntimeID, "managed container was not found during runtime reconciliation", inspection.ObservedAt, now)
+			continue
+		}
+		state := normalizeObservedState(observed.State)
+		startedAt := value.StartedAt
+		stoppedAt := value.StoppedAt
+		observedAt := observed.ObservedAt
+		if observedAt.IsZero() {
+			observedAt = inspection.ObservedAt
+		}
+		if state == string(runtime.StateRunning) {
+			if startedAt.IsZero() {
+				startedAt = observedAt
+			}
+			stoppedAt = time.Time{}
+		}
+		if state == string(runtime.StateStopped) && stoppedAt.IsZero() {
+			stoppedAt = observedAt
+		}
+		if err := s.store.UpdateWorkspaceObservedState(ctx, value.ID, state, observed.RuntimeID, "", observedAt, now); err != nil {
+			return err
+		}
+		if err := s.store.UpdateWorkspaceLifecycle(ctx, value.ID, startedAt, value.LastConnectedAt, stoppedAt, value.ContainerDeletedAt, value.DataArchiveEligibleAt, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func normalizeObservedState(state runtime.State) string {
+	switch state {
+	case runtime.StateRunning:
+		return string(runtime.StateRunning)
+	case runtime.StateCreated:
+		return string(runtime.StateCreated)
+	case runtime.StateStopped, runtime.StateExited:
+		return string(runtime.StateStopped)
+	case runtime.StateRemoved:
+		return string(runtime.StateRemoved)
+	case runtime.StateFailed:
+		return string(runtime.StateFailed)
+	default:
+		return string(runtime.StateUnknown)
+	}
+}
+
 func (s *Service) runtimeSpec(ctx context.Context, value domain.Workspace) (runtime.WorkspaceSpec, error) {
 	template, err := s.store.FindTemplateByID(ctx, value.TemplateID)
 	if err != nil {

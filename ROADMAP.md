@@ -52,7 +52,8 @@ connection, stopped-container retention, and post-deletion data-retention
 timeouts, user-visible policy details, Docker lifecycle operations, and a
 reconciler-driven timeout worker are now present. Warning-event hooks exist in
 the lifecycle model, but email and archive actions remain disabled. Remaining
-exit work includes full reconciliation, runtime-enforced storage policy,
+exit work includes reconciliation handling for orphaned and partially-created
+objects, runtime-enforced storage policy,
 idempotence across restart, and irreversible-operation failure-path tests.
 
 ## Milestone 4: Terminal access
