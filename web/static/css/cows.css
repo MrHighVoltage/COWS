@@ -78,9 +78,13 @@ code { color: #465866; font-size: .82rem; }
 .status-disabled { color: #8c2d1a; }
 .runtime-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; padding-top: 1rem; border-top: 1px solid #e3e8ed; }
 .runtime-facts strong { display: block; margin-top: .15rem; }
-.table-action { min-height: 2rem; padding: .35rem .55rem; color: #176b8f; border-color: #9fb7c5; background: transparent; font-size: .85rem; }
+.table-action { display: inline-flex; align-items: center; justify-content: center; min-width: 5.5rem; min-height: 2.25rem; padding: .35rem .65rem; color: #176b8f; border-color: #9fb7c5; background: transparent; font-size: .85rem; line-height: 1.2; text-decoration: none; white-space: nowrap; }
 .action-stack { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
 .action-stack form { margin: 0; }
+.workspace-actions { display: grid; grid-template-columns: repeat(2, minmax(6rem, 1fr)); gap: .5rem; min-width: 13rem; }
+.workspace-actions form { margin: 0; }
+.workspace-actions .table-action { width: 100%; }
+.danger-action { color: #8c2d1a; border-color: #d39a8c; }
 .allocation-summary { margin: 1rem 0 1.5rem; padding: 1rem 0 0; border-top: 1px solid #e3e8ed; }
 .allocation-summary h3 { margin: 0; font-size: 1rem; }
 .resource-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; }

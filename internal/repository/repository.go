@@ -56,6 +56,7 @@ type WorkspaceRepository interface {
 	FindWorkspaceByID(ctx context.Context, id string) (domain.Workspace, error)
 	FindWorkspaceByOwnerAndName(ctx context.Context, ownerUserID, name string) (domain.Workspace, error)
 	CreateWorkspace(ctx context.Context, workspace domain.Workspace) error
+	DeleteWorkspace(ctx context.Context, id string) error
 	SetWorkspaceDesiredState(ctx context.Context, id string, state domain.DesiredWorkspaceState, updatedAt time.Time) error
 	UpdateWorkspaceObservedState(ctx context.Context, id, observedState, runtimeID, observedError string, observedAt, updatedAt time.Time) error
 	UpdateWorkspaceLifecycle(ctx context.Context, id string, startedAt, lastConnectedAt, stoppedAt, containerDeletedAt, dataArchiveEligibleAt, updatedAt time.Time) error

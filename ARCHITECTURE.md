@@ -102,6 +102,12 @@ is never authoritative. User pages show the effective durations, current phase,
 and any due or upcoming deadline. The policy model leaves room for future
 warning events and email delivery without making email a lifecycle dependency.
 
+Explicit user or administrator deletion is separate from timeout cleanup. Once
+the runtime container is confirmed removed, explicit deletion also removes the
+COWS workspace record and releases its allocated quota. Timeout deletion keeps
+the record so its lifecycle result, archive eligibility, and reconciliation
+context remain visible.
+
 ## Packages and ownership
 
 The initial package layout stays small:
