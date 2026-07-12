@@ -19,6 +19,18 @@ var (
 	ErrCapacityInsufficient = errors.New("host capacity insufficient")
 )
 
+type CapacityInsufficientError struct {
+	Resource  string
+	Available int64
+	Requested int64
+}
+
+func (e *CapacityInsufficientError) Error() string {
+	return fmt.Sprintf("host %s capacity insufficient: available=%d requested=%d", e.Resource, e.Available, e.Requested)
+}
+
+func (e *CapacityInsufficientError) Unwrap() error { return ErrCapacityInsufficient }
+
 type Service struct {
 	store repository.Store
 	now   func() time.Time
@@ -52,6 +64,17 @@ func (s *Service) List(ctx context.Context, actorID string) ([]domain.UserQuota,
 func (s *Service) Get(ctx context.Context, actorID, userID string) (domain.UserQuota, error) {
 	if _, err := s.requireAdministrator(ctx, actorID); err != nil {
 		return domain.UserQuota{}, err
+	}
+	return s.store.FindUserQuota(ctx, userID)
+}
+
+func (s *Service) GetForUser(ctx context.Context, userID string) (domain.UserQuota, error) {
+	user, err := s.store.FindUserByID(ctx, userID)
+	if err != nil {
+		return domain.UserQuota{}, err
+	}
+	if user.Disabled {
+		return domain.UserQuota{}, errors.New("user is disabled")
 	}
 	return s.store.FindUserQuota(ctx, userID)
 }
@@ -206,8 +229,17 @@ func (s *Scheduler) CheckCreate(ctx context.Context, userID string, request doma
 	if err != nil {
 		return err
 	}
-	if exceeds(settings.ReservedCPUMillis+allAllocations.Resources.CPUMillis, request.CPUMillis, host.CPUMillis) || exceeds(settings.ReservedMemoryBytes+allAllocations.Resources.MemoryBytes, request.MemoryBytes, host.MemoryBytes) || exceeds(settings.ReservedStorageBytes+allAllocations.Resources.StorageBytes, request.StorageBytes, host.StorageBytes) {
-		return ErrCapacityInsufficient
+	availableCPU := host.CPUMillis - settings.ReservedCPUMillis - allAllocations.Resources.CPUMillis
+	if request.CPUMillis > availableCPU {
+		return &CapacityInsufficientError{Resource: "CPU", Available: availableCPU, Requested: request.CPUMillis}
+	}
+	availableMemory := host.MemoryBytes - settings.ReservedMemoryBytes - allAllocations.Resources.MemoryBytes
+	if request.MemoryBytes > availableMemory {
+		return &CapacityInsufficientError{Resource: "memory", Available: availableMemory, Requested: request.MemoryBytes}
+	}
+	availableStorage := host.StorageBytes - settings.ReservedStorageBytes - allAllocations.Resources.StorageBytes
+	if request.StorageBytes > availableStorage {
+		return &CapacityInsufficientError{Resource: "storage", Available: availableStorage, Requested: request.StorageBytes}
 	}
 	return nil
 }

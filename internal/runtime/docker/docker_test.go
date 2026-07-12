@@ -79,6 +79,8 @@ func TestLifecycleUsesApprovedDockerRequests(t *testing.T) {
 		switch request.URL.Path {
 		case "/version":
 			body = `{"ApiVersion":"1.45"}`
+		case "/v1.45/info":
+			body = `{"NCPU":8,"MemTotal":8589934592,"MemoryLimit":true,"PidsLimit":true,"CpuCfsQuota":true,"CpuCfsPeriod":true}`
 		case "/v1.45/containers/create":
 			body = `{"Id":"abcdef0123456789"}`
 		case "/v1.45/containers/abcdef0123456789/start", "/v1.45/containers/abcdef0123456789/stop", "/v1.45/containers/abcdef0123456789":
@@ -104,8 +106,34 @@ func TestLifecycleUsesApprovedDockerRequests(t *testing.T) {
 	if err := adapter.RemoveWorkspace(context.Background(), handle.RuntimeID); err != nil {
 		t.Fatalf("remove workspace: %v", err)
 	}
-	if len(calls) != 8 {
-		t.Fatalf("Docker API calls = %d, want 8: %v", len(calls), calls)
+	if len(calls) != 10 {
+		t.Fatalf("Docker API calls = %d, want 10: %v", len(calls), calls)
+	}
+}
+
+func TestCapabilitiesDetectRootlessPodmanAndMissingCPULimits(t *testing.T) {
+	adapter := &Adapter{client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var body string
+		switch request.URL.Path {
+		case "/version":
+			body = `{"ApiVersion":"1.44"}`
+		case "/v1.44/info":
+			body = `{"NCPU":8,"MemTotal":8589934592,"MemoryLimit":true,"PidsLimit":true,"CpuCfsQuota":false,"CpuCfsPeriod":false,"Rootless":true}`
+		default:
+			return &http.Response{StatusCode: http.StatusNotFound, Status: "404 Not Found", Body: io.NopCloser(strings.NewReader("not found")), Header: make(http.Header)}, nil
+		}
+		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})}}
+	name, err := adapter.Name(context.Background())
+	if err != nil || name != runtime.RuntimeNamePodman {
+		t.Fatalf("runtime name = %q, err=%v, want rootless Podman", name, err)
+	}
+	capabilities, err := adapter.Capabilities(context.Background())
+	if err != nil {
+		t.Fatalf("capabilities: %v", err)
+	}
+	if capabilities.SupportsCPUResourceLimits || !capabilities.SupportsMemoryResourceLimits || !capabilities.SupportsPIDLimits || capabilities.SupportsResourceLimits {
+		t.Fatalf("unexpected rootless capabilities: %+v", capabilities)
 	}
 }
 

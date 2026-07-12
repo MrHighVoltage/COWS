@@ -41,28 +41,37 @@ func New(socketPath string) (*Adapter, error) {
 	return &Adapter{client: &http.Client{Transport: transport, Timeout: defaultRequestTimeout}}, nil
 }
 
-func (a *Adapter) Name(context.Context) (string, error) {
-	return runtime.RuntimeNameDocker, nil
+func (a *Adapter) Name(ctx context.Context) (string, error) {
+	info, err := a.hostInfo(ctx)
+	if err != nil {
+		return "", err
+	}
+	return runtimeName(info), nil
 }
 
 func (a *Adapter) Capabilities(ctx context.Context) (runtime.Capabilities, error) {
-	if _, err := a.version(ctx); err != nil {
+	info, err := a.hostInfo(ctx)
+	if err != nil {
 		return runtime.Capabilities{}, err
 	}
+	cpu := info.CPUCFSQuota && info.CPUCFSPeriod
+	memory := info.MemoryLimit
+	pids := info.PidsLimit
 	return runtime.Capabilities{
-		RuntimeName:            runtime.RuntimeNameDocker,
-		SupportsResourceLimits: true,
-		SupportsPrivateNetwork: true,
-		SupportsManagedLabels:  true,
+		RuntimeName:                   runtimeName(info),
+		SupportsResourceLimits:        cpu && memory && pids,
+		SupportsCPUResourceLimits:     cpu,
+		SupportsMemoryResourceLimits:  memory,
+		SupportsPIDLimits:             pids,
+		SupportsStorageResourceLimits: false,
+		SupportsPrivateNetwork:        true,
+		SupportsManagedLabels:         true,
 	}, nil
 }
 
 func (a *Adapter) HostCapacity(ctx context.Context) (runtime.HostCapacity, error) {
-	var info struct {
-		NCPU     int   `json:"NCPU"`
-		MemTotal int64 `json:"MemTotal"`
-	}
-	if err := a.get(ctx, "/info", &info); err != nil {
+	info, err := a.hostInfo(ctx)
+	if err != nil {
 		return runtime.HostCapacity{}, err
 	}
 	if info.NCPU <= 0 || info.MemTotal <= 0 {
@@ -113,6 +122,13 @@ func (a *Adapter) InspectWorkspace(ctx context.Context, runtimeID string) (runti
 func (a *Adapter) CreateWorkspace(ctx context.Context, spec runtime.WorkspaceSpec) (runtime.WorkspaceHandle, error) {
 	if !validWorkspaceID(spec.WorkspaceID) || !validImage(spec.Image) {
 		return runtime.WorkspaceHandle{}, runtime.ErrConflict
+	}
+	capabilities, err := a.Capabilities(ctx)
+	if err != nil {
+		return runtime.WorkspaceHandle{}, err
+	}
+	if !capabilities.SupportsCPUResourceLimits || !capabilities.SupportsMemoryResourceLimits || !capabilities.SupportsPIDLimits {
+		return runtime.WorkspaceHandle{}, runtime.ErrNotSupported
 	}
 	imageReference := spec.Image.Reference
 	if spec.Image.Digest != "" {
@@ -204,6 +220,40 @@ func (a *Adapter) version(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("%w: invalid Docker API version %q", runtime.ErrInvalidObservation, response.APIVersion)
 	}
 	return response.APIVersion, nil
+}
+
+type hostInfo struct {
+	NCPU            int      `json:"NCPU"`
+	MemTotal        int64    `json:"MemTotal"`
+	MemoryLimit     bool     `json:"MemoryLimit"`
+	PidsLimit       bool     `json:"PidsLimit"`
+	CPUCFSQuota     bool     `json:"CpuCfsQuota"`
+	CPUCFSPeriod    bool     `json:"CpuCfsPeriod"`
+	Rootless        bool     `json:"Rootless"`
+	SecurityOptions []string `json:"SecurityOptions"`
+}
+
+func (a *Adapter) hostInfo(ctx context.Context) (hostInfo, error) {
+	var info hostInfo
+	if err := a.get(ctx, "/info", &info); err != nil {
+		return hostInfo{}, err
+	}
+	if info.NCPU <= 0 || info.MemTotal <= 0 {
+		return hostInfo{}, fmt.Errorf("%w: runtime returned invalid host capacity", runtime.ErrInvalidObservation)
+	}
+	return info, nil
+}
+
+func runtimeName(info hostInfo) string {
+	if info.Rootless {
+		return runtime.RuntimeNamePodman
+	}
+	for _, option := range info.SecurityOptions {
+		if option == "name=rootless" {
+			return runtime.RuntimeNamePodman
+		}
+	}
+	return runtime.RuntimeNameDocker
 }
 
 func (a *Adapter) get(ctx context.Context, path string, output any) error {

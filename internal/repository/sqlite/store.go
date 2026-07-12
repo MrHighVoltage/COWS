@@ -391,6 +391,23 @@ func (s *Store) UpdateWorkspaceLifecycle(ctx context.Context, id string, started
 	return nil
 }
 
+func (s *Store) UpdateWorkspaceOperation(ctx context.Context, id, operation, status, operationError string, startedAt, updatedAt time.Time) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE workspaces SET operation = ?, operation_status = ?, operation_error = ?,
+		operation_started_at = ?, operation_updated_at = ?, updated_at = ? WHERE id = ?`, operation, status, operationError,
+		unixOrZero(startedAt), unixOrZero(updatedAt), unixOrZero(updatedAt), id)
+	if err != nil {
+		return fmt.Errorf("update workspace operation: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check workspace operation update: %w", err)
+	}
+	if count == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) WorkspaceAllocations(ctx context.Context, ownerUserID string) (domain.AllocationSummary, error) {
 	return s.workspaceAllocations(ctx, " WHERE owner_user_id = ?", ownerUserID)
 }
@@ -490,7 +507,8 @@ func (s *Store) UpsertHostSettings(ctx context.Context, settings domain.HostSett
 const workspaceSelect = `SELECT id, owner_user_id, template_id, name, desired_state, observed_state, runtime_id,
 	observed_error, allocated_cpu_millis, allocated_memory_bytes, allocated_storage_bytes, created_at, updated_at,
 	observed_at, initial_connection_timeout_seconds, stopped_retention_seconds, data_retention_seconds,
-	started_at, last_connected_at, stopped_at, container_deleted_at, data_archive_eligible_at FROM workspaces`
+	started_at, last_connected_at, stopped_at, container_deleted_at, data_archive_eligible_at,
+	operation, operation_status, operation_error, operation_started_at, operation_updated_at FROM workspaces`
 
 func (s *Store) listWorkspaces(ctx context.Context, query string, args ...any) ([]domain.Workspace, error) {
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -520,12 +538,15 @@ func scanWorkspace(row scanner) (domain.Workspace, error) {
 		updatedUnix                                                               int64
 		observedAtUnix                                                            int64
 		startedUnix, connectedUnix, stoppedUnix, deletedUnix, archiveEligibleUnix int64
+		operationStartedUnix, operationUpdatedUnix                                int64
+		operation, operationStatus, operationError                                string
 	)
 	if err := row.Scan(&workspace.ID, &workspace.OwnerUserID, &workspace.TemplateID, &workspace.Name, &desiredState,
 		&workspace.ObservedState, &workspace.RuntimeID, &workspace.ObservedError, &workspace.AllocatedCPUMillis,
 		&workspace.AllocatedMemoryBytes, &workspace.AllocatedStorageBytes, &createdUnix, &updatedUnix,
 		&observedAtUnix, &workspace.InitialConnectionTimeoutSeconds, &workspace.StoppedRetentionSeconds,
-		&workspace.DataRetentionSeconds, &startedUnix, &connectedUnix, &stoppedUnix, &deletedUnix, &archiveEligibleUnix); err != nil {
+		&workspace.DataRetentionSeconds, &startedUnix, &connectedUnix, &stoppedUnix, &deletedUnix, &archiveEligibleUnix,
+		&operation, &operationStatus, &operationError, &operationStartedUnix, &operationUpdatedUnix); err != nil {
 		if err == sql.ErrNoRows {
 			return domain.Workspace{}, repository.ErrNotFound
 		}
@@ -542,6 +563,11 @@ func scanWorkspace(row scanner) (domain.Workspace, error) {
 	workspace.StoppedAt = timeFromUnix(stoppedUnix)
 	workspace.ContainerDeletedAt = timeFromUnix(deletedUnix)
 	workspace.DataArchiveEligibleAt = timeFromUnix(archiveEligibleUnix)
+	workspace.Operation = operation
+	workspace.OperationStatus = operationStatus
+	workspace.OperationError = operationError
+	workspace.OperationStartedAt = timeFromUnix(operationStartedUnix)
+	workspace.OperationUpdatedAt = timeFromUnix(operationUpdatedUnix)
 	return workspace, nil
 }
 

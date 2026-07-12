@@ -105,8 +105,13 @@ func TestSchedulerFailsClosed(t *testing.T) {
 		t.Fatalf("missing capacity result = %v", err)
 	}
 	insufficient := NewScheduler(store, fakeCapacity{capacity: runtime.HostCapacity{CPUMillis: 1000, MemoryBytes: 1 << 30}})
-	if err := insufficient.CheckCreate(context.Background(), studentID, request); !errors.Is(err, ErrCapacityInsufficient) {
+	err := insufficient.CheckCreate(context.Background(), studentID, request)
+	if !errors.Is(err, ErrCapacityInsufficient) {
 		t.Fatalf("insufficient capacity result = %v", err)
+	}
+	var capacityErr *CapacityInsufficientError
+	if !errors.As(err, &capacityErr) || capacityErr.Resource != "memory" {
+		t.Fatalf("capacity diagnostic = %v, want memory", err)
 	}
 }
 

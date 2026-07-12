@@ -46,6 +46,9 @@ partial operations, and compromised or misconfigured images.
 - Runtime capabilities are least privilege. Privileged mode, host networking,
   unrestricted host mounts, arbitrary capabilities, and direct devices are not
   user-selectable.
+- COWS verifies runtime capability flags before creating a workspace. A
+  Docker-compatible API is not proof that CPU, memory, process, or storage
+  limits are enforced, especially for rootless Podman.
 - Timeout policies are administrator-controlled and evaluated by the backend;
   users cannot extend them by changing browser data or suppressing timers.
 - Container deletion and future data archival are separate actions. Archive

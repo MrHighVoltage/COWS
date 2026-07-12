@@ -110,20 +110,25 @@ func run(ctx context.Context, args []string) error {
 func runTimeoutLoop(ctx context.Context, service *workspace.Service, logger *slog.Logger) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
+	processWorkspaceRuntime(ctx, service, logger)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := service.Reconcile(ctx); err != nil {
-				if !errors.Is(err, workspace.ErrRuntimeUnavailable) {
-					logger.Error("workspace reconciliation failed", "error", err)
-				}
-				continue
-			}
-			if err := service.RunTimeouts(ctx); err != nil && !errors.Is(err, workspace.ErrRuntimeUnavailable) {
-				logger.Error("workspace timeout processing failed", "error", err)
-			}
+			processWorkspaceRuntime(ctx, service, logger)
 		}
+	}
+}
+
+func processWorkspaceRuntime(ctx context.Context, service *workspace.Service, logger *slog.Logger) {
+	if err := service.Reconcile(ctx); err != nil {
+		if !errors.Is(err, workspace.ErrRuntimeUnavailable) {
+			logger.Error("workspace reconciliation failed", "error", err)
+		}
+		return
+	}
+	if err := service.RunTimeouts(ctx); err != nil && !errors.Is(err, workspace.ErrRuntimeUnavailable) {
+		logger.Error("workspace timeout processing failed", "error", err)
 	}
 }

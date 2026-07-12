@@ -114,6 +114,14 @@ func (s *Service) ListWorkspaces(ctx context.Context, actorID string) ([]domain.
 	return s.store.ListWorkspacesForUser(ctx, user.ID)
 }
 
+func (s *Service) AllocationSummary(ctx context.Context, actorID string) (domain.AllocationSummary, error) {
+	user, err := s.requireActor(ctx, actorID)
+	if err != nil {
+		return domain.AllocationSummary{}, err
+	}
+	return s.store.WorkspaceAllocations(ctx, user.ID)
+}
+
 func (s *Service) GetWorkspace(ctx context.Context, actorID, workspaceID string) (domain.Workspace, error) {
 	user, err := s.requireActor(ctx, actorID)
 	if err != nil {
@@ -155,8 +163,12 @@ func (s *Service) StartWorkspace(ctx context.Context, actorID, workspaceID strin
 	if err := s.store.SetWorkspaceDesiredState(ctx, value.ID, domain.DesiredWorkspaceRunning, s.now().UTC()); err != nil {
 		return err
 	}
+	operationStarted := s.now().UTC()
+	if err := s.beginOperation(ctx, value.ID, "start", operationStarted); err != nil {
+		return err
+	}
 	if value.ObservedState == string(runtime.StateRunning) {
-		return nil
+		return s.finishOperation(ctx, value.ID, "start", "succeeded", "", operationStarted)
 	}
 	if value.RuntimeID == "" || value.ObservedState == string(runtime.StateRemoved) {
 		spec, err := s.runtimeSpec(ctx, value)
@@ -166,6 +178,7 @@ func (s *Service) StartWorkspace(ctx context.Context, actorID, workspaceID strin
 		handle, err := s.runtime.CreateWorkspace(ctx, spec)
 		if err != nil {
 			_ = s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateFailed), "", err.Error(), s.now().UTC(), s.now().UTC())
+			_ = s.finishOperation(ctx, value.ID, "start", "failed", err.Error(), operationStarted)
 			return err
 		}
 		value.RuntimeID = handle.RuntimeID
@@ -175,6 +188,7 @@ func (s *Service) StartWorkspace(ctx context.Context, actorID, workspaceID strin
 	}
 	if err := s.runtime.StartWorkspace(ctx, value.RuntimeID); err != nil {
 		_ = s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateCreated), value.RuntimeID, err.Error(), s.now().UTC(), s.now().UTC())
+		_ = s.finishOperation(ctx, value.ID, "start", "failed", err.Error(), operationStarted)
 		return err
 	}
 	now := s.now().UTC()
@@ -184,6 +198,9 @@ func (s *Service) StartWorkspace(ctx context.Context, actorID, workspaceID strin
 		return err
 	}
 	if err := s.store.UpdateWorkspaceLifecycle(ctx, value.ID, value.StartedAt, value.LastConnectedAt, value.StoppedAt, value.ContainerDeletedAt, value.DataArchiveEligibleAt, now); err != nil {
+		return err
+	}
+	if err := s.finishOperation(ctx, value.ID, "start", "succeeded", "", operationStarted); err != nil {
 		return err
 	}
 	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "workspace.started", TargetType: "workspace", TargetID: value.ID})
@@ -201,10 +218,15 @@ func (s *Service) StopWorkspace(ctx context.Context, actorID, workspaceID string
 	if err := s.store.SetWorkspaceDesiredState(ctx, value.ID, domain.DesiredWorkspaceStopped, s.now().UTC()); err != nil {
 		return err
 	}
+	operationStarted := s.now().UTC()
+	if err := s.beginOperation(ctx, value.ID, "stop", operationStarted); err != nil {
+		return err
+	}
 	if value.RuntimeID == "" || value.ObservedState == string(runtime.StateStopped) || value.ObservedState == string(runtime.StateExited) {
-		return nil
+		return s.finishOperation(ctx, value.ID, "stop", "succeeded", "", operationStarted)
 	}
 	if err := s.runtime.StopWorkspace(ctx, value.RuntimeID, 10*time.Second); err != nil {
+		_ = s.finishOperation(ctx, value.ID, "stop", "failed", err.Error(), operationStarted)
 		return err
 	}
 	now := s.now().UTC()
@@ -213,6 +235,9 @@ func (s *Service) StopWorkspace(ctx context.Context, actorID, workspaceID string
 		return err
 	}
 	if err := s.store.UpdateWorkspaceLifecycle(ctx, value.ID, value.StartedAt, value.LastConnectedAt, value.StoppedAt, value.ContainerDeletedAt, value.DataArchiveEligibleAt, now); err != nil {
+		return err
+	}
+	if err := s.finishOperation(ctx, value.ID, "stop", "succeeded", "", operationStarted); err != nil {
 		return err
 	}
 	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "workspace.stopped", TargetType: "workspace", TargetID: value.ID})
@@ -243,7 +268,12 @@ func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID stri
 	if value.ObservedState == string(runtime.StateRunning) {
 		return ErrWorkspaceStateConflict
 	}
+	operationStarted := s.now().UTC()
+	if err := s.beginOperation(ctx, value.ID, "delete", operationStarted); err != nil {
+		return err
+	}
 	if err := s.runtime.RemoveWorkspace(ctx, value.RuntimeID); err != nil {
+		_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
 		return err
 	}
 	now := s.now().UTC()
@@ -255,6 +285,9 @@ func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID stri
 		return err
 	}
 	if err := s.store.UpdateWorkspaceLifecycle(ctx, value.ID, value.StartedAt, value.LastConnectedAt, value.StoppedAt, value.ContainerDeletedAt, value.DataArchiveEligibleAt, now); err != nil {
+		return err
+	}
+	if err := s.finishOperation(ctx, value.ID, "delete", "succeeded", "", operationStarted); err != nil {
 		return err
 	}
 	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "workspace.container_deleted", TargetType: "workspace", TargetID: value.ID})
@@ -295,19 +328,26 @@ func (s *Service) RunTimeouts(ctx context.Context) error {
 			if value.RuntimeID == "" || value.ObservedState != string(runtime.StateRunning) {
 				continue
 			}
+			operationStarted := now
+			_ = s.beginOperation(ctx, value.ID, "timeout-stop", operationStarted)
 			if err := s.runtime.StopWorkspace(ctx, value.RuntimeID, 10*time.Second); err != nil {
+				_ = s.finishOperation(ctx, value.ID, "timeout-stop", "failed", err.Error(), operationStarted)
 				continue
 			}
 			_ = s.store.SetWorkspaceDesiredState(ctx, value.ID, domain.DesiredWorkspaceStopped, now)
 			value.StoppedAt = now
 			_ = s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateStopped), value.RuntimeID, "", now, now)
 			_ = s.store.UpdateWorkspaceLifecycle(ctx, value.ID, value.StartedAt, value.LastConnectedAt, value.StoppedAt, value.ContainerDeletedAt, value.DataArchiveEligibleAt, now)
+			_ = s.finishOperation(ctx, value.ID, "timeout-stop", "succeeded", "", operationStarted)
 			s.recordAudit(ctx, domain.AuditEvent{EventType: "workspace.timeout_stopped", TargetType: "workspace", TargetID: value.ID})
 		case TimeoutActionDelete:
 			if value.RuntimeID == "" || (value.ObservedState != string(runtime.StateStopped) && value.ObservedState != string(runtime.StateExited)) {
 				continue
 			}
+			operationStarted := now
+			_ = s.beginOperation(ctx, value.ID, "timeout-delete", operationStarted)
 			if err := s.runtime.RemoveWorkspace(ctx, value.RuntimeID); err != nil {
+				_ = s.finishOperation(ctx, value.ID, "timeout-delete", "failed", err.Error(), operationStarted)
 				continue
 			}
 			value.ContainerDeletedAt = now
@@ -316,10 +356,19 @@ func (s *Service) RunTimeouts(ctx context.Context) error {
 			}
 			_ = s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateRemoved), value.RuntimeID, "", now, now)
 			_ = s.store.UpdateWorkspaceLifecycle(ctx, value.ID, value.StartedAt, value.LastConnectedAt, value.StoppedAt, value.ContainerDeletedAt, value.DataArchiveEligibleAt, now)
+			_ = s.finishOperation(ctx, value.ID, "timeout-delete", "succeeded", "", operationStarted)
 			s.recordAudit(ctx, domain.AuditEvent{EventType: "workspace.timeout_container_deleted", TargetType: "workspace", TargetID: value.ID})
 		}
 	}
 	return nil
+}
+
+func (s *Service) beginOperation(ctx context.Context, workspaceID, operation string, startedAt time.Time) error {
+	return s.store.UpdateWorkspaceOperation(ctx, workspaceID, operation, "running", "", startedAt, startedAt)
+}
+
+func (s *Service) finishOperation(ctx context.Context, workspaceID, operation, status, operationError string, startedAt time.Time) error {
+	return s.store.UpdateWorkspaceOperation(ctx, workspaceID, operation, status, operationError, startedAt, s.now().UTC())
 }
 
 // Reconcile persists runtime truth without changing desired state. A missing

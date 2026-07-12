@@ -109,6 +109,11 @@ type Workspace struct {
 	StoppedAt                       time.Time
 	ContainerDeletedAt              time.Time
 	DataArchiveEligibleAt           time.Time
+	Operation                       string
+	OperationStatus                 string
+	OperationError                  string
+	OperationStartedAt              time.Time
+	OperationUpdatedAt              time.Time
 }
 
 type UserQuota struct {
