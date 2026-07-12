@@ -86,6 +86,8 @@ func (s *Service) CreateWorkspace(ctx context.Context, actorID string, input Cre
 		OwnerUserID:                     user.ID,
 		TemplateID:                      template.ID,
 		TemplateRevision:                template.Revision,
+		TemplateImageReference:          template.ImageReference,
+		TemplateImageDigest:             template.ImageDigest,
 		TemplateConfiguration:           cloneTemplateConfiguration(template.Configuration),
 		Name:                            name,
 		DesiredState:                    domain.DesiredWorkspaceStopped,
@@ -528,7 +530,11 @@ func (s *Service) runtimeSpec(ctx context.Context, value domain.Workspace) (runt
 	if len(resolved.Ports) > 0 {
 		networkMode = "bridge"
 	}
-	return runtime.WorkspaceSpec{WorkspaceID: value.ID, Image: runtime.Image{Reference: template.ImageReference, Digest: template.ImageDigest}, Limits: runtime.ResourceLimits{CPUMillis: value.AllocatedCPUMillis, MemoryBytes: value.AllocatedMemoryBytes, StorageBytes: value.AllocatedStorageBytes}, Labels: runtime.ManagedLabels(value.ID), Command: resolved.Command, Environment: resolved.Environment, Mounts: resolved.Mounts, Ports: resolved.Ports, NetworkMode: networkMode}, nil
+	image := runtime.Image{Reference: value.TemplateImageReference, Digest: value.TemplateImageDigest}
+	if image.Reference == "" {
+		image = runtime.Image{Reference: template.ImageReference, Digest: template.ImageDigest}
+	}
+	return runtime.WorkspaceSpec{WorkspaceID: value.ID, Image: image, Limits: runtime.ResourceLimits{CPUMillis: value.AllocatedCPUMillis, MemoryBytes: value.AllocatedMemoryBytes, StorageBytes: value.AllocatedStorageBytes}, Labels: runtime.ManagedLabels(value.ID), Command: resolved.Command, Environment: resolved.Environment, Mounts: resolved.Mounts, Ports: resolved.Ports, NetworkMode: networkMode}, nil
 }
 
 func (s *Service) effectiveConfiguration(ctx context.Context, value domain.Workspace) (domain.TemplateConfiguration, error) {

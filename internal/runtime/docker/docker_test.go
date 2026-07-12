@@ -3,6 +3,7 @@ package docker
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -209,6 +210,53 @@ func TestOpenShellUsesDockerExecUpgradeAndResize(t *testing.T) {
 	}
 	if len(calls) != 6 {
 		t.Fatalf("Docker API calls = %d, want 6: %v", len(calls), calls)
+	}
+}
+
+func TestCreateWorkspaceMapsTypedConfiguration(t *testing.T) {
+	adapter := &Adapter{client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/version":
+			return dockerResponse(http.StatusOK, `{"ApiVersion":"1.45"}`), nil
+		case "/v1.45/info":
+			return dockerResponse(http.StatusOK, `{"NCPU":8,"MemTotal":8589934592,"MemoryLimit":true,"PidsLimit":true,"CpuCfsQuota":true,"CpuCfsPeriod":true}`), nil
+		case "/v1.45/containers/create":
+			var body struct {
+				Cmd        []string `json:"Cmd"`
+				Env        []string `json:"Env"`
+				HostConfig struct {
+					NetworkMode  string                                         `json:"NetworkMode"`
+					Mounts       []struct{ Source, Target string }              `json:"Mounts"`
+					PortBindings map[string][]struct{ HostIP, HostPort string } `json:"PortBindings"`
+				} `json:"HostConfig"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Fatalf("decode create request: %v", err)
+			}
+			if len(body.Cmd) != 2 || body.Cmd[0] != "/bin/sh" || len(body.Env) != 1 || body.Env[0] != "DESKTOP_PORT=10000" || body.HostConfig.NetworkMode != "bridge" {
+				t.Fatalf("unexpected typed configuration: %+v", body)
+			}
+			if len(body.HostConfig.Mounts) != 1 || body.HostConfig.Mounts[0].Source != "cows-workspace-123-workspace-data" || body.HostConfig.Mounts[0].Target != "/workspace" {
+				t.Fatalf("unexpected mounts: %+v", body.HostConfig.Mounts)
+			}
+			binding := body.HostConfig.PortBindings["5900/tcp"]
+			if len(binding) != 1 || binding[0].HostIP != "127.0.0.1" || binding[0].HostPort != "10000" {
+				t.Fatalf("unexpected port binding: %+v", body.HostConfig.PortBindings)
+			}
+			return dockerResponse(http.StatusCreated, `{"Id":"abcdef0123456789"}`), nil
+		default:
+			return dockerResponse(http.StatusNotFound, `not found`), nil
+		}
+	})}}
+	_, err := adapter.CreateWorkspace(context.Background(), runtime.WorkspaceSpec{
+		WorkspaceID: "workspace-123", Image: runtime.Image{Reference: "registry.example/research:1"},
+		Limits: runtime.ResourceLimits{CPUMillis: 1000, MemoryBytes: 2 << 30}, Labels: runtime.ManagedLabels("workspace-123"),
+		Command: []string{"/bin/sh", "-l"}, Environment: []runtime.EnvironmentVariable{{Name: "DESKTOP_PORT", Value: "10000"}},
+		Mounts: []runtime.Mount{{Name: "workspace-data", ContainerPath: "/workspace"}},
+		Ports:  []runtime.PortBinding{{ServiceName: "desktop", Protocol: "tcp", ContainerPort: 5900, HostPort: 10000, HostIP: "127.0.0.1"}}, NetworkMode: "bridge",
+	})
+	if err != nil {
+		t.Fatalf("create configured workspace: %v", err)
 	}
 }
 

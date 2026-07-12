@@ -7,7 +7,8 @@ project and repository name as uppercase `COWS`. Read `PROJECT.md`,
 `ARCHITECTURE.md`, `SECURITY.md`, `ROADMAP.md`, and relevant decision records
 before changing behavior. Workspace lifecycle and timeout work must follow
 `docs/decisions/0004-workspace-state-model.md` and
-`docs/decisions/0006-workspace-timeouts.md`.
+`docs/decisions/0006-workspace-timeouts.md`. Template runtime configuration
+must follow `docs/decisions/0007-template-runtime-configuration.md`.
 
 ## Technology constraints
 
@@ -29,6 +30,10 @@ accept a browser-selected runtime ID, backend target, internal URL, arbitrary
 port, image, mount, capability, device, or runtime argument. Keep the runtime
 socket behind the runtime interface, fail closed on missing authorization or
 capacity data, and do not log secrets or user content.
+
+Template runtime configuration is typed and server-resolved. Do not add raw
+Docker argument maps, unrestricted placeholders, arbitrary host paths, public
+port bindings, or browser-controlled environment values.
 
 Terminal access is implemented through the runtime shell capability and must
 retain fixed server-selected commands, ownership/template/state checks,

@@ -93,6 +93,8 @@ type Workspace struct {
 	OwnerUserID                     string
 	TemplateID                      string
 	TemplateRevision                int64
+	TemplateImageReference          string
+	TemplateImageDigest             string
 	TemplateConfiguration           TemplateConfiguration
 	Name                            string
 	DesiredState                    DesiredWorkspaceState

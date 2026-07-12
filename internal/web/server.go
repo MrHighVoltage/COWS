@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -120,6 +121,7 @@ type templateFormData struct {
 	InitialConnectionHours string
 	StoppedRetentionHours  string
 	DataRetentionDays      string
+	ConfigurationJSON      string
 	TerminalAccess         bool
 	DesktopAccess          bool
 	WebAccess              bool
@@ -1026,6 +1028,7 @@ func (s *Server) parseTemplateForm(r *http.Request) (templateFormData, workspace
 		InitialConnectionHours: r.FormValue("initial_connection_hours"),
 		StoppedRetentionHours:  r.FormValue("stopped_retention_hours"),
 		DataRetentionDays:      r.FormValue("data_retention_days"),
+		ConfigurationJSON:      r.FormValue("configuration_json"),
 		Enabled:                r.FormValue("enabled") == "on",
 	}
 	for _, method := range r.Form["access_methods"] {
@@ -1078,6 +1081,12 @@ func (s *Server) parseTemplateForm(r *http.Request) (templateFormData, workspace
 	if err != nil {
 		return form, workspace.TemplateInput{}, workspace.ErrInvalidTemplate
 	}
+	configuration := domain.TemplateConfiguration{}
+	if strings.TrimSpace(form.ConfigurationJSON) != "" {
+		if err := decodeTemplateConfiguration(form.ConfigurationJSON, &configuration); err != nil {
+			return form, workspace.TemplateInput{}, workspace.ErrInvalidTemplate
+		}
+	}
 	methods := make([]domain.AccessMethod, 0, 3)
 	if form.TerminalAccess {
 		methods = append(methods, domain.AccessTerminal)
@@ -1105,6 +1114,7 @@ func (s *Server) parseTemplateForm(r *http.Request) (templateFormData, workspace
 		DefaultMemoryBytes:              defaultMemory,
 		MaxMemoryBytes:                  maxMemory,
 		DefaultStorageBytes:             defaultStorage,
+		Configuration:                   configuration,
 		InitialConnectionTimeoutSeconds: initialConnection,
 		StoppedRetentionSeconds:         stoppedRetention,
 		DataRetentionSeconds:            dataRetention,
@@ -1112,6 +1122,22 @@ func (s *Server) parseTemplateForm(r *http.Request) (templateFormData, workspace
 		AllowedRoles:                    roles,
 		Enabled:                         form.Enabled,
 	}, nil
+}
+
+func decodeTemplateConfiguration(value string, configuration *domain.TemplateConfiguration) error {
+	decoder := json.NewDecoder(strings.NewReader(value))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(configuration); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return errors.New("template configuration has trailing JSON")
+		}
+		return err
+	}
+	return nil
 }
 
 func parsePositiveInt(value string) (int64, error) {
@@ -1261,11 +1287,15 @@ func settingsFormFromDomain(settings domain.HostSettings) settingsFormData {
 }
 
 func defaultTemplateForm() templateFormData {
-	return templateFormData{DefaultCPUMillis: "1000", MaxCPUMillis: "4000", DefaultMemoryMiB: "2048", MaxMemoryMiB: "8192", DefaultStorageGiB: "20", InitialConnectionHours: "24", StoppedRetentionHours: "24", DataRetentionDays: "30", TerminalAccess: true, UserRole: true, Enabled: true}
+	return templateFormData{DefaultCPUMillis: "1000", MaxCPUMillis: "4000", DefaultMemoryMiB: "2048", MaxMemoryMiB: "8192", DefaultStorageGiB: "20", InitialConnectionHours: "24", StoppedRetentionHours: "24", DataRetentionDays: "30", ConfigurationJSON: "{}", TerminalAccess: true, UserRole: true, Enabled: true}
 }
 
 func templateFormFromDomain(template domain.WorkspaceTemplate) templateFormData {
-	form := templateFormData{ID: template.ID, Editing: true, Name: template.Name, Description: template.Description, ImageReference: template.ImageReference, ImageDigest: template.ImageDigest, DefaultCPUMillis: strconv.FormatInt(template.DefaultCPUMillis, 10), MaxCPUMillis: strconv.FormatInt(template.MaxCPUMillis, 10), DefaultMemoryMiB: strconv.FormatInt(template.DefaultMemoryBytes/(1<<20), 10), MaxMemoryMiB: strconv.FormatInt(template.MaxMemoryBytes/(1<<20), 10), DefaultStorageGiB: strconv.FormatInt(template.DefaultStorageBytes/(1<<30), 10), InitialConnectionHours: strconv.FormatInt(template.InitialConnectionTimeoutSeconds/3600, 10), StoppedRetentionHours: strconv.FormatInt(template.StoppedRetentionSeconds/3600, 10), DataRetentionDays: strconv.FormatInt(template.DataRetentionSeconds/(24*3600), 10), Enabled: template.Enabled}
+	configurationJSON, _ := json.MarshalIndent(template.Configuration, "", "  ")
+	if len(configurationJSON) == 0 {
+		configurationJSON = []byte("{}")
+	}
+	form := templateFormData{ID: template.ID, Editing: true, Name: template.Name, Description: template.Description, ImageReference: template.ImageReference, ImageDigest: template.ImageDigest, DefaultCPUMillis: strconv.FormatInt(template.DefaultCPUMillis, 10), MaxCPUMillis: strconv.FormatInt(template.MaxCPUMillis, 10), DefaultMemoryMiB: strconv.FormatInt(template.DefaultMemoryBytes/(1<<20), 10), MaxMemoryMiB: strconv.FormatInt(template.MaxMemoryBytes/(1<<20), 10), DefaultStorageGiB: strconv.FormatInt(template.DefaultStorageBytes/(1<<30), 10), InitialConnectionHours: strconv.FormatInt(template.InitialConnectionTimeoutSeconds/3600, 10), StoppedRetentionHours: strconv.FormatInt(template.StoppedRetentionSeconds/3600, 10), DataRetentionDays: strconv.FormatInt(template.DataRetentionSeconds/(24*3600), 10), ConfigurationJSON: string(configurationJSON), Enabled: template.Enabled}
 	for _, method := range template.AccessMethods {
 		switch method {
 		case domain.AccessTerminal:

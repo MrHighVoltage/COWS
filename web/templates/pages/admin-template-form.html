@@ -37,6 +37,14 @@
     </fieldset>
 
     <fieldset>
+      <legend>Container configuration</legend>
+      <p class="muted">Administrator-only typed JSON. Users can select this template but cannot edit or see the resolved values. Ports are allocated from the configured range and may be referenced with <code>{{"{{"}}cows.service.desktop.port{{"}}"}}</code>.</p>
+      <label for="configuration-json">Environment, mounts, services, and command</label>
+      <textarea id="configuration-json" name="configuration_json" rows="16" maxlength="20000" spellcheck="false">{{ .Template.ConfigurationJSON }}</textarea>
+      <p class="muted">Example: <code>{"command":["/bin/sh","-l"],"environment":[{"name":"DESKTOP_PORT","value":"{{"{{"}}cows.service.desktop.port{{"}}"}}"}],"mounts":[{"name":"workspace-data","container_path":"/workspace"}],"services":[{"name":"desktop","protocol":"tcp","container_port":5900,"port_pool":"desktop","host_port_start":10000,"host_port_end":10099}]}</code></p>
+    </fieldset>
+
+    <fieldset>
       <legend>Supported access methods</legend>
       <label class="check-row"><input type="checkbox" name="access_methods" value="terminal"{{ if .Template.TerminalAccess }} checked{{ end }}> Browser terminal</label>
       <label class="check-row"><input type="checkbox" name="access_methods" value="desktop"{{ if .Template.DesktopAccess }} checked{{ end }}> Graphical desktop</label>
