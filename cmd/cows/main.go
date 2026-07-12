@@ -71,7 +71,7 @@ func run(ctx context.Context, args []string) error {
 		return fmt.Errorf("initialize host settings: %w", err)
 	}
 	scheduler := quota.NewScheduler(store, dockerRuntime)
-	templateService := workspace.New(store, scheduler)
+	templateService := workspace.NewWithRuntime(store, dockerRuntime, scheduler)
 	webServer, err := web.New(db, authService, templateService, quotaService, dockerRuntime, web.Options{CookieSecure: cfg.CookieSecure, SessionLifetime: cfg.SessionLifetime})
 	if err != nil {
 		return fmt.Errorf("initialize web server: %w", err)
@@ -88,6 +88,7 @@ func run(ctx context.Context, args []string) error {
 		logger.Info("COWS server started", "address", cfg.ListenAddr, "database", cfg.DatabasePath)
 		serverErrors <- server.ListenAndServe()
 	}()
+	go runTimeoutLoop(ctx, templateService, logger)
 
 	select {
 	case err := <-serverErrors:
@@ -103,5 +104,20 @@ func run(ctx context.Context, args []string) error {
 			return fmt.Errorf("shutdown HTTP server: %w", err)
 		}
 		return nil
+	}
+}
+
+func runTimeoutLoop(ctx context.Context, service *workspace.Service, logger *slog.Logger) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := service.RunTimeouts(ctx); err != nil && !errors.Is(err, workspace.ErrRuntimeUnavailable) {
+				logger.Error("workspace timeout processing failed", "error", err)
+			}
+		}
 	}
 }

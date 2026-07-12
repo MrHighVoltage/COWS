@@ -59,21 +59,24 @@ func (m AccessMethod) Valid() bool {
 }
 
 type WorkspaceTemplate struct {
-	ID                  string
-	Name                string
-	Description         string
-	ImageReference      string
-	ImageDigest         string
-	DefaultCPUMillis    int64
-	MaxCPUMillis        int64
-	DefaultMemoryBytes  int64
-	MaxMemoryBytes      int64
-	DefaultStorageBytes int64
-	AccessMethods       []AccessMethod
-	AllowedRoles        []Role
-	Enabled             bool
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	ID                              string
+	Name                            string
+	Description                     string
+	ImageReference                  string
+	ImageDigest                     string
+	DefaultCPUMillis                int64
+	MaxCPUMillis                    int64
+	DefaultMemoryBytes              int64
+	MaxMemoryBytes                  int64
+	DefaultStorageBytes             int64
+	InitialConnectionTimeoutSeconds int64
+	StoppedRetentionSeconds         int64
+	DataRetentionSeconds            int64
+	AccessMethods                   []AccessMethod
+	AllowedRoles                    []Role
+	Enabled                         bool
+	CreatedAt                       time.Time
+	UpdatedAt                       time.Time
 }
 
 type DesiredWorkspaceState string
@@ -84,20 +87,28 @@ const (
 )
 
 type Workspace struct {
-	ID                    string
-	OwnerUserID           string
-	TemplateID            string
-	Name                  string
-	DesiredState          DesiredWorkspaceState
-	ObservedState         string
-	RuntimeID             string
-	ObservedError         string
-	AllocatedCPUMillis    int64
-	AllocatedMemoryBytes  int64
-	AllocatedStorageBytes int64
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
-	ObservedAt            time.Time
+	ID                              string
+	OwnerUserID                     string
+	TemplateID                      string
+	Name                            string
+	DesiredState                    DesiredWorkspaceState
+	ObservedState                   string
+	RuntimeID                       string
+	ObservedError                   string
+	AllocatedCPUMillis              int64
+	AllocatedMemoryBytes            int64
+	AllocatedStorageBytes           int64
+	InitialConnectionTimeoutSeconds int64
+	StoppedRetentionSeconds         int64
+	DataRetentionSeconds            int64
+	CreatedAt                       time.Time
+	UpdatedAt                       time.Time
+	ObservedAt                      time.Time
+	StartedAt                       time.Time
+	LastConnectedAt                 time.Time
+	StoppedAt                       time.Time
+	ContainerDeletedAt              time.Time
+	DataArchiveEligibleAt           time.Time
 }
 
 type UserQuota struct {

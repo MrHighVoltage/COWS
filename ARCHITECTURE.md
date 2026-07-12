@@ -105,7 +105,7 @@ internal/domain/       stable COWS concepts and error categories
 internal/auth/         password authentication and session use cases
 internal/repository/   focused persistence interfaces and SQLite implementation
 internal/runtime/      Docker and Podman domain adapter boundary
-internal/runtime/docker/ read-only Docker Engine API adapter
+internal/runtime/docker/ Docker Engine API adapter
 migrations/            ordered SQL migrations
 web/                   templates and local browser assets
 docs/decisions/        short architecture decisions
@@ -174,12 +174,13 @@ not become an unreviewed runtime dependency.
 
 ## Future host-agent boundary
 
-The runtime interface is intentionally internal and domain-oriented. The
-interface-only preparation currently lives in `internal/runtime`; it performs
-no lifecycle operations. The current Docker adapter performs only read-only
-version, host-capacity, managed-list, and inspect requests. A future host agent
-may own runtime socket access, host
-registration, capability reporting, and remote lifecycle operations. That is an
+The runtime interface is intentionally internal and domain-oriented. It keeps
+Docker-specific objects inside the adapter. The Docker adapter supports
+server-selected create, start, stop, remove, version, host-capacity,
+managed-list, and inspect requests. The timeout worker performs stop/remove
+only after the workspace service verifies state and deadlines. A future host
+agent may own runtime socket access, host registration, capability reporting,
+and remote lifecycle operations. That is an
 evolution point, not a reason to add RPC, a message broker, or multiple services
 now.
 

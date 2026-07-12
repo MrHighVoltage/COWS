@@ -36,24 +36,24 @@ COWS ever runs multiple active instances.
 ## Milestone 2: Templates and runtime inspection (in progress)
 
 Validated administrator templates, role access rules, resource policy fields,
-the COWS-facing runtime interface, an inspection coordinator, and a read-only
-Docker Engine adapter are now present. Remaining work is stronger runtime
-connectivity reporting, reconciliation persistence, and fake-runtime contract
-coverage. Docker lifecycle operations and a practical second adapter for
-Podman remain deliberately deferred.
+the COWS-facing runtime interface, an inspection coordinator, and a Docker
+Engine adapter are now present. Remaining work is stronger runtime connectivity
+reporting, reconciliation persistence, fake-runtime contract coverage, and
+runtime-enforced storage policy. A practical second adapter for Podman remains
+deliberately deferred.
 
 ## Milestone 3: Workspace lifecycle (persistence prepared)
 
 Workspace persistence, owner/template foreign keys, desired/observed state,
 user creation/listing, quota assignment, and deterministic quota/host-capacity
 admission checks are now present, including persistent administrator-managed
-host capacity and reserved-resource settings. Add administrator-defined initial
+host capacity and reserved-resource settings. Administrator-defined initial
 connection, stopped-container retention, and post-deletion data-retention
-timeouts. Show effective timeouts to users and prepare warning-event hooks, but
-do not send email or archive data yet. Then add start/stop/restart/delete,
-runtime-enforced limits, reconciliation, and administrator overrides. Exit
-requires idempotence, deadline-boundary, and irreversible-operation failure-path
-tests.
+timeouts, user-visible policy details, Docker lifecycle operations, and a
+reconciler-driven timeout worker are now present. Warning-event hooks exist in
+the lifecycle model, but email and archive actions remain disabled. Remaining
+exit work includes full reconciliation, runtime-enforced storage policy,
+idempotence across restart, and irreversible-operation failure-path tests.
 
 ## Milestone 4: Terminal access
 

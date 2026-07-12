@@ -44,8 +44,8 @@ func TestAdapterWithoutDockerReturnsUnavailable(t *testing.T) {
 	if !errors.Is(err, runtime.ErrUnavailable) {
 		t.Fatalf("missing Docker socket error = %v", err)
 	}
-	if err := adapter.StopWorkspace(context.Background(), "abc", time.Second); !errors.Is(err, runtime.ErrNotSupported) {
-		t.Fatalf("stop support error = %v", err)
+	if err := adapter.StopWorkspace(context.Background(), "abc", time.Second); !errors.Is(err, runtime.ErrUnavailable) {
+		t.Fatalf("stop Docker error = %v", err)
 	}
 }
 
@@ -68,6 +68,44 @@ func TestListManagedUsesVersionedDockerAPI(t *testing.T) {
 	}
 	if len(workspaces) != 1 || workspaces[0].WorkspaceID != "workspace-1" || workspaces[0].State != runtime.StateRunning {
 		t.Fatalf("unexpected managed workspaces: %+v", workspaces)
+	}
+}
+
+func TestLifecycleUsesApprovedDockerRequests(t *testing.T) {
+	var calls []string
+	adapter := &Adapter{client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls = append(calls, request.Method+" "+request.URL.Path+"?"+request.URL.RawQuery)
+		var body string
+		switch request.URL.Path {
+		case "/version":
+			body = `{"ApiVersion":"1.45"}`
+		case "/v1.45/containers/create":
+			body = `{"Id":"abcdef0123456789"}`
+		case "/v1.45/containers/abcdef0123456789/start", "/v1.45/containers/abcdef0123456789/stop", "/v1.45/containers/abcdef0123456789":
+			return &http.Response{StatusCode: http.StatusNoContent, Status: "204 No Content", Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}, nil
+		default:
+			return &http.Response{StatusCode: http.StatusNotFound, Status: "404 Not Found", Body: io.NopCloser(strings.NewReader("not found")), Header: make(http.Header)}, nil
+		}
+		return &http.Response{StatusCode: http.StatusCreated, Status: "201 Created", Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})}}
+	handle, err := adapter.CreateWorkspace(context.Background(), runtime.WorkspaceSpec{WorkspaceID: "workspace-123", Image: runtime.Image{Reference: "registry.example/research:1"}, Limits: runtime.ResourceLimits{CPUMillis: 1000, MemoryBytes: 2 << 30}, Labels: runtime.ManagedLabels("workspace-123")})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if handle.RuntimeID != "abcdef0123456789" {
+		t.Fatalf("runtime ID = %q", handle.RuntimeID)
+	}
+	if err := adapter.StartWorkspace(context.Background(), handle.RuntimeID); err != nil {
+		t.Fatalf("start workspace: %v", err)
+	}
+	if err := adapter.StopWorkspace(context.Background(), handle.RuntimeID, time.Second); err != nil {
+		t.Fatalf("stop workspace: %v", err)
+	}
+	if err := adapter.RemoveWorkspace(context.Background(), handle.RuntimeID); err != nil {
+		t.Fatalf("remove workspace: %v", err)
+	}
+	if len(calls) != 8 {
+		t.Fatalf("Docker API calls = %d, want 8: %v", len(calls), calls)
 	}
 }
 

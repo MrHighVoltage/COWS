@@ -96,24 +96,27 @@ type quotaView struct {
 }
 
 type templateFormData struct {
-	ID                string
-	Editing           bool
-	Name              string
-	Description       string
-	ImageReference    string
-	ImageDigest       string
-	DefaultCPUMillis  string
-	MaxCPUMillis      string
-	DefaultMemoryMiB  string
-	MaxMemoryMiB      string
-	DefaultStorageGiB string
-	TerminalAccess    bool
-	DesktopAccess     bool
-	WebAccess         bool
-	UserRole          bool
-	AdministratorRole bool
-	Enabled           bool
-	Error             string
+	ID                     string
+	Editing                bool
+	Name                   string
+	Description            string
+	ImageReference         string
+	ImageDigest            string
+	DefaultCPUMillis       string
+	MaxCPUMillis           string
+	DefaultMemoryMiB       string
+	MaxMemoryMiB           string
+	DefaultStorageGiB      string
+	InitialConnectionHours string
+	StoppedRetentionHours  string
+	DataRetentionDays      string
+	TerminalAccess         bool
+	DesktopAccess          bool
+	WebAccess              bool
+	UserRole               bool
+	AdministratorRole      bool
+	Enabled                bool
+	Error                  string
 }
 
 type pageData struct {
@@ -147,6 +150,16 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 	templates, err := template.New("cows").Funcs(template.FuncMap{
 		"mib": func(bytes int64) int64 { return bytes / (1 << 20) },
 		"gib": func(bytes int64) int64 { return bytes / (1 << 30) },
+		"timeoutPhase": func(value domain.Workspace) workspace.TimeoutStatus {
+			return workspace.EvaluateTimeouts(value, time.Now())
+		},
+		"timeoutText": func(seconds int64) string { return formatTimeout(seconds) },
+		"deadlineText": func(value time.Time) string {
+			if value.IsZero() {
+				return ""
+			}
+			return value.Local().Format("2006-01-02 15:04")
+		},
 	}).ParseFS(webassets.Files, "templates/layouts/*.html", "templates/pages/*.html", "templates/fragments/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse templates: %w", err)
@@ -171,6 +184,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /workspaces", s.workspaces)
 	mux.HandleFunc("GET /workspaces/new", s.workspacesNew)
 	mux.HandleFunc("POST /workspaces", s.workspacesCreate)
+	mux.HandleFunc("POST /workspaces/{id}/start", s.workspaceStart)
+	mux.HandleFunc("POST /workspaces/{id}/stop", s.workspaceStop)
+	mux.HandleFunc("POST /workspaces/{id}/restart", s.workspaceRestart)
+	mux.HandleFunc("POST /workspaces/{id}/delete", s.workspaceDelete)
 	mux.HandleFunc("GET /admin/users", s.adminUsers)
 	mux.HandleFunc("GET /admin/users/new", s.adminUsersNew)
 	mux.HandleFunc("POST /admin/users", s.adminUsersCreate)
@@ -357,6 +374,40 @@ func (s *Server) workspacesCreate(w http.ResponseWriter, r *http.Request) {
 		form.Error = workspaceFormError(err)
 		templates, _ := s.workspace.ListAvailableTemplates(r.Context(), user.ID)
 		s.render(w, http.StatusBadRequest, "workspace-new-page", pageData{Title: "Create workspace | COWS", User: user, Templates: templates, CSRFToken: s.ensureCSRF(w, r), Workspace: form})
+		return
+	}
+	http.Redirect(w, r, "/workspaces", http.StatusSeeOther)
+}
+
+func (s *Server) workspaceStart(w http.ResponseWriter, r *http.Request) {
+	s.workspaceAction(w, r, "start", s.workspace.StartWorkspace)
+}
+
+func (s *Server) workspaceStop(w http.ResponseWriter, r *http.Request) {
+	s.workspaceAction(w, r, "stop", s.workspace.StopWorkspace)
+}
+
+func (s *Server) workspaceRestart(w http.ResponseWriter, r *http.Request) {
+	s.workspaceAction(w, r, "restart", s.workspace.RestartWorkspace)
+}
+
+func (s *Server) workspaceDelete(w http.ResponseWriter, r *http.Request) {
+	s.workspaceAction(w, r, "delete", s.workspace.DeleteWorkspace)
+}
+
+func (s *Server) workspaceAction(w http.ResponseWriter, r *http.Request, action string, operation func(context.Context, string, string) error) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if !s.validCSRF(r) {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return
+	}
+	if err := operation(r.Context(), user.ID, r.PathValue("id")); err != nil {
+		workspaces, _ := s.workspace.ListWorkspaces(r.Context(), user.ID)
+		s.render(w, http.StatusBadRequest, "workspaces-page", pageData{Title: "Workspaces | COWS", User: user, Workspaces: workspaces, CSRFToken: s.ensureCSRF(w, r), Error: workspaceActionError(action, err)})
 		return
 	}
 	http.Redirect(w, r, "/workspaces", http.StatusSeeOther)
@@ -747,16 +798,19 @@ func (s *Server) adminRuntime(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) parseTemplateForm(r *http.Request) (templateFormData, workspace.TemplateInput, error) {
 	form := templateFormData{
-		Name:              r.FormValue("name"),
-		Description:       r.FormValue("description"),
-		ImageReference:    r.FormValue("image_reference"),
-		ImageDigest:       r.FormValue("image_digest"),
-		DefaultCPUMillis:  r.FormValue("default_cpu_millis"),
-		MaxCPUMillis:      r.FormValue("max_cpu_millis"),
-		DefaultMemoryMiB:  r.FormValue("default_memory_mib"),
-		MaxMemoryMiB:      r.FormValue("max_memory_mib"),
-		DefaultStorageGiB: r.FormValue("default_storage_gib"),
-		Enabled:           r.FormValue("enabled") == "on",
+		Name:                   r.FormValue("name"),
+		Description:            r.FormValue("description"),
+		ImageReference:         r.FormValue("image_reference"),
+		ImageDigest:            r.FormValue("image_digest"),
+		DefaultCPUMillis:       r.FormValue("default_cpu_millis"),
+		MaxCPUMillis:           r.FormValue("max_cpu_millis"),
+		DefaultMemoryMiB:       r.FormValue("default_memory_mib"),
+		MaxMemoryMiB:           r.FormValue("max_memory_mib"),
+		DefaultStorageGiB:      r.FormValue("default_storage_gib"),
+		InitialConnectionHours: r.FormValue("initial_connection_hours"),
+		StoppedRetentionHours:  r.FormValue("stopped_retention_hours"),
+		DataRetentionDays:      r.FormValue("data_retention_days"),
+		Enabled:                r.FormValue("enabled") == "on",
 	}
 	for _, method := range r.Form["access_methods"] {
 		switch domain.AccessMethod(method) {
@@ -777,6 +831,18 @@ func (s *Server) parseTemplateForm(r *http.Request) (templateFormData, workspace
 		}
 	}
 	defaultCPU, err := parsePositiveInt(form.DefaultCPUMillis)
+	if err != nil {
+		return form, workspace.TemplateInput{}, workspace.ErrInvalidTemplate
+	}
+	initialConnection, err := parseDurationInput(form.InitialConnectionHours, time.Hour)
+	if err != nil {
+		return form, workspace.TemplateInput{}, workspace.ErrInvalidTemplate
+	}
+	stoppedRetention, err := parseDurationInput(form.StoppedRetentionHours, time.Hour)
+	if err != nil {
+		return form, workspace.TemplateInput{}, workspace.ErrInvalidTemplate
+	}
+	dataRetention, err := parseDurationInput(form.DataRetentionDays, 24*time.Hour)
 	if err != nil {
 		return form, workspace.TemplateInput{}, workspace.ErrInvalidTemplate
 	}
@@ -814,18 +880,21 @@ func (s *Server) parseTemplateForm(r *http.Request) (templateFormData, workspace
 		roles = append(roles, domain.RoleAdministrator)
 	}
 	return form, workspace.TemplateInput{
-		Name:                form.Name,
-		Description:         form.Description,
-		ImageReference:      form.ImageReference,
-		ImageDigest:         form.ImageDigest,
-		DefaultCPUMillis:    defaultCPU,
-		MaxCPUMillis:        maxCPU,
-		DefaultMemoryBytes:  defaultMemory,
-		MaxMemoryBytes:      maxMemory,
-		DefaultStorageBytes: defaultStorage,
-		AccessMethods:       methods,
-		AllowedRoles:        roles,
-		Enabled:             form.Enabled,
+		Name:                            form.Name,
+		Description:                     form.Description,
+		ImageReference:                  form.ImageReference,
+		ImageDigest:                     form.ImageDigest,
+		DefaultCPUMillis:                defaultCPU,
+		MaxCPUMillis:                    maxCPU,
+		DefaultMemoryBytes:              defaultMemory,
+		MaxMemoryBytes:                  maxMemory,
+		DefaultStorageBytes:             defaultStorage,
+		InitialConnectionTimeoutSeconds: initialConnection,
+		StoppedRetentionSeconds:         stoppedRetention,
+		DataRetentionSeconds:            dataRetention,
+		AccessMethods:                   methods,
+		AllowedRoles:                    roles,
+		Enabled:                         form.Enabled,
 	}, nil
 }
 
@@ -843,6 +912,39 @@ func parseResource(value string, multiplier int64) (int64, error) {
 		return 0, errors.New("resource value is invalid")
 	}
 	return parsed * multiplier, nil
+}
+
+func parseDurationInput(value string, unit time.Duration) (int64, error) {
+	if strings.TrimSpace(value) == "" {
+		return 0, nil
+	}
+	parsed, err := parseNonNegativeInt(value)
+	if err != nil || parsed > int64((10*365*24*time.Hour)/unit) {
+		return 0, errors.New("duration value is invalid")
+	}
+	return parsed * int64(unit/time.Second), nil
+}
+
+func formatTimeout(seconds int64) string {
+	if seconds <= 0 {
+		return "disabled"
+	}
+	days := seconds / (24 * 60 * 60)
+	seconds %= 24 * 60 * 60
+	hours := seconds / (60 * 60)
+	seconds %= 60 * 60
+	minutes := seconds / 60
+	parts := make([]string, 0, 3)
+	if days > 0 {
+		parts = append(parts, fmt.Sprintf("%dd", days))
+	}
+	if hours > 0 {
+		parts = append(parts, fmt.Sprintf("%dh", hours))
+	}
+	if minutes > 0 || len(parts) == 0 {
+		parts = append(parts, fmt.Sprintf("%dm", minutes))
+	}
+	return strings.Join(parts, " ")
 }
 
 func parseQuotaForm(form quotaFormData) (quota.Input, error) {
@@ -911,11 +1013,11 @@ func settingsFormFromDomain(settings domain.HostSettings) settingsFormData {
 }
 
 func defaultTemplateForm() templateFormData {
-	return templateFormData{DefaultCPUMillis: "1000", MaxCPUMillis: "4000", DefaultMemoryMiB: "2048", MaxMemoryMiB: "8192", DefaultStorageGiB: "20", TerminalAccess: true, UserRole: true, Enabled: true}
+	return templateFormData{DefaultCPUMillis: "1000", MaxCPUMillis: "4000", DefaultMemoryMiB: "2048", MaxMemoryMiB: "8192", DefaultStorageGiB: "20", InitialConnectionHours: "24", StoppedRetentionHours: "24", DataRetentionDays: "30", TerminalAccess: true, UserRole: true, Enabled: true}
 }
 
 func templateFormFromDomain(template domain.WorkspaceTemplate) templateFormData {
-	form := templateFormData{ID: template.ID, Editing: true, Name: template.Name, Description: template.Description, ImageReference: template.ImageReference, ImageDigest: template.ImageDigest, DefaultCPUMillis: strconv.FormatInt(template.DefaultCPUMillis, 10), MaxCPUMillis: strconv.FormatInt(template.MaxCPUMillis, 10), DefaultMemoryMiB: strconv.FormatInt(template.DefaultMemoryBytes/(1<<20), 10), MaxMemoryMiB: strconv.FormatInt(template.MaxMemoryBytes/(1<<20), 10), DefaultStorageGiB: strconv.FormatInt(template.DefaultStorageBytes/(1<<30), 10), Enabled: template.Enabled}
+	form := templateFormData{ID: template.ID, Editing: true, Name: template.Name, Description: template.Description, ImageReference: template.ImageReference, ImageDigest: template.ImageDigest, DefaultCPUMillis: strconv.FormatInt(template.DefaultCPUMillis, 10), MaxCPUMillis: strconv.FormatInt(template.MaxCPUMillis, 10), DefaultMemoryMiB: strconv.FormatInt(template.DefaultMemoryBytes/(1<<20), 10), MaxMemoryMiB: strconv.FormatInt(template.MaxMemoryBytes/(1<<20), 10), DefaultStorageGiB: strconv.FormatInt(template.DefaultStorageBytes/(1<<30), 10), InitialConnectionHours: strconv.FormatInt(template.InitialConnectionTimeoutSeconds/3600, 10), StoppedRetentionHours: strconv.FormatInt(template.StoppedRetentionSeconds/3600, 10), DataRetentionDays: strconv.FormatInt(template.DataRetentionSeconds/(24*3600), 10), Enabled: template.Enabled}
 	for _, method := range template.AccessMethods {
 		switch method {
 		case domain.AccessTerminal:
@@ -1097,6 +1199,34 @@ func workspaceFormError(err error) string {
 		return "The host does not have enough remaining capacity for this workspace."
 	default:
 		return "The workspace could not be created."
+	}
+}
+
+func workspaceActionError(action string, err error) string {
+	switch {
+	case errors.Is(err, workspace.ErrRuntimeUnavailable):
+		return "The Docker runtime is unavailable. Try again later."
+	case errors.Is(err, workspace.ErrWorkspaceStateConflict):
+		return "This workspace is not in a state where it can be " + workspaceActionVerb(action) + "."
+	case errors.Is(err, runtime.ErrNotSupported):
+		return "This Docker operation is not supported by the configured runtime."
+	default:
+		return "The workspace could not be " + workspaceActionVerb(action) + "."
+	}
+}
+
+func workspaceActionVerb(action string) string {
+	switch action {
+	case "start":
+		return "started"
+	case "stop":
+		return "stopped"
+	case "restart":
+		return "restarted"
+	case "delete":
+		return "deleted"
+	default:
+		return action
 	}
 }
 

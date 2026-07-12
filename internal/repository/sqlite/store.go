@@ -212,12 +212,12 @@ func (s *Store) CreateTemplate(ctx context.Context, template domain.WorkspaceTem
 	}
 	_, err = s.db.ExecContext(ctx, `INSERT INTO workspace_templates
 		(id, name, description, image_reference, image_digest, default_cpu_millis, max_cpu_millis,
-		 default_memory_bytes, max_memory_bytes, default_storage_bytes, access_methods_json,
-		 allowed_roles_json, enabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, template.ID, template.Name, template.Description,
+		 default_memory_bytes, max_memory_bytes, default_storage_bytes, initial_connection_timeout_seconds,
+		 stopped_retention_seconds, data_retention_seconds, access_methods_json, allowed_roles_json, enabled, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, template.ID, template.Name, template.Description,
 		template.ImageReference, template.ImageDigest, template.DefaultCPUMillis, template.MaxCPUMillis,
-		template.DefaultMemoryBytes, template.MaxMemoryBytes, template.DefaultStorageBytes, accessMethods,
-		roles, boolInt(template.Enabled), template.CreatedAt.Unix(), template.UpdatedAt.Unix())
+		template.DefaultMemoryBytes, template.MaxMemoryBytes, template.DefaultStorageBytes, template.InitialConnectionTimeoutSeconds,
+		template.StoppedRetentionSeconds, template.DataRetentionSeconds, accessMethods, roles, boolInt(template.Enabled), template.CreatedAt.Unix(), template.UpdatedAt.Unix())
 	if err != nil {
 		return fmt.Errorf("create template: %w", err)
 	}
@@ -231,11 +231,11 @@ func (s *Store) UpdateTemplate(ctx context.Context, template domain.WorkspaceTem
 	}
 	result, err := s.db.ExecContext(ctx, `UPDATE workspace_templates SET
 		name = ?, description = ?, image_reference = ?, image_digest = ?, default_cpu_millis = ?, max_cpu_millis = ?,
-		default_memory_bytes = ?, max_memory_bytes = ?, default_storage_bytes = ?, access_methods_json = ?,
-		allowed_roles_json = ?, enabled = ?, updated_at = ? WHERE id = ?`, template.Name, template.Description,
+		default_memory_bytes = ?, max_memory_bytes = ?, default_storage_bytes = ?, initial_connection_timeout_seconds = ?,
+		stopped_retention_seconds = ?, data_retention_seconds = ?, access_methods_json = ?, allowed_roles_json = ?, enabled = ?, updated_at = ? WHERE id = ?`, template.Name, template.Description,
 		template.ImageReference, template.ImageDigest, template.DefaultCPUMillis, template.MaxCPUMillis,
-		template.DefaultMemoryBytes, template.MaxMemoryBytes, template.DefaultStorageBytes, accessMethods, roles,
-		boolInt(template.Enabled), template.UpdatedAt.Unix(), template.ID)
+		template.DefaultMemoryBytes, template.MaxMemoryBytes, template.DefaultStorageBytes, template.InitialConnectionTimeoutSeconds,
+		template.StoppedRetentionSeconds, template.DataRetentionSeconds, accessMethods, roles, boolInt(template.Enabled), template.UpdatedAt.Unix(), template.ID)
 	if err != nil {
 		return fmt.Errorf("update template: %w", err)
 	}
@@ -265,8 +265,8 @@ func (s *Store) SetTemplateEnabled(ctx context.Context, id string, enabled bool,
 }
 
 const templateSelect = `SELECT id, name, description, image_reference, image_digest, default_cpu_millis,
-	max_cpu_millis, default_memory_bytes, max_memory_bytes, default_storage_bytes, access_methods_json,
-	allowed_roles_json, enabled, created_at, updated_at FROM workspace_templates`
+	max_cpu_millis, default_memory_bytes, max_memory_bytes, default_storage_bytes, initial_connection_timeout_seconds,
+	stopped_retention_seconds, data_retention_seconds, access_methods_json, allowed_roles_json, enabled, created_at, updated_at FROM workspace_templates`
 
 func marshalTemplateLists(template domain.WorkspaceTemplate) (string, string, error) {
 	accessMethods, err := json.Marshal(template.AccessMethods)
@@ -291,7 +291,8 @@ func scanTemplate(row scanner) (domain.WorkspaceTemplate, error) {
 	)
 	if err := row.Scan(&template.ID, &template.Name, &template.Description, &template.ImageReference, &template.ImageDigest,
 		&template.DefaultCPUMillis, &template.MaxCPUMillis, &template.DefaultMemoryBytes, &template.MaxMemoryBytes,
-		&template.DefaultStorageBytes, &accessMethods, &roles, &enabled, &createdUnix, &updatedUnix); err != nil {
+		&template.DefaultStorageBytes, &template.InitialConnectionTimeoutSeconds, &template.StoppedRetentionSeconds,
+		&template.DataRetentionSeconds, &accessMethods, &roles, &enabled, &createdUnix, &updatedUnix); err != nil {
 		if err == sql.ErrNoRows {
 			return domain.WorkspaceTemplate{}, repository.ErrNotFound
 		}
@@ -328,11 +329,15 @@ func (s *Store) FindWorkspaceByOwnerAndName(ctx context.Context, ownerUserID, na
 func (s *Store) CreateWorkspace(ctx context.Context, workspace domain.Workspace) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO workspaces
 		(id, owner_user_id, template_id, name, desired_state, observed_state, runtime_id, observed_error,
-		 allocated_cpu_millis, allocated_memory_bytes, allocated_storage_bytes, created_at, updated_at, observed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, workspace.ID, workspace.OwnerUserID, workspace.TemplateID,
+		 allocated_cpu_millis, allocated_memory_bytes, allocated_storage_bytes, initial_connection_timeout_seconds,
+		 stopped_retention_seconds, data_retention_seconds, created_at, updated_at, observed_at, started_at,
+		 last_connected_at, stopped_at, container_deleted_at, data_archive_eligible_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, workspace.ID, workspace.OwnerUserID, workspace.TemplateID,
 		workspace.Name, workspace.DesiredState, workspace.ObservedState, workspace.RuntimeID, workspace.ObservedError,
 		workspace.AllocatedCPUMillis, workspace.AllocatedMemoryBytes, workspace.AllocatedStorageBytes,
-		unixOrZero(workspace.CreatedAt), unixOrZero(workspace.UpdatedAt), unixOrZero(workspace.ObservedAt))
+		workspace.InitialConnectionTimeoutSeconds, workspace.StoppedRetentionSeconds, workspace.DataRetentionSeconds,
+		unixOrZero(workspace.CreatedAt), unixOrZero(workspace.UpdatedAt), unixOrZero(workspace.ObservedAt), unixOrZero(workspace.StartedAt),
+		unixOrZero(workspace.LastConnectedAt), unixOrZero(workspace.StoppedAt), unixOrZero(workspace.ContainerDeletedAt), unixOrZero(workspace.DataArchiveEligibleAt))
 	if err != nil {
 		return fmt.Errorf("create workspace: %w", err)
 	}
@@ -362,6 +367,23 @@ func (s *Store) UpdateWorkspaceObservedState(ctx context.Context, id, observedSt
 	count, err := result.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("check workspace observed state update: %w", err)
+	}
+	if count == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) UpdateWorkspaceLifecycle(ctx context.Context, id string, startedAt, lastConnectedAt, stoppedAt, containerDeletedAt, dataArchiveEligibleAt, updatedAt time.Time) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE workspaces SET started_at = ?, last_connected_at = ?, stopped_at = ?,
+		container_deleted_at = ?, data_archive_eligible_at = ?, updated_at = ? WHERE id = ?`, unixOrZero(startedAt),
+		unixOrZero(lastConnectedAt), unixOrZero(stoppedAt), unixOrZero(containerDeletedAt), unixOrZero(dataArchiveEligibleAt), unixOrZero(updatedAt), id)
+	if err != nil {
+		return fmt.Errorf("update workspace lifecycle: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check workspace lifecycle update: %w", err)
 	}
 	if count == 0 {
 		return repository.ErrNotFound
@@ -467,7 +489,8 @@ func (s *Store) UpsertHostSettings(ctx context.Context, settings domain.HostSett
 
 const workspaceSelect = `SELECT id, owner_user_id, template_id, name, desired_state, observed_state, runtime_id,
 	observed_error, allocated_cpu_millis, allocated_memory_bytes, allocated_storage_bytes, created_at, updated_at,
-	observed_at FROM workspaces`
+	observed_at, initial_connection_timeout_seconds, stopped_retention_seconds, data_retention_seconds,
+	started_at, last_connected_at, stopped_at, container_deleted_at, data_archive_eligible_at FROM workspaces`
 
 func (s *Store) listWorkspaces(ctx context.Context, query string, args ...any) ([]domain.Workspace, error) {
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -491,16 +514,18 @@ func (s *Store) listWorkspaces(ctx context.Context, query string, args ...any) (
 
 func scanWorkspace(row scanner) (domain.Workspace, error) {
 	var (
-		workspace      domain.Workspace
-		desiredState   string
-		createdUnix    int64
-		updatedUnix    int64
-		observedAtUnix int64
+		workspace                                                                 domain.Workspace
+		desiredState                                                              string
+		createdUnix                                                               int64
+		updatedUnix                                                               int64
+		observedAtUnix                                                            int64
+		startedUnix, connectedUnix, stoppedUnix, deletedUnix, archiveEligibleUnix int64
 	)
 	if err := row.Scan(&workspace.ID, &workspace.OwnerUserID, &workspace.TemplateID, &workspace.Name, &desiredState,
 		&workspace.ObservedState, &workspace.RuntimeID, &workspace.ObservedError, &workspace.AllocatedCPUMillis,
 		&workspace.AllocatedMemoryBytes, &workspace.AllocatedStorageBytes, &createdUnix, &updatedUnix,
-		&observedAtUnix); err != nil {
+		&observedAtUnix, &workspace.InitialConnectionTimeoutSeconds, &workspace.StoppedRetentionSeconds,
+		&workspace.DataRetentionSeconds, &startedUnix, &connectedUnix, &stoppedUnix, &deletedUnix, &archiveEligibleUnix); err != nil {
 		if err == sql.ErrNoRows {
 			return domain.Workspace{}, repository.ErrNotFound
 		}
@@ -512,6 +537,11 @@ func scanWorkspace(row scanner) (domain.Workspace, error) {
 	if observedAtUnix != 0 {
 		workspace.ObservedAt = time.Unix(observedAtUnix, 0).UTC()
 	}
+	workspace.StartedAt = timeFromUnix(startedUnix)
+	workspace.LastConnectedAt = timeFromUnix(connectedUnix)
+	workspace.StoppedAt = timeFromUnix(stoppedUnix)
+	workspace.ContainerDeletedAt = timeFromUnix(deletedUnix)
+	workspace.DataArchiveEligibleAt = timeFromUnix(archiveEligibleUnix)
 	return workspace, nil
 }
 
@@ -537,6 +567,13 @@ func unixOrZero(value time.Time) int64 {
 		return 0
 	}
 	return value.Unix()
+}
+
+func timeFromUnix(value int64) time.Time {
+	if value == 0 {
+		return time.Time{}
+	}
+	return time.Unix(value, 0).UTC()
 }
 
 type scanner interface {

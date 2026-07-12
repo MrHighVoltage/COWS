@@ -14,7 +14,7 @@ import (
 	"github.com/cows-project/cows/internal/repository/sqlite"
 )
 
-func testService(t *testing.T) (*Service, *auth.Service, string) {
+func testService(t *testing.T) (*Service, *auth.Service, string, *sqlite.Store) {
 	t.Helper()
 	db, err := database.Open(context.Background(), filepath.Join(t.TempDir(), "cows.db"))
 	if err != nil {
@@ -36,28 +36,31 @@ func testService(t *testing.T) (*Service, *auth.Service, string) {
 	if err := authService.ChangePassword(context.Background(), adminBeforeChange.ID, "correct horse battery staple", "changed correct horse battery staple"); err != nil {
 		t.Fatalf("change administrator password: %v", err)
 	}
-	return New(store), authService, adminBeforeChange.ID
+	return New(store), authService, adminBeforeChange.ID, store
 }
 
 func validTemplateInput() TemplateInput {
 	return TemplateInput{
-		Name:                "Research Desktop",
-		Description:         "Approved research environment",
-		ImageReference:      "registry.example/research/workspace:1",
-		ImageDigest:         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-		DefaultCPUMillis:    1000,
-		MaxCPUMillis:        4000,
-		DefaultMemoryBytes:  2 << 30,
-		MaxMemoryBytes:      8 << 30,
-		DefaultStorageBytes: 20 << 30,
-		AccessMethods:       []domain.AccessMethod{domain.AccessTerminal, domain.AccessDesktop},
-		AllowedRoles:        []domain.Role{domain.RoleUser},
-		Enabled:             true,
+		Name:                            "Research Desktop",
+		Description:                     "Approved research environment",
+		ImageReference:                  "registry.example/research/workspace:1",
+		ImageDigest:                     "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		DefaultCPUMillis:                1000,
+		MaxCPUMillis:                    4000,
+		DefaultMemoryBytes:              2 << 30,
+		MaxMemoryBytes:                  8 << 30,
+		DefaultStorageBytes:             20 << 30,
+		InitialConnectionTimeoutSeconds: 2 * 60 * 60,
+		StoppedRetentionSeconds:         24 * 60 * 60,
+		DataRetentionSeconds:            30 * 24 * 60 * 60,
+		AccessMethods:                   []domain.AccessMethod{domain.AccessTerminal, domain.AccessDesktop},
+		AllowedRoles:                    []domain.Role{domain.RoleUser},
+		Enabled:                         true,
 	}
 }
 
 func TestTemplateServiceCRUDAndAuthorization(t *testing.T) {
-	service, authService, adminID := testService(t)
+	service, authService, adminID, _ := testService(t)
 	ctx := context.Background()
 	created, err := service.CreateTemplate(ctx, adminID, validTemplateInput())
 	if err != nil {
@@ -96,7 +99,7 @@ func TestTemplateServiceCRUDAndAuthorization(t *testing.T) {
 }
 
 func TestTemplateValidationAndDuplicateName(t *testing.T) {
-	service, _, adminID := testService(t)
+	service, _, adminID, _ := testService(t)
 	ctx := context.Background()
 	invalid := validTemplateInput()
 	invalid.MaxCPUMillis = invalid.DefaultCPUMillis - 1
@@ -118,7 +121,7 @@ func TestTemplateValidationAndDuplicateName(t *testing.T) {
 }
 
 func TestWorkspaceCreationOwnershipAndDesiredObservedState(t *testing.T) {
-	service, authService, adminID := testService(t)
+	service, authService, adminID, _ := testService(t)
 	ctx := context.Background()
 	template, err := service.CreateTemplate(ctx, adminID, validTemplateInput())
 	if err != nil {
@@ -139,7 +142,7 @@ func TestWorkspaceCreationOwnershipAndDesiredObservedState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
-	if created.OwnerUserID != student.ID || created.DesiredState != domain.DesiredWorkspaceStopped || created.ObservedState != "unknown" || created.AllocatedCPUMillis != template.DefaultCPUMillis {
+	if created.OwnerUserID != student.ID || created.DesiredState != domain.DesiredWorkspaceStopped || created.ObservedState != "unknown" || created.AllocatedCPUMillis != template.DefaultCPUMillis || created.InitialConnectionTimeoutSeconds != template.InitialConnectionTimeoutSeconds || created.StoppedRetentionSeconds != template.StoppedRetentionSeconds || created.DataRetentionSeconds != template.DataRetentionSeconds {
 		t.Fatalf("unexpected workspace: %+v", created)
 	}
 	if err := service.SetDesiredState(ctx, student.ID, created.ID, domain.DesiredWorkspaceRunning); err != nil {

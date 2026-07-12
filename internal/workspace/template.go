@@ -13,6 +13,7 @@ import (
 	"github.com/cows-project/cows/internal/domain"
 	"github.com/cows-project/cows/internal/quota"
 	"github.com/cows-project/cows/internal/repository"
+	"github.com/cows-project/cows/internal/runtime"
 )
 
 var (
@@ -28,32 +29,44 @@ const (
 )
 
 type TemplateInput struct {
-	Name                string
-	Description         string
-	ImageReference      string
-	ImageDigest         string
-	DefaultCPUMillis    int64
-	MaxCPUMillis        int64
-	DefaultMemoryBytes  int64
-	MaxMemoryBytes      int64
-	DefaultStorageBytes int64
-	AccessMethods       []domain.AccessMethod
-	AllowedRoles        []domain.Role
-	Enabled             bool
+	Name                            string
+	Description                     string
+	ImageReference                  string
+	ImageDigest                     string
+	DefaultCPUMillis                int64
+	MaxCPUMillis                    int64
+	DefaultMemoryBytes              int64
+	MaxMemoryBytes                  int64
+	DefaultStorageBytes             int64
+	InitialConnectionTimeoutSeconds int64
+	StoppedRetentionSeconds         int64
+	DataRetentionSeconds            int64
+	AccessMethods                   []domain.AccessMethod
+	AllowedRoles                    []domain.Role
+	Enabled                         bool
 }
 
 type Service struct {
 	store     repository.Store
 	scheduler *quota.Scheduler
+	runtime   runtime.Runtime
 	now       func() time.Time
 }
 
 func New(store repository.Store, schedulers ...*quota.Scheduler) *Service {
+	return newService(store, nil, schedulers...)
+}
+
+func NewWithRuntime(store repository.Store, runtimeAdapter runtime.Runtime, schedulers ...*quota.Scheduler) *Service {
+	return newService(store, runtimeAdapter, schedulers...)
+}
+
+func newService(store repository.Store, runtimeAdapter runtime.Runtime, schedulers ...*quota.Scheduler) *Service {
 	var scheduler *quota.Scheduler
 	if len(schedulers) > 0 {
 		scheduler = schedulers[0]
 	}
-	return &Service{store: store, scheduler: scheduler, now: time.Now}
+	return &Service{store: store, scheduler: scheduler, runtime: runtimeAdapter, now: time.Now}
 }
 
 func (s *Service) ListTemplates(ctx context.Context, actorID string) ([]domain.WorkspaceTemplate, error) {
@@ -88,21 +101,24 @@ func (s *Service) CreateTemplate(ctx context.Context, actorID string, input Temp
 	}
 	now := s.now().UTC()
 	template := domain.WorkspaceTemplate{
-		ID:                  id,
-		Name:                strings.TrimSpace(input.Name),
-		Description:         strings.TrimSpace(input.Description),
-		ImageReference:      strings.TrimSpace(input.ImageReference),
-		ImageDigest:         strings.TrimSpace(input.ImageDigest),
-		DefaultCPUMillis:    input.DefaultCPUMillis,
-		MaxCPUMillis:        input.MaxCPUMillis,
-		DefaultMemoryBytes:  input.DefaultMemoryBytes,
-		MaxMemoryBytes:      input.MaxMemoryBytes,
-		DefaultStorageBytes: input.DefaultStorageBytes,
-		AccessMethods:       append([]domain.AccessMethod(nil), input.AccessMethods...),
-		AllowedRoles:        append([]domain.Role(nil), input.AllowedRoles...),
-		Enabled:             input.Enabled,
-		CreatedAt:           now,
-		UpdatedAt:           now,
+		ID:                              id,
+		Name:                            strings.TrimSpace(input.Name),
+		Description:                     strings.TrimSpace(input.Description),
+		ImageReference:                  strings.TrimSpace(input.ImageReference),
+		ImageDigest:                     strings.TrimSpace(input.ImageDigest),
+		DefaultCPUMillis:                input.DefaultCPUMillis,
+		MaxCPUMillis:                    input.MaxCPUMillis,
+		DefaultMemoryBytes:              input.DefaultMemoryBytes,
+		MaxMemoryBytes:                  input.MaxMemoryBytes,
+		DefaultStorageBytes:             input.DefaultStorageBytes,
+		InitialConnectionTimeoutSeconds: input.InitialConnectionTimeoutSeconds,
+		StoppedRetentionSeconds:         input.StoppedRetentionSeconds,
+		DataRetentionSeconds:            input.DataRetentionSeconds,
+		AccessMethods:                   append([]domain.AccessMethod(nil), input.AccessMethods...),
+		AllowedRoles:                    append([]domain.Role(nil), input.AllowedRoles...),
+		Enabled:                         input.Enabled,
+		CreatedAt:                       now,
+		UpdatedAt:                       now,
 	}
 	if err := s.store.CreateTemplate(ctx, template); err != nil {
 		return domain.WorkspaceTemplate{}, err
@@ -136,6 +152,9 @@ func (s *Service) UpdateTemplate(ctx context.Context, actorID, id string, input 
 	existing.DefaultMemoryBytes = input.DefaultMemoryBytes
 	existing.MaxMemoryBytes = input.MaxMemoryBytes
 	existing.DefaultStorageBytes = input.DefaultStorageBytes
+	existing.InitialConnectionTimeoutSeconds = input.InitialConnectionTimeoutSeconds
+	existing.StoppedRetentionSeconds = input.StoppedRetentionSeconds
+	existing.DataRetentionSeconds = input.DataRetentionSeconds
 	existing.AccessMethods = append([]domain.AccessMethod(nil), input.AccessMethods...)
 	existing.AllowedRoles = append([]domain.Role(nil), input.AllowedRoles...)
 	existing.Enabled = input.Enabled
@@ -205,6 +224,9 @@ func validateTemplate(input TemplateInput) error {
 	if input.DefaultStorageBytes <= 0 || input.DefaultStorageBytes > 1<<60 {
 		return ErrInvalidTemplate
 	}
+	if !validTimeout(input.InitialConnectionTimeoutSeconds) || !validTimeout(input.StoppedRetentionSeconds) || !validTimeout(input.DataRetentionSeconds) {
+		return ErrInvalidTemplate
+	}
 	if len(input.AccessMethods) == 0 || hasDuplicateAccessMethod(input.AccessMethods) {
 		return ErrInvalidTemplate
 	}
@@ -222,6 +244,10 @@ func validateTemplate(input TemplateInput) error {
 		}
 	}
 	return nil
+}
+
+func validTimeout(seconds int64) bool {
+	return seconds >= 0 && seconds <= 10*365*24*60*60
 }
 
 func validImageReference(value string) bool {

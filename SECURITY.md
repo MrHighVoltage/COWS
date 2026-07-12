@@ -107,9 +107,12 @@ Local username/password authentication, mandatory first-login password change,
 stored email fields, server-side opaque sessions, CSRF protected forms,
 administrator checks, login rate limiting, and basic audit persistence now
 exist. The implementation has no OpenID Connect, password recovery, account
-deletion workflow, runtime integration, terminal, desktop, proxy, file manager,
-or production HTTPS configuration. Audit failures and operational alerts still
-need a deliberate policy. Do not deploy it as a service for untrusted users.
+deletion workflow, terminal, desktop, proxy, file manager, or production HTTPS
+configuration. Docker lifecycle operations are limited to approved images,
+labels, resource limits, and isolated network policy; runtime reconciliation
+and interactive access still need further review. Audit failures and
+operational alerts still need a deliberate policy. Do not deploy it as a
+service for untrusted users.
 
 ## Reporting vulnerabilities
 

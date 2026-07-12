@@ -27,6 +27,16 @@
     </fieldset>
 
     <fieldset>
+      <legend>Workspace timeouts</legend>
+      <p class="muted">These values are copied into each new workspace. Zero disables that phase. Email warnings and archiving are not active yet.</p>
+      <div class="form-grid">
+        <div><label for="initial-connection-hours">Stop if never connected (hours)</label><input id="initial-connection-hours" name="initial_connection_hours" type="number" min="0" max="87600" value="{{ .Template.InitialConnectionHours }}" required></div>
+        <div><label for="stopped-retention-hours">Keep stopped container (hours)</label><input id="stopped-retention-hours" name="stopped_retention_hours" type="number" min="0" max="87600" value="{{ .Template.StoppedRetentionHours }}" required></div>
+        <div><label for="data-retention-days">Archive eligibility after deletion (days)</label><input id="data-retention-days" name="data_retention_days" type="number" min="0" max="3650" value="{{ .Template.DataRetentionDays }}" required></div>
+      </div>
+    </fieldset>
+
+    <fieldset>
       <legend>Supported access methods</legend>
       <label class="check-row"><input type="checkbox" name="access_methods" value="terminal"{{ if .Template.TerminalAccess }} checked{{ end }}> Browser terminal</label>
       <label class="check-row"><input type="checkbox" name="access_methods" value="desktop"{{ if .Template.DesktopAccess }} checked{{ end }}> Graphical desktop</label>
