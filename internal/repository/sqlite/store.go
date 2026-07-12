@@ -344,6 +344,21 @@ func (s *Store) CreateWorkspace(ctx context.Context, workspace domain.Workspace)
 	return nil
 }
 
+func (s *Store) DeleteWorkspace(ctx context.Context, id string) error {
+	result, err := s.db.ExecContext(ctx, "DELETE FROM workspaces WHERE id = ?", id)
+	if err != nil {
+		return fmt.Errorf("delete workspace: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check workspace deletion: %w", err)
+	}
+	if count == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) SetWorkspaceDesiredState(ctx context.Context, id string, state domain.DesiredWorkspaceState, updatedAt time.Time) error {
 	result, err := s.db.ExecContext(ctx, "UPDATE workspaces SET desired_state = ?, updated_at = ? WHERE id = ?", state, updatedAt.Unix(), id)
 	if err != nil {

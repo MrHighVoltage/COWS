@@ -261,9 +261,10 @@ func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID stri
 		return err
 	}
 	if value.RuntimeID == "" {
-		return nil
-	}
-	if value.ObservedState == string(runtime.StateRemoved) {
+		if err := s.store.DeleteWorkspace(ctx, value.ID); err != nil {
+			return err
+		}
+		s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "workspace.deleted", TargetType: "workspace", TargetID: value.ID})
 		return nil
 	}
 	if value.ObservedState == string(runtime.StateRunning) {
@@ -273,25 +274,19 @@ func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID stri
 	if err := s.beginOperation(ctx, value.ID, "delete", operationStarted); err != nil {
 		return err
 	}
-	if err := s.runtime.RemoveWorkspace(ctx, value.RuntimeID); err != nil {
+	if value.ObservedState != string(runtime.StateRemoved) && value.ObservedState != "missing" {
+		if err := s.runtime.RemoveWorkspace(ctx, value.RuntimeID); err != nil && !errors.Is(err, runtime.ErrNotFound) {
+			_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
+			return err
+		}
+	}
+	// Keep the record when this database delete fails so an administrator can
+	// retry without losing the audit and reconciliation context.
+	if err := s.store.DeleteWorkspace(ctx, value.ID); err != nil {
 		_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
 		return err
 	}
-	now := s.now().UTC()
-	value.ContainerDeletedAt = now
-	if value.DataRetentionSeconds > 0 {
-		value.DataArchiveEligibleAt = now.Add(time.Duration(value.DataRetentionSeconds) * time.Second)
-	}
-	if err := s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateRemoved), value.RuntimeID, "", now, now); err != nil {
-		return err
-	}
-	if err := s.store.UpdateWorkspaceLifecycle(ctx, value.ID, value.StartedAt, value.LastConnectedAt, value.StoppedAt, value.ContainerDeletedAt, value.DataArchiveEligibleAt, now); err != nil {
-		return err
-	}
-	if err := s.finishOperation(ctx, value.ID, "delete", "succeeded", "", operationStarted); err != nil {
-		return err
-	}
-	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "workspace.container_deleted", TargetType: "workspace", TargetID: value.ID})
+	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "workspace.deleted", TargetType: "workspace", TargetID: value.ID})
 	return nil
 }
 

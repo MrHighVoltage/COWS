@@ -2,11 +2,13 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/cows-project/cows/internal/auth"
 	"github.com/cows-project/cows/internal/domain"
+	"github.com/cows-project/cows/internal/repository"
 	"github.com/cows-project/cows/internal/runtime"
 )
 
@@ -107,6 +109,52 @@ func TestLifecycleTimeoutStopsAndDeletesWorkspace(t *testing.T) {
 	}
 	if updated.Operation != "timeout-delete" || updated.OperationStatus != "succeeded" {
 		t.Fatalf("delete operation status = %q/%q", updated.Operation, updated.OperationStatus)
+	}
+}
+
+func TestManualDeleteRemovesWorkspaceRecordAfterContainer(t *testing.T) {
+	service, authService, adminID, store := testService(t)
+	template, err := service.CreateTemplate(context.Background(), adminID, validTemplateInput())
+	if err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+	if _, err := authService.CreateUser(context.Background(), adminID, auth.CreateUserInput{Username: "delete-user", Password: "another correct password", Role: domain.RoleUser}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	user, _, err := authService.Authenticate(context.Background(), "delete-user", "another correct password")
+	if err != nil {
+		t.Fatalf("authenticate user: %v", err)
+	}
+	if err := authService.ChangePassword(context.Background(), user.ID, "another correct password", "changed delete password"); err != nil {
+		t.Fatalf("change password: %v", err)
+	}
+	value, err := service.CreateWorkspace(context.Background(), user.ID, CreateWorkspaceInput{Name: "Delete me", TemplateID: template.ID})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	fake := &lifecycleRuntime{}
+	service = NewWithRuntime(store, fake)
+	if err := service.StartWorkspace(context.Background(), user.ID, value.ID); err != nil {
+		t.Fatalf("start workspace: %v", err)
+	}
+	if err := service.StopWorkspace(context.Background(), user.ID, value.ID); err != nil {
+		t.Fatalf("stop workspace: %v", err)
+	}
+	if err := service.DeleteWorkspace(context.Background(), user.ID, value.ID); err != nil {
+		t.Fatalf("delete workspace: %v", err)
+	}
+	if fake.removed != 1 {
+		t.Fatalf("runtime remove calls = %d, want 1", fake.removed)
+	}
+	if _, err := store.FindWorkspaceByID(context.Background(), value.ID); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("workspace lookup after delete = %v, want not found", err)
+	}
+	allocations, err := store.WorkspaceAllocations(context.Background(), user.ID)
+	if err != nil {
+		t.Fatalf("workspace allocations after delete: %v", err)
+	}
+	if allocations.WorkspaceCount != 0 || allocations.Resources.CPUMillis != 0 || allocations.Resources.MemoryBytes != 0 || allocations.Resources.StorageBytes != 0 {
+		t.Fatalf("allocations after delete = %+v, want zero", allocations)
 	}
 }
 
