@@ -843,7 +843,7 @@ func (s *Server) adminRuntime(w http.ResponseWriter, r *http.Request) {
 	data := pageData{Title: "Runtime | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r)}
 	if err != nil {
 		status = http.StatusServiceUnavailable
-		data.RuntimeError = "Docker is unavailable or returned invalid inspection data."
+		data.RuntimeError = "The configured container runtime is unavailable or returned invalid inspection data."
 	} else {
 		data.Inspection = &inspection
 	}
