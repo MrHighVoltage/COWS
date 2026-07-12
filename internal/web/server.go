@@ -153,7 +153,8 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 		"timeoutPhase": func(value domain.Workspace) workspace.TimeoutStatus {
 			return workspace.EvaluateTimeouts(value, time.Now())
 		},
-		"timeoutText": func(seconds int64) string { return formatTimeout(seconds) },
+		"timeoutPhaseText": func(value workspace.TimeoutPhase) string { return timeoutPhaseText(value) },
+		"timeoutText":      func(seconds int64) string { return formatTimeout(seconds) },
 		"deadlineText": func(value time.Time) string {
 			if value.IsZero() {
 				return ""
@@ -945,6 +946,21 @@ func formatTimeout(seconds int64) string {
 		parts = append(parts, fmt.Sprintf("%dm", minutes))
 	}
 	return strings.Join(parts, " ")
+}
+
+func timeoutPhaseText(phase workspace.TimeoutPhase) string {
+	switch phase {
+	case workspace.TimeoutPhaseAwaitingConnection:
+		return "Awaiting first connection"
+	case workspace.TimeoutPhaseStoppedRetention:
+		return "Stopped container retention"
+	case workspace.TimeoutPhaseDataRetention:
+		return "Data retention"
+	case workspace.TimeoutPhaseArchiveEligible:
+		return "Archive eligible"
+	default:
+		return "No active timeout"
+	}
 }
 
 func parseQuotaForm(form quotaFormData) (quota.Input, error) {

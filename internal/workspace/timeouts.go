@@ -38,7 +38,10 @@ func EvaluateTimeouts(value domain.Workspace, now time.Time) TimeoutStatus {
 		if value.DataRetentionSeconds <= 0 {
 			return TimeoutStatus{Phase: TimeoutPhaseDataRetention, Action: TimeoutActionNone}
 		}
-		deadline := value.ContainerDeletedAt.Add(time.Duration(value.DataRetentionSeconds) * time.Second)
+		deadline := value.DataArchiveEligibleAt
+		if deadline.IsZero() {
+			deadline = value.ContainerDeletedAt.Add(time.Duration(value.DataRetentionSeconds) * time.Second)
+		}
 		status := TimeoutStatus{Phase: TimeoutPhaseDataRetention, Action: TimeoutActionNone, Deadline: deadline}
 		if !now.Before(deadline) {
 			status.Phase = TimeoutPhaseArchiveEligible
