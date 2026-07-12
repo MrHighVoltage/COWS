@@ -12,7 +12,13 @@ operation occurs during creation.
 Desired state is the state requested by an authorized COWS operation. Observed
 state is the most recent runtime report and may be `unknown` until
 reconciliation. Runtime IDs and observed errors are server-side fields and are
-never accepted from browser requests.
+never accepted from browser requests. Lifecycle operations may persist the
+immediate runtime result, while periodic reconciliation remains authoritative
+for changes made directly through Docker or Podman.
+
+The reconciler normalizes runtime `exited` to COWS `stopped`. If a previously
+managed runtime object is absent, it records `missing` and preserves the
+workspace record; absence alone is not proof that deletion completed.
 
 The initial accounting policy reserves the recorded allocation for every
 workspace record, including stopped workspaces, until a later lifecycle policy
