@@ -149,7 +149,8 @@ The reconciliation worker periodically performs a validated runtime inspection
 and persists observed state. Docker/Podman `exited` is normalized to COWS
 `stopped`; a managed object that is absent is recorded as `missing` without
 being treated as deleted. Timeout actions run only after a successful
-reconciliation pass.
+reconciliation pass. Managed runtime objects without a matching workspace are
+recorded as orphan audit events and are not removed automatically.
 
 Lifecycle operations persist their current operation, status, safe user-facing
 error category, and timestamps. Workspace pages poll a server-rendered HTMX

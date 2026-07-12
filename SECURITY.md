@@ -54,6 +54,8 @@ partial operations, and compromised or misconfigured images.
 - Container deletion and future data archival are separate actions. Archive
   eligibility must never be treated as authorization to read or delete data,
   and any future archive implementation must be separately audited.
+- Runtime objects without a matching COWS workspace are treated as orphaned
+  observations and are not automatically removed by reconciliation.
 
 ## Access gateway risks
 

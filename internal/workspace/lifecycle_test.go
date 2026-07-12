@@ -149,6 +149,10 @@ func TestReconcilePersistsManualRuntimeStop(t *testing.T) {
 	if updated.ObservedState != string(runtime.StateStopped) || updated.StoppedAt.IsZero() {
 		t.Fatalf("manual stop was not persisted: %+v", updated)
 	}
+	fake.observed = append(fake.observed, runtime.ObservedWorkspace{RuntimeID: "orphan-runtime", WorkspaceID: "orphan-workspace", State: runtime.StateStopped, ObservedAt: base.Add(2 * time.Minute)})
+	if err := service.Reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile orphan workspace: %v", err)
+	}
 	fake.observed = nil
 	if err := service.Reconcile(context.Background()); err != nil {
 		t.Fatalf("reconcile missing workspace: %v", err)
