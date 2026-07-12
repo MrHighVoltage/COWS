@@ -16,10 +16,10 @@
     <td>
       <form class="quota-form" method="post" action="/admin/quotas/{{ .User.ID }}">
         <input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}">
-        <input name="max_cpu_millis" type="number" min="0" max="1000000" placeholder="0 = unlimited" value="{{ if .Assigned }}{{ .Quota.MaxCPUMillis }}{{ end }}" required aria-label="Maximum CPU in millicores, zero for unlimited">
-        <input name="max_memory_mib" type="number" min="0" placeholder="0 = unlimited" value="{{ if .Assigned }}{{ mib .Quota.MaxMemoryBytes }}{{ end }}" required aria-label="Maximum memory in MiB, zero for unlimited">
-        <input name="max_storage_gib" type="number" min="0" placeholder="0 = unlimited" value="{{ if .Assigned }}{{ gib .Quota.MaxStorageBytes }}{{ end }}" required aria-label="Maximum storage in GiB, zero for unlimited">
-        <input name="max_workspaces" type="number" min="0" max="1000000" placeholder="0 = unlimited" value="{{ if .Assigned }}{{ .Quota.MaxWorkspaces }}{{ end }}" required aria-label="Maximum workspaces, zero for unlimited">
+        <input name="max_cpu_millis" type="number" min="0" max="1000000" placeholder="{{ if .Assigned }}0 = unlimited{{ else }}Unassigned{{ end }}" value="{{ if .Assigned }}{{ .Quota.MaxCPUMillis }}{{ end }}" required aria-label="Maximum CPU in millicores, zero for unlimited">
+        <input name="max_memory_mib" type="number" min="0" placeholder="{{ if .Assigned }}0 = unlimited{{ else }}Unassigned{{ end }}" value="{{ if .Assigned }}{{ mib .Quota.MaxMemoryBytes }}{{ end }}" required aria-label="Maximum memory in MiB, zero for unlimited">
+        <input name="max_storage_gib" type="number" min="0" placeholder="{{ if .Assigned }}0 = unlimited{{ else }}Unassigned{{ end }}" value="{{ if .Assigned }}{{ gib .Quota.MaxStorageBytes }}{{ end }}" required aria-label="Maximum storage in GiB, zero for unlimited">
+        <input name="max_workspaces" type="number" min="0" max="1000000" placeholder="{{ if .Assigned }}0 = unlimited{{ else }}Unassigned{{ end }}" value="{{ if .Assigned }}{{ .Quota.MaxWorkspaces }}{{ end }}" required aria-label="Maximum workspaces, zero for unlimited">
         <button class="table-action" type="submit">Save</button>
       </form>
     </td>
