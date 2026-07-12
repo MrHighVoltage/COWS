@@ -77,6 +77,13 @@ func TestLifecycleTimeoutStopsAndDeletesWorkspace(t *testing.T) {
 	if fake.created != 1 || fake.started != 1 {
 		t.Fatalf("runtime start calls = created %d started %d", fake.created, fake.started)
 	}
+	started, err := store.FindWorkspaceByID(context.Background(), value.ID)
+	if err != nil {
+		t.Fatalf("load started workspace: %v", err)
+	}
+	if started.Operation != "start" || started.OperationStatus != "succeeded" {
+		t.Fatalf("start operation status = %q/%q", started.Operation, started.OperationStatus)
+	}
 	service.now = func() time.Time { return base.Add(2 * time.Second) }
 	if err := service.RunTimeouts(context.Background()); err != nil {
 		t.Fatalf("run stop timeout: %v", err)
@@ -97,6 +104,9 @@ func TestLifecycleTimeoutStopsAndDeletesWorkspace(t *testing.T) {
 	}
 	if updated.ContainerDeletedAt.IsZero() || updated.DataArchiveEligibleAt.IsZero() {
 		t.Fatalf("timeout timestamps were not persisted: %+v", updated)
+	}
+	if updated.Operation != "timeout-delete" || updated.OperationStatus != "succeeded" {
+		t.Fatalf("delete operation status = %q/%q", updated.Operation, updated.OperationStatus)
 	}
 }
 

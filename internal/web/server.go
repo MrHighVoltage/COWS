@@ -95,6 +95,12 @@ type quotaView struct {
 	Assigned bool
 }
 
+type allocationView struct {
+	Summary       domain.AllocationSummary
+	Quota         domain.UserQuota
+	QuotaAssigned bool
+}
+
 type templateFormData struct {
 	ID                     string
 	Editing                bool
@@ -138,6 +144,7 @@ type pageData struct {
 	Quota        quotaFormData
 	Settings     *domain.HostSettings
 	SettingsForm settingsFormData
+	Allocation   *allocationView
 }
 
 func New(db *sql.DB, authService *auth.Service, templateService *workspace.Service, quotaService *quota.Service, runtimeAdapter runtime.Runtime, options Options) (*Server, error) {
@@ -155,6 +162,7 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 		},
 		"timeoutPhaseText": func(value workspace.TimeoutPhase) string { return timeoutPhaseText(value) },
 		"timeoutText":      func(seconds int64) string { return formatTimeout(seconds) },
+		"operationText":    func(value string) string { return operationText(value) },
 		"deadlineText": func(value time.Time) string {
 			if value.IsZero() {
 				return ""
@@ -183,6 +191,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /account/password", s.passwordGet)
 	mux.HandleFunc("POST /account/password", s.passwordPost)
 	mux.HandleFunc("GET /workspaces", s.workspaces)
+	mux.HandleFunc("GET /fragments/workspaces", s.workspacesFragment)
 	mux.HandleFunc("GET /workspaces/new", s.workspacesNew)
 	mux.HandleFunc("POST /workspaces", s.workspacesCreate)
 	mux.HandleFunc("POST /workspaces/{id}/start", s.workspaceStart)
@@ -335,12 +344,52 @@ func (s *Server) workspaces(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	workspaces, err := s.workspace.ListWorkspaces(r.Context(), user.ID)
+	data, err := s.workspacePageData(r.Context(), user)
 	if err != nil {
 		http.Error(w, "failed to load workspaces", http.StatusInternalServerError)
 		return
 	}
-	s.render(w, http.StatusOK, "workspaces-page", pageData{Title: "Workspaces | COWS", User: user, Workspaces: workspaces, CSRFToken: s.ensureCSRF(w, r)})
+	data.Title = "Workspaces | COWS"
+	data.User = user
+	data.CSRFToken = s.ensureCSRF(w, r)
+	s.render(w, http.StatusOK, "workspaces-page", data)
+}
+
+func (s *Server) workspacesFragment(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	data, err := s.workspacePageData(r.Context(), user)
+	if err != nil {
+		http.Error(w, "failed to load workspaces", http.StatusInternalServerError)
+		return
+	}
+	data.User = user
+	data.CSRFToken = s.ensureCSRF(w, r)
+	s.render(w, http.StatusOK, "workspaces-list-fragment", data)
+}
+
+func (s *Server) workspacePageData(ctx context.Context, user *domain.User) (pageData, error) {
+	workspaces, err := s.workspace.ListWorkspaces(ctx, user.ID)
+	if err != nil {
+		return pageData{}, err
+	}
+	allocation, err := s.workspace.AllocationSummary(ctx, user.ID)
+	if err != nil {
+		return pageData{}, err
+	}
+	data := pageData{Workspaces: workspaces, Allocation: &allocationView{Summary: allocation}}
+	if s.quota != nil {
+		assigned, quotaErr := s.quota.GetForUser(ctx, user.ID)
+		if quotaErr == nil {
+			data.Allocation.Quota = assigned
+			data.Allocation.QuotaAssigned = true
+		} else if !errors.Is(quotaErr, repository.ErrNotFound) {
+			return pageData{}, quotaErr
+		}
+	}
+	return data, nil
 }
 
 func (s *Server) workspacesNew(w http.ResponseWriter, r *http.Request) {
@@ -407,8 +456,12 @@ func (s *Server) workspaceAction(w http.ResponseWriter, r *http.Request, action 
 		return
 	}
 	if err := operation(r.Context(), user.ID, r.PathValue("id")); err != nil {
-		workspaces, _ := s.workspace.ListWorkspaces(r.Context(), user.ID)
-		s.render(w, http.StatusBadRequest, "workspaces-page", pageData{Title: "Workspaces | COWS", User: user, Workspaces: workspaces, CSRFToken: s.ensureCSRF(w, r), Error: workspaceActionError(action, err)})
+		data, _ := s.workspacePageData(r.Context(), user)
+		data.Title = "Workspaces | COWS"
+		data.User = user
+		data.CSRFToken = s.ensureCSRF(w, r)
+		data.Error = workspaceActionError(action, err)
+		s.render(w, http.StatusBadRequest, "workspaces-page", data)
 		return
 	}
 	http.Redirect(w, r, "/workspaces", http.StatusSeeOther)
@@ -963,6 +1016,23 @@ func timeoutPhaseText(phase workspace.TimeoutPhase) string {
 	}
 }
 
+func operationText(operation string) string {
+	switch operation {
+	case "start":
+		return "Start"
+	case "stop":
+		return "Stop"
+	case "delete":
+		return "Delete"
+	case "timeout-stop":
+		return "Automatic stop"
+	case "timeout-delete":
+		return "Automatic deletion"
+	default:
+		return "Workspace operation"
+	}
+}
+
 func parseQuotaForm(form quotaFormData) (quota.Input, error) {
 	cpu, err := parseNonNegativeInt(form.MaxCPUMillis)
 	if err != nil {
@@ -1212,6 +1282,10 @@ func workspaceFormError(err error) string {
 	case errors.Is(err, quota.ErrCapacityUnavailable):
 		return "Host capacity is currently unavailable; try again later."
 	case errors.Is(err, quota.ErrCapacityInsufficient):
+		var capacityErr *quota.CapacityInsufficientError
+		if errors.As(err, &capacityErr) {
+			return fmt.Sprintf("The host does not have enough remaining %s capacity for this workspace.", capacityErr.Resource)
+		}
 		return "The host does not have enough remaining capacity for this workspace."
 	default:
 		return "The workspace could not be created."

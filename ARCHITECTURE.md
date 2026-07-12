@@ -151,6 +151,13 @@ and persists observed state. Docker/Podman `exited` is normalized to COWS
 being treated as deleted. Timeout actions run only after a successful
 reconciliation pass.
 
+Lifecycle operations persist their current operation, status, safe user-facing
+error category, and timestamps. Workspace pages poll a server-rendered HTMX
+fragment so observed state and operation results update without duplicating
+authoritative state in the browser. Resource summaries show allocations across
+all workspace records, including stopped workspaces, alongside the applicable
+quota or explicit unassigned/unlimited status.
+
 Quota checks use recorded allocations for all existing workspaces, including
 stopped records. A request must fit the user's CPU, memory, storage, and
 workspace-count quota and the remaining host capacity after reserved capacity.
@@ -192,6 +199,13 @@ agent may own runtime socket access, host registration, capability reporting,
 and remote lifecycle operations. That is an
 evolution point, not a reason to add RPC, a message broker, or multiple services
 now.
+
+Runtime capabilities are read from host information rather than assumed from
+the API compatibility layer. COWS distinguishes CPU, memory, process, storage,
+private-network, and label support. It refuses container creation when the CPU,
+memory, or process limits required by the template cannot be enforced. Storage
+capacity remains an admission-control setting until a portable runtime
+storage-limit implementation is selected.
 
 ## Operational direction
 

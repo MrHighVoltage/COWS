@@ -37,10 +37,14 @@ const (
 )
 
 type Capabilities struct {
-	RuntimeName            string
-	SupportsResourceLimits bool
-	SupportsPrivateNetwork bool
-	SupportsManagedLabels  bool
+	RuntimeName                   string
+	SupportsResourceLimits        bool
+	SupportsCPUResourceLimits     bool
+	SupportsMemoryResourceLimits  bool
+	SupportsPIDLimits             bool
+	SupportsStorageResourceLimits bool
+	SupportsPrivateNetwork        bool
+	SupportsManagedLabels         bool
 }
 
 type HostCapacity struct {
