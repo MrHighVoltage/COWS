@@ -85,6 +85,8 @@ func (s *Service) CreateWorkspace(ctx context.Context, actorID string, input Cre
 		ID:                              id,
 		OwnerUserID:                     user.ID,
 		TemplateID:                      template.ID,
+		TemplateRevision:                template.Revision,
+		TemplateConfiguration:           cloneTemplateConfiguration(template.Configuration),
 		Name:                            name,
 		DesiredState:                    domain.DesiredWorkspaceStopped,
 		ObservedState:                   "unknown",
@@ -98,6 +100,10 @@ func (s *Service) CreateWorkspace(ctx context.Context, actorID string, input Cre
 		UpdatedAt:                       now,
 	}
 	if err := s.store.CreateWorkspace(ctx, workspace); err != nil {
+		return domain.Workspace{}, err
+	}
+	if err := s.reserveWorkspacePorts(ctx, id, template.Configuration.Services); err != nil {
+		_ = s.store.DeleteWorkspace(ctx, id)
 		return domain.Workspace{}, err
 	}
 	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: user.ID, EventType: "workspace.created", TargetType: "workspace", TargetID: id, Metadata: map[string]string{"template_id": template.ID}})
@@ -172,6 +178,13 @@ func (s *Service) StartWorkspace(ctx context.Context, actorID, workspaceID strin
 		return s.finishOperation(ctx, value.ID, "start", "succeeded", "", operationStarted)
 	}
 	if value.RuntimeID == "" || value.ObservedState == string(runtime.StateRemoved) || value.ObservedState == "missing" {
+		configuration, err := s.effectiveConfiguration(ctx, value)
+		if err != nil {
+			return err
+		}
+		if err := s.ensureWorkspacePorts(ctx, value.ID, configuration); err != nil {
+			return err
+		}
 		spec, err := s.runtimeSpec(ctx, value)
 		if err != nil {
 			return err
@@ -387,6 +400,10 @@ func (s *Service) RunTimeouts(ctx context.Context) error {
 				_ = s.finishOperation(ctx, value.ID, "timeout-delete", "failed", err.Error(), operationStarted)
 				continue
 			}
+			if err := s.store.ReleaseWorkspacePorts(ctx, value.ID); err != nil {
+				_ = s.finishOperation(ctx, value.ID, "timeout-delete", "failed", err.Error(), operationStarted)
+				continue
+			}
 			value.ContainerDeletedAt = now
 			if value.DataRetentionSeconds > 0 {
 				value.DataArchiveEligibleAt = now.Add(time.Duration(value.DataRetentionSeconds) * time.Second)
@@ -491,11 +508,38 @@ func normalizeObservedState(state runtime.State) string {
 }
 
 func (s *Service) runtimeSpec(ctx context.Context, value domain.Workspace) (runtime.WorkspaceSpec, error) {
+	configuration, err := s.effectiveConfiguration(ctx, value)
+	if err != nil {
+		return runtime.WorkspaceSpec{}, err
+	}
 	template, err := s.store.FindTemplateByID(ctx, value.TemplateID)
 	if err != nil {
 		return runtime.WorkspaceSpec{}, err
 	}
-	return runtime.WorkspaceSpec{WorkspaceID: value.ID, Image: runtime.Image{Reference: template.ImageReference, Digest: template.ImageDigest}, Limits: runtime.ResourceLimits{CPUMillis: value.AllocatedCPUMillis, MemoryBytes: value.AllocatedMemoryBytes, StorageBytes: value.AllocatedStorageBytes}, Labels: runtime.ManagedLabels(value.ID)}, nil
+	allocations, err := s.store.ListWorkspacePortAllocations(ctx, value.ID)
+	if err != nil {
+		return runtime.WorkspaceSpec{}, err
+	}
+	resolved, err := resolveConfiguration(configuration, value.ID, value.Name, allocations)
+	if err != nil {
+		return runtime.WorkspaceSpec{}, err
+	}
+	networkMode := "none"
+	if len(resolved.Ports) > 0 {
+		networkMode = "bridge"
+	}
+	return runtime.WorkspaceSpec{WorkspaceID: value.ID, Image: runtime.Image{Reference: template.ImageReference, Digest: template.ImageDigest}, Limits: runtime.ResourceLimits{CPUMillis: value.AllocatedCPUMillis, MemoryBytes: value.AllocatedMemoryBytes, StorageBytes: value.AllocatedStorageBytes}, Labels: runtime.ManagedLabels(value.ID), Command: resolved.Command, Environment: resolved.Environment, Mounts: resolved.Mounts, Ports: resolved.Ports, NetworkMode: networkMode}, nil
+}
+
+func (s *Service) effectiveConfiguration(ctx context.Context, value domain.Workspace) (domain.TemplateConfiguration, error) {
+	if value.TemplateRevision != 0 {
+		return value.TemplateConfiguration, nil
+	}
+	template, err := s.store.FindTemplateByID(ctx, value.TemplateID)
+	if err != nil {
+		return domain.TemplateConfiguration{}, err
+	}
+	return template.Configuration, nil
 }
 
 // UpdateObservedState is called by reconciliation code, not by browser

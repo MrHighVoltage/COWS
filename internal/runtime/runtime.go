@@ -70,6 +70,33 @@ type Image struct {
 	Digest    string
 }
 
+type EnvironmentVariable struct {
+	Name      string
+	Value     string
+	Sensitive bool
+}
+
+type Mount struct {
+	Name          string
+	ContainerPath string
+	ReadOnly      bool
+}
+
+type PortBinding struct {
+	ServiceName   string
+	Protocol      string
+	ContainerPort int
+	HostPort      int
+	HostIP        string
+}
+
+type WorkspaceConfiguration struct {
+	Command     []string
+	Environment []EnvironmentVariable
+	Mounts      []Mount
+	Ports       []PortBinding
+}
+
 // WorkspaceSpec is produced from a validated administrator template and COWS
 // policy. It is never populated directly from browser input.
 type WorkspaceSpec struct {
@@ -77,6 +104,11 @@ type WorkspaceSpec struct {
 	Image       Image
 	Limits      ResourceLimits
 	Labels      map[string]string
+	Command     []string
+	Environment []EnvironmentVariable
+	Mounts      []Mount
+	Ports       []PortBinding
+	NetworkMode string
 }
 
 type WorkspaceHandle struct {

@@ -35,14 +35,17 @@ COWS ever runs multiple active instances.
 
 ## Milestone 2: Templates and runtime inspection (in progress)
 
-Validated administrator templates, role access rules, resource policy fields,
-the COWS-facing runtime interface, an inspection coordinator, and a Docker
-Engine adapter are now present. Remaining work is stronger runtime connectivity
+Validated administrator templates, role access rules, typed command/environment/
+mount/service configuration, workspace configuration snapshots, persisted port
+allocations, resource policy fields, the COWS-facing runtime interface, an
+inspection coordinator, and a Docker Engine adapter are now present. Remaining work is stronger runtime connectivity
 reporting, orphan/partial-operation reconciliation, fake-runtime contract
 coverage, and runtime-enforced storage policy. The Docker-compatible adapter
 now detects rootless Podman capabilities and refuses unsafe creates when
 required CPU, memory, or process limits are unavailable. A practical native
-second adapter for Podman remains deliberately deferred.
+second adapter for Podman remains deliberately deferred. A dedicated secret
+store, graphical gateway routing, and separate reusable administrator port-pool
+management remain future work.
 
 ## Milestone 3: Workspace lifecycle (persistence prepared)
 

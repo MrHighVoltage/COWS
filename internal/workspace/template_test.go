@@ -163,3 +163,52 @@ func TestWorkspaceCreationOwnershipAndDesiredObservedState(t *testing.T) {
 		t.Fatalf("administrator workspace list: count=%d err=%v", len(all), err)
 	}
 }
+
+func TestTemplateConfigurationSnapshotsAndAllocatesPorts(t *testing.T) {
+	service, authService, adminID, store := testService(t)
+	input := validTemplateInput()
+	input.Configuration = domain.TemplateConfiguration{
+		Command:     []string{"/bin/sh", "-l"},
+		Environment: []domain.TemplateEnvironment{{Name: "WORKSPACE_ID", Value: "{{cows.workspace_id}}"}, {Name: "DESKTOP_PORT", Value: "{{cows.service.desktop.port}}"}},
+		Mounts:      []domain.TemplateMount{{Name: "workspace-data", ContainerPath: "/workspace"}},
+		Services:    []domain.TemplateService{{Name: "desktop", Protocol: "tcp", ContainerPort: 5900, PortPool: "desktop", HostPortStart: 10000, HostPortEnd: 10099}},
+	}
+	template, err := service.CreateTemplate(context.Background(), adminID, input)
+	if err != nil {
+		t.Fatalf("create configured template: %v", err)
+	}
+	loaded, err := service.GetTemplate(context.Background(), adminID, template.ID)
+	if err != nil || loaded.Revision != 1 || len(loaded.Configuration.Services) != 1 {
+		t.Fatalf("loaded template configuration: revision=%d config=%+v err=%v", loaded.Revision, loaded.Configuration, err)
+	}
+	if _, err := authService.CreateUser(context.Background(), adminID, auth.CreateUserInput{Username: "config-user", Password: "another correct password", Role: domain.RoleUser}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	user, _, err := authService.Authenticate(context.Background(), "config-user", "another correct password")
+	if err != nil {
+		t.Fatalf("authenticate user: %v", err)
+	}
+	if err := authService.ChangePassword(context.Background(), user.ID, "another correct password", "changed config password"); err != nil {
+		t.Fatalf("change password: %v", err)
+	}
+	value, err := service.CreateWorkspace(context.Background(), user.ID, CreateWorkspaceInput{Name: "Configured workspace", TemplateID: template.ID})
+	if err != nil {
+		t.Fatalf("create configured workspace: %v", err)
+	}
+	if value.TemplateRevision != 1 || len(value.TemplateConfiguration.Services) != 1 {
+		t.Fatalf("workspace configuration snapshot: revision=%d config=%+v", value.TemplateRevision, value.TemplateConfiguration)
+	}
+	allocations, err := store.ListWorkspacePortAllocations(context.Background(), value.ID)
+	if err != nil || len(allocations) != 1 || allocations[0].HostPort < 10000 || allocations[0].HostPort > 10099 {
+		t.Fatalf("workspace port allocation: %+v err=%v", allocations, err)
+	}
+}
+
+func TestTemplateConfigurationRejectsUnknownPlaceholder(t *testing.T) {
+	service, _, adminID, _ := testService(t)
+	input := validTemplateInput()
+	input.Configuration.Environment = []domain.TemplateEnvironment{{Name: "BAD", Value: "{{cows.host_secret}}"}}
+	if _, err := service.CreateTemplate(context.Background(), adminID, input); !errors.Is(err, ErrInvalidTemplate) {
+		t.Fatalf("unknown placeholder error = %v, want invalid template", err)
+	}
+}

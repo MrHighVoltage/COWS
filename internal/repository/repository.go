@@ -50,6 +50,12 @@ type TemplateRepository interface {
 	SetTemplateEnabled(ctx context.Context, id string, enabled bool, updatedAt time.Time) error
 }
 
+type PortAllocationRepository interface {
+	ReserveWorkspacePort(ctx context.Context, allocation domain.PortAllocation) error
+	ListWorkspacePortAllocations(ctx context.Context, workspaceID string) ([]domain.PortAllocation, error)
+	ReleaseWorkspacePorts(ctx context.Context, workspaceID string) error
+}
+
 type WorkspaceRepository interface {
 	ListWorkspacesForUser(ctx context.Context, ownerUserID string) ([]domain.Workspace, error)
 	ListAllWorkspaces(ctx context.Context) ([]domain.Workspace, error)
@@ -81,6 +87,7 @@ type Store interface {
 	SessionRepository
 	AuditRepository
 	TemplateRepository
+	PortAllocationRepository
 	WorkspaceRepository
 	QuotaRepository
 	HostSettingsRepository
