@@ -7,14 +7,14 @@ environments through one authenticated HTTPS endpoint.
 
 ## Project status
 
-COWS is at **Milestone 3/4 in progress: workspace preparation and resource
-admission**. The
+COWS has completed the initial **Milestone 4: terminal access** checkpoint. The
 current code provides local administrator bootstrap, password authentication,
 server-side sessions, CSRF-protected forms, basic user management,
 administrator-managed workspace templates, Docker inspection and lifecycle
 operations, workspace persistence, quotas, fail-closed capacity checks, and
-template-controlled timeout processing. It does not provide terminal, desktop,
-or proxied application access yet. It is not production-ready.
+template-controlled timeout processing, and an authenticated browser terminal
+through the Docker-compatible runtime adapter. It does not provide graphical
+desktop or proxied application access yet. It is not production-ready.
 
 ## Goals
 
@@ -24,8 +24,8 @@ or proxied application access yet. It is not production-ready.
 - Reconcile database state with the actual Docker or Podman runtime.
 - Keep installation small: one Go service, SQLite, and locally served assets.
 
-Workspace terminal access, graphical desktop access, proxied applications, and
-file management are planned milestones. See [PROJECT.md](PROJECT.md),
+Graphical desktop access, proxied applications, and file management are planned
+milestones. See [PROJECT.md](PROJECT.md),
 [ARCHITECTURE.md](ARCHITECTURE.md), and [ROADMAP.md](ROADMAP.md) for scope and
 design decisions.
 
@@ -59,7 +59,8 @@ Docker inspection and lifecycle operations use `/var/run/docker.sock` by
 default and can be changed with `COWS_DOCKER_SOCKET` or `-docker-socket`.
 COWS creates and manages only COWS-labeled containers using approved template
 images, server-side resource limits, and isolated networking. It does not
-expose container ports or provide interactive workspace access yet.
+expose container ports. Terminal sessions use an approved `/bin/sh -l` through
+an authenticated COWS WebSocket and are not a generic container exec API.
 Rootless Podman can be used through its Docker-compatible API socket, for
 example `/run/user/1000/podman/podman.sock`; COWS checks runtime-reported
 capabilities and refuses workspace creation when required limits cannot be

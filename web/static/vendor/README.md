@@ -7,6 +7,8 @@ not load assets from a CDN.
 | --- | --- | --- | --- | --- |
 | HTMX | 2.0.10 | <https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js> | BSD-2-Clause | `71ea67185bfa8c98c39d31717c6fce5d852370fcdfd129db4543774d3145c0de` |
 | Alpine.js | 3.14.9 | <https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js> | MIT | `3ed1eed252488921df65e363d6715deb04d7f92aaedb9e52199fdf73cb1e0ad3` |
+| xterm.js | 5.3.0 | <https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js> | MIT | `f0aea0f75f48559013ae6643c2479dd737d26da42d5524e6d2b70915ae6523c7` |
+| xterm.js stylesheet | 5.3.0 | <https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css> | MIT | `832f3f2c603b43ad4351ff04970150cc7a873014276db126a6065c6dd81e4872` |
 
 The source URLs are recorded for reproducibility. Before an asset update, read
 the upstream release notes and license, replace the file, recompute its SHA-256

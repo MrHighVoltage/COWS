@@ -7,6 +7,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"io"
 	"time"
 )
 
@@ -89,6 +90,19 @@ type ObservedWorkspace struct {
 	State       State
 	ExitCode    *int
 	ObservedAt  time.Time
+}
+
+// Terminal is an interactive shell stream owned by a runtime adapter. The
+// adapter keeps runtime-specific attach details behind this small interface.
+type Terminal interface {
+	io.ReadWriteCloser
+	Resize(ctx context.Context, cols, rows int) error
+}
+
+// ShellRuntime is an optional capability. Lifecycle operations do not depend
+// on it, which keeps read-only and test runtimes useful without a shell.
+type ShellRuntime interface {
+	OpenShell(ctx context.Context, runtimeID string, command []string) (Terminal, error)
 }
 
 type Runtime interface {

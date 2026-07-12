@@ -21,6 +21,7 @@ var (
 	ErrWorkspaceNotAuthorized = errors.New("workspace access is not authorized")
 	ErrRuntimeUnavailable     = errors.New("workspace runtime unavailable")
 	ErrWorkspaceStateConflict = errors.New("workspace state conflict")
+	ErrTerminalNotAvailable   = errors.New("workspace terminal is not available")
 )
 
 type CreateWorkspaceInput struct {
@@ -312,6 +313,47 @@ func (s *Service) RecordWorkspaceConnection(ctx context.Context, actorID, worksp
 	return nil
 }
 
+// OpenTerminal authorizes the workspace and template before asking the runtime
+// adapter to attach an approved shell. The browser never supplies a runtime ID
+// or command.
+func (s *Service) OpenTerminal(ctx context.Context, actorID, workspaceID string) (runtime.Terminal, error) {
+	if s.runtime == nil {
+		return nil, ErrRuntimeUnavailable
+	}
+	value, err := s.GetWorkspace(ctx, actorID, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	if value.ObservedState != string(runtime.StateRunning) || value.RuntimeID == "" {
+		return nil, ErrWorkspaceStateConflict
+	}
+	template, err := s.store.FindTemplateByID(ctx, value.TemplateID)
+	if err != nil {
+		return nil, err
+	}
+	if !hasAccessMethod(template.AccessMethods, domain.AccessTerminal) {
+		return nil, ErrTerminalNotAvailable
+	}
+	shellRuntime, ok := s.runtime.(runtime.ShellRuntime)
+	if !ok {
+		return nil, ErrTerminalNotAvailable
+	}
+	terminal, err := shellRuntime.OpenShell(ctx, value.RuntimeID, []string{"/bin/sh", "-l"})
+	if err != nil {
+		return nil, err
+	}
+	if err := s.RecordWorkspaceConnection(ctx, actorID, workspaceID); err != nil {
+		_ = terminal.Close()
+		return nil, err
+	}
+	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "terminal.session_started", TargetType: "workspace", TargetID: workspaceID})
+	return terminal, nil
+}
+
+func (s *Service) RecordTerminalDisconnect(ctx context.Context, actorID, workspaceID string) {
+	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "terminal.session_ended", TargetType: "workspace", TargetID: workspaceID})
+}
+
 func (s *Service) RunTimeouts(ctx context.Context) error {
 	if s.runtime == nil {
 		return ErrRuntimeUnavailable
@@ -484,6 +526,15 @@ func (s *Service) requireActor(ctx context.Context, actorID string) (domain.User
 func roleAllowed(roles []domain.Role, role domain.Role) bool {
 	for _, allowed := range roles {
 		if allowed == role {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAccessMethod(methods []domain.AccessMethod, wanted domain.AccessMethod) bool {
+	for _, method := range methods {
+		if method == wanted {
 			return true
 		}
 	}
