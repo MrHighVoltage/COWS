@@ -66,6 +66,9 @@ func TestQuotaAssignmentAndScheduler(t *testing.T) {
 	store, _, adminID, studentID := quotaTestStore(t)
 	ctx := context.Background()
 	service := New(store)
+	if _, err := service.EnsureHostSettings(ctx, HostSettingsInput{HostStorageBytes: 100 << 30}); err != nil {
+		t.Fatalf("initialize host settings: %v", err)
+	}
 	assigned, err := service.Set(ctx, adminID, studentID, Input{MaxCPUMillis: 2000, MaxMemoryBytes: 4 << 30, MaxStorageBytes: 50 << 30, MaxWorkspaces: 1})
 	if err != nil {
 		t.Fatalf("set quota: %v", err)
@@ -73,7 +76,7 @@ func TestQuotaAssignmentAndScheduler(t *testing.T) {
 	if assigned.MaxWorkspaces != 1 {
 		t.Fatalf("unexpected quota: %+v", assigned)
 	}
-	scheduler := NewScheduler(store, fakeCapacity{capacity: runtime.HostCapacity{CPUMillis: 4000, MemoryBytes: 8 << 30, StorageBytes: 100 << 30}}, runtime.HostCapacity{})
+	scheduler := NewScheduler(store, fakeCapacity{capacity: runtime.HostCapacity{CPUMillis: 4000, MemoryBytes: 8 << 30}})
 	request := domain.ResourceRequest{CPUMillis: 1000, MemoryBytes: 2 << 30, StorageBytes: 20 << 30}
 	if err := scheduler.CheckCreate(ctx, studentID, request); err != nil {
 		t.Fatalf("capacity check: %v", err)
@@ -90,16 +93,50 @@ func TestQuotaAssignmentAndScheduler(t *testing.T) {
 func TestSchedulerFailsClosed(t *testing.T) {
 	store, _, adminID, studentID := quotaTestStore(t)
 	service := New(store)
+	if _, err := service.EnsureHostSettings(context.Background(), HostSettingsInput{HostStorageBytes: 100 << 30}); err != nil {
+		t.Fatalf("initialize host settings: %v", err)
+	}
 	if _, err := service.Set(context.Background(), adminID, studentID, Input{MaxCPUMillis: 2000, MaxMemoryBytes: 4 << 30, MaxStorageBytes: 50 << 30, MaxWorkspaces: 1}); err != nil {
 		t.Fatalf("set quota: %v", err)
 	}
 	request := domain.ResourceRequest{CPUMillis: 1000, MemoryBytes: 2 << 30, StorageBytes: 20 << 30}
-	missingCapacity := NewScheduler(store, fakeCapacity{err: runtime.ErrUnavailable}, runtime.HostCapacity{})
+	missingCapacity := NewScheduler(store, fakeCapacity{err: runtime.ErrUnavailable})
 	if err := missingCapacity.CheckCreate(context.Background(), studentID, request); !errors.Is(err, ErrCapacityUnavailable) {
 		t.Fatalf("missing capacity result = %v", err)
 	}
-	insufficient := NewScheduler(store, fakeCapacity{capacity: runtime.HostCapacity{CPUMillis: 1000, MemoryBytes: 1 << 30, StorageBytes: 10 << 30}}, runtime.HostCapacity{})
+	insufficient := NewScheduler(store, fakeCapacity{capacity: runtime.HostCapacity{CPUMillis: 1000, MemoryBytes: 1 << 30}})
 	if err := insufficient.CheckCreate(context.Background(), studentID, request); !errors.Is(err, ErrCapacityInsufficient) {
 		t.Fatalf("insufficient capacity result = %v", err)
+	}
+}
+
+func TestHostSettingsAreSeededOnceAndAppliedDynamically(t *testing.T) {
+	store, _, adminID, studentID := quotaTestStore(t)
+	ctx := context.Background()
+	service := New(store)
+	seeded, err := service.EnsureHostSettings(ctx, HostSettingsInput{HostStorageBytes: 100 << 30, ReservedCPUMillis: 500})
+	if err != nil {
+		t.Fatalf("seed host settings: %v", err)
+	}
+	if seeded.ReservedCPUMillis != 500 {
+		t.Fatalf("seeded settings = %+v", seeded)
+	}
+	if _, err := service.SetHostSettings(ctx, adminID, HostSettingsInput{HostStorageBytes: 40 << 30, ReservedCPUMillis: 3000, ReservedStorageBytes: 30 << 30}); err != nil {
+		t.Fatalf("update host settings: %v", err)
+	}
+	unchanged, err := service.EnsureHostSettings(ctx, HostSettingsInput{HostStorageBytes: 200 << 30, ReservedCPUMillis: 0})
+	if err != nil {
+		t.Fatalf("reseed host settings: %v", err)
+	}
+	if unchanged.HostStorageBytes != 40<<30 || unchanged.ReservedCPUMillis != 3000 {
+		t.Fatalf("administrator settings were overwritten: %+v", unchanged)
+	}
+	if _, err := service.Set(ctx, adminID, studentID, Input{MaxCPUMillis: 4000, MaxMemoryBytes: 4 << 30, MaxStorageBytes: 50 << 30, MaxWorkspaces: 1}); err != nil {
+		t.Fatalf("set quota: %v", err)
+	}
+	scheduler := NewScheduler(store, fakeCapacity{capacity: runtime.HostCapacity{CPUMillis: 8000, MemoryBytes: 8 << 30}})
+	request := domain.ResourceRequest{CPUMillis: 1000, MemoryBytes: 2 << 30, StorageBytes: 20 << 30}
+	if err := scheduler.CheckCreate(ctx, studentID, request); !errors.Is(err, ErrCapacityInsufficient) {
+		t.Fatalf("dynamic reserved capacity result = %v, want capacity insufficient", err)
 	}
 }

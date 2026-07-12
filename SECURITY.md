@@ -72,9 +72,15 @@ Resource limits must be enforced by Docker or Podman wherever possible. COWS
 quotas alone are not a containment mechanism. Capacity calculations must fail
 closed when host information is unavailable.
 
+Administrator host settings control allocatable storage and reserved host
+resources. They are persisted in SQLite, protected by administrator
+authorization and CSRF checks, and audited. The startup configuration value
+only initializes missing settings; it does not silently overwrite web-managed
+values. A zero storage capacity intentionally fails workspace admission closed.
+
 The current scheduler reserves allocations for stopped workspaces and requires
-an explicit configured host-storage capacity. It does not support overcommit,
-GPU capacity, or multiple active schedulers.
+an explicit host-storage capacity. It does not support overcommit, GPU
+capacity, or multiple active schedulers.
 
 ## Future file-manager risks
 

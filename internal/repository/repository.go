@@ -68,6 +68,11 @@ type QuotaRepository interface {
 	UpsertUserQuota(ctx context.Context, quota domain.UserQuota) error
 }
 
+type HostSettingsRepository interface {
+	FindHostSettings(ctx context.Context) (domain.HostSettings, error)
+	UpsertHostSettings(ctx context.Context, settings domain.HostSettings) error
+}
+
 type Store interface {
 	UserRepository
 	SessionRepository
@@ -75,4 +80,5 @@ type Store interface {
 	TemplateRepository
 	WorkspaceRepository
 	QuotaRepository
+	HostSettingsRepository
 }

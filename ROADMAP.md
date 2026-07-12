@@ -46,7 +46,8 @@ Podman remain deliberately deferred.
 
 Workspace persistence, owner/template foreign keys, desired/observed state,
 user creation/listing, quota assignment, and deterministic quota/host-capacity
-admission checks are now present. Add start/stop/restart/delete,
+admission checks are now present, including persistent administrator-managed
+host capacity and reserved-resource settings. Add start/stop/restart/delete,
 runtime-enforced limits, reconciliation, and administrator overrides. Exit
 requires idempotence and failure-path tests.
 

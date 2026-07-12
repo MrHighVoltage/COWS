@@ -124,9 +124,12 @@ Quota checks use recorded allocations for all existing workspaces, including
 stopped records. A request must fit the user's CPU, memory, storage, and
 workspace-count quota and the remaining host capacity after reserved capacity.
 The scheduler does not overcommit by default. Docker reports CPU and memory;
-allocatable storage is an explicit configuration value because Docker's host
-info response does not provide a portable storage-capacity contract. Unknown
-capacity fails closed.
+allocatable storage is an explicit host setting because Docker's host info
+response does not provide a portable allocatable-storage contract. The
+`COWS_HOST_STORAGE_BYTES` configuration value seeds that setting on first
+startup, but the persisted row is the source of truth afterward. Administrators
+can update storage capacity and reserved resources through the web UI without
+restarting the service. Unknown capacity fails closed, and updates are audited.
 
 ## Frontend architecture
 

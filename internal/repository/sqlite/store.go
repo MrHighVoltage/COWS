@@ -430,6 +430,41 @@ func (s *Store) UpsertUserQuota(ctx context.Context, quota domain.UserQuota) err
 	return nil
 }
 
+func (s *Store) FindHostSettings(ctx context.Context) (domain.HostSettings, error) {
+	var settings domain.HostSettings
+	var createdUnix, updatedUnix int64
+	err := s.db.QueryRowContext(ctx, `SELECT id, host_storage_bytes, reserved_cpu_millis,
+		reserved_memory_bytes, reserved_storage_bytes, created_at, updated_at
+		FROM host_settings WHERE id = 1`).Scan(&settings.ID, &settings.HostStorageBytes,
+		&settings.ReservedCPUMillis, &settings.ReservedMemoryBytes, &settings.ReservedStorageBytes,
+		&createdUnix, &updatedUnix)
+	if err == sql.ErrNoRows {
+		return domain.HostSettings{}, repository.ErrNotFound
+	}
+	if err != nil {
+		return domain.HostSettings{}, fmt.Errorf("find host settings: %w", err)
+	}
+	settings.CreatedAt = time.Unix(createdUnix, 0).UTC()
+	settings.UpdatedAt = time.Unix(updatedUnix, 0).UTC()
+	return settings, nil
+}
+
+func (s *Store) UpsertHostSettings(ctx context.Context, settings domain.HostSettings) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO host_settings
+		(id, host_storage_bytes, reserved_cpu_millis, reserved_memory_bytes, reserved_storage_bytes, created_at, updated_at)
+		VALUES (1, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET host_storage_bytes = excluded.host_storage_bytes,
+		reserved_cpu_millis = excluded.reserved_cpu_millis,
+		reserved_memory_bytes = excluded.reserved_memory_bytes,
+		reserved_storage_bytes = excluded.reserved_storage_bytes,
+		updated_at = excluded.updated_at`, settings.HostStorageBytes, settings.ReservedCPUMillis,
+		settings.ReservedMemoryBytes, settings.ReservedStorageBytes, unixOrZero(settings.CreatedAt), unixOrZero(settings.UpdatedAt))
+	if err != nil {
+		return fmt.Errorf("upsert host settings: %w", err)
+	}
+	return nil
+}
+
 const workspaceSelect = `SELECT id, owner_user_id, template_id, name, desired_state, observed_state, runtime_id,
 	observed_error, allocated_cpu_millis, allocated_memory_bytes, allocated_storage_bytes, created_at, updated_at,
 	observed_at FROM workspaces`

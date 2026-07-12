@@ -110,6 +110,16 @@ type UserQuota struct {
 	UpdatedAt       time.Time
 }
 
+type HostSettings struct {
+	ID                   int
+	HostStorageBytes     int64
+	ReservedCPUMillis    int64
+	ReservedMemoryBytes  int64
+	ReservedStorageBytes int64
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+}
+
 type ResourceRequest struct {
 	CPUMillis    int64
 	MemoryBytes  int64

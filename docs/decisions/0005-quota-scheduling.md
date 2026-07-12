@@ -20,9 +20,11 @@ an error, not permission to continue.
 ## Capacity sources
 
 The Docker adapter reports host CPU and memory through Docker `/info`. Storage
-capacity is supplied explicitly through `COWS_HOST_STORAGE_BYTES` because the
-Docker Engine API does not provide a portable allocatable-storage value for
-COWS to trust. A zero value means unknown and causes admission to fail closed.
+capacity and reserved resources are stored in the singleton `host_settings`
+record. `COWS_HOST_STORAGE_BYTES` seeds the record when it is first created;
+administrators can update it and the reserved values through the web UI without
+a process restart. A zero storage value means unknown and causes admission to
+fail closed. Administrator updates create audit events.
 
 The scheduler is intentionally local and synchronous. It is not a distributed
 scheduler and does not coordinate multiple active COWS instances.
