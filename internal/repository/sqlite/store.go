@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/cows-project/cows/internal/domain"
@@ -206,18 +207,18 @@ func (s *Store) FindTemplateByName(ctx context.Context, name string) (domain.Wor
 }
 
 func (s *Store) CreateTemplate(ctx context.Context, template domain.WorkspaceTemplate) error {
-	accessMethods, roles, err := marshalTemplateLists(template)
+	accessMethods, roles, configuration, err := marshalTemplateLists(template)
 	if err != nil {
 		return err
 	}
 	_, err = s.db.ExecContext(ctx, `INSERT INTO workspace_templates
 		(id, name, description, image_reference, image_digest, default_cpu_millis, max_cpu_millis,
 		 default_memory_bytes, max_memory_bytes, default_storage_bytes, initial_connection_timeout_seconds,
-		 stopped_retention_seconds, data_retention_seconds, access_methods_json, allowed_roles_json, enabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, template.ID, template.Name, template.Description,
+		 stopped_retention_seconds, data_retention_seconds, revision, configuration_json, access_methods_json, allowed_roles_json, enabled, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, template.ID, template.Name, template.Description,
 		template.ImageReference, template.ImageDigest, template.DefaultCPUMillis, template.MaxCPUMillis,
 		template.DefaultMemoryBytes, template.MaxMemoryBytes, template.DefaultStorageBytes, template.InitialConnectionTimeoutSeconds,
-		template.StoppedRetentionSeconds, template.DataRetentionSeconds, accessMethods, roles, boolInt(template.Enabled), template.CreatedAt.Unix(), template.UpdatedAt.Unix())
+		template.StoppedRetentionSeconds, template.DataRetentionSeconds, template.Revision, configuration, accessMethods, roles, boolInt(template.Enabled), template.CreatedAt.Unix(), template.UpdatedAt.Unix())
 	if err != nil {
 		return fmt.Errorf("create template: %w", err)
 	}
@@ -225,17 +226,17 @@ func (s *Store) CreateTemplate(ctx context.Context, template domain.WorkspaceTem
 }
 
 func (s *Store) UpdateTemplate(ctx context.Context, template domain.WorkspaceTemplate) error {
-	accessMethods, roles, err := marshalTemplateLists(template)
+	accessMethods, roles, configuration, err := marshalTemplateLists(template)
 	if err != nil {
 		return err
 	}
 	result, err := s.db.ExecContext(ctx, `UPDATE workspace_templates SET
 		name = ?, description = ?, image_reference = ?, image_digest = ?, default_cpu_millis = ?, max_cpu_millis = ?,
 		default_memory_bytes = ?, max_memory_bytes = ?, default_storage_bytes = ?, initial_connection_timeout_seconds = ?,
-		stopped_retention_seconds = ?, data_retention_seconds = ?, access_methods_json = ?, allowed_roles_json = ?, enabled = ?, updated_at = ? WHERE id = ?`, template.Name, template.Description,
+		stopped_retention_seconds = ?, data_retention_seconds = ?, revision = ?, configuration_json = ?, access_methods_json = ?, allowed_roles_json = ?, enabled = ?, updated_at = ? WHERE id = ?`, template.Name, template.Description,
 		template.ImageReference, template.ImageDigest, template.DefaultCPUMillis, template.MaxCPUMillis,
 		template.DefaultMemoryBytes, template.MaxMemoryBytes, template.DefaultStorageBytes, template.InitialConnectionTimeoutSeconds,
-		template.StoppedRetentionSeconds, template.DataRetentionSeconds, accessMethods, roles, boolInt(template.Enabled), template.UpdatedAt.Unix(), template.ID)
+		template.StoppedRetentionSeconds, template.DataRetentionSeconds, template.Revision, configuration, accessMethods, roles, boolInt(template.Enabled), template.UpdatedAt.Unix(), template.ID)
 	if err != nil {
 		return fmt.Errorf("update template: %w", err)
 	}
@@ -264,20 +265,66 @@ func (s *Store) SetTemplateEnabled(ctx context.Context, id string, enabled bool,
 	return nil
 }
 
+func (s *Store) ReserveWorkspacePort(ctx context.Context, allocation domain.PortAllocation) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO workspace_port_allocations
+		(workspace_id, service_name, protocol, container_port, port_pool, host_port)
+		VALUES (?, ?, ?, ?, ?, ?)`, allocation.WorkspaceID, allocation.ServiceName, allocation.Protocol,
+		allocation.ContainerPort, allocation.PortPool, allocation.HostPort)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "constraint") {
+			return repository.ErrConflict
+		}
+		return fmt.Errorf("reserve workspace port: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ListWorkspacePortAllocations(ctx context.Context, workspaceID string) ([]domain.PortAllocation, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT workspace_id, service_name, protocol, container_port, port_pool, host_port
+		FROM workspace_port_allocations WHERE workspace_id = ? ORDER BY service_name`, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("list workspace port allocations: %w", err)
+	}
+	defer rows.Close()
+	allocations := make([]domain.PortAllocation, 0)
+	for rows.Next() {
+		var allocation domain.PortAllocation
+		if err := rows.Scan(&allocation.WorkspaceID, &allocation.ServiceName, &allocation.Protocol, &allocation.ContainerPort, &allocation.PortPool, &allocation.HostPort); err != nil {
+			return nil, fmt.Errorf("scan workspace port allocation: %w", err)
+		}
+		allocations = append(allocations, allocation)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate workspace port allocations: %w", err)
+	}
+	return allocations, nil
+}
+
+func (s *Store) ReleaseWorkspacePorts(ctx context.Context, workspaceID string) error {
+	if _, err := s.db.ExecContext(ctx, "DELETE FROM workspace_port_allocations WHERE workspace_id = ?", workspaceID); err != nil {
+		return fmt.Errorf("release workspace ports: %w", err)
+	}
+	return nil
+}
+
 const templateSelect = `SELECT id, name, description, image_reference, image_digest, default_cpu_millis,
 	max_cpu_millis, default_memory_bytes, max_memory_bytes, default_storage_bytes, initial_connection_timeout_seconds,
-	stopped_retention_seconds, data_retention_seconds, access_methods_json, allowed_roles_json, enabled, created_at, updated_at FROM workspace_templates`
+	stopped_retention_seconds, data_retention_seconds, revision, configuration_json, access_methods_json, allowed_roles_json, enabled, created_at, updated_at FROM workspace_templates`
 
-func marshalTemplateLists(template domain.WorkspaceTemplate) (string, string, error) {
+func marshalTemplateLists(template domain.WorkspaceTemplate) (string, string, string, error) {
 	accessMethods, err := json.Marshal(template.AccessMethods)
 	if err != nil {
-		return "", "", fmt.Errorf("encode template access methods: %w", err)
+		return "", "", "", fmt.Errorf("encode template access methods: %w", err)
 	}
 	roles, err := json.Marshal(template.AllowedRoles)
 	if err != nil {
-		return "", "", fmt.Errorf("encode template roles: %w", err)
+		return "", "", "", fmt.Errorf("encode template roles: %w", err)
 	}
-	return string(accessMethods), string(roles), nil
+	configuration, err := json.Marshal(template.Configuration)
+	if err != nil {
+		return "", "", "", fmt.Errorf("encode template configuration: %w", err)
+	}
+	return string(accessMethods), string(roles), string(configuration), nil
 }
 
 func scanTemplate(row scanner) (domain.WorkspaceTemplate, error) {
@@ -285,6 +332,7 @@ func scanTemplate(row scanner) (domain.WorkspaceTemplate, error) {
 		template      domain.WorkspaceTemplate
 		accessMethods string
 		roles         string
+		configuration string
 		enabled       int
 		createdUnix   int64
 		updatedUnix   int64
@@ -292,7 +340,7 @@ func scanTemplate(row scanner) (domain.WorkspaceTemplate, error) {
 	if err := row.Scan(&template.ID, &template.Name, &template.Description, &template.ImageReference, &template.ImageDigest,
 		&template.DefaultCPUMillis, &template.MaxCPUMillis, &template.DefaultMemoryBytes, &template.MaxMemoryBytes,
 		&template.DefaultStorageBytes, &template.InitialConnectionTimeoutSeconds, &template.StoppedRetentionSeconds,
-		&template.DataRetentionSeconds, &accessMethods, &roles, &enabled, &createdUnix, &updatedUnix); err != nil {
+		&template.DataRetentionSeconds, &template.Revision, &configuration, &accessMethods, &roles, &enabled, &createdUnix, &updatedUnix); err != nil {
 		if err == sql.ErrNoRows {
 			return domain.WorkspaceTemplate{}, repository.ErrNotFound
 		}
@@ -303,6 +351,14 @@ func scanTemplate(row scanner) (domain.WorkspaceTemplate, error) {
 	}
 	if err := json.Unmarshal([]byte(roles), &template.AllowedRoles); err != nil {
 		return domain.WorkspaceTemplate{}, fmt.Errorf("decode template roles: %w", err)
+	}
+	if configuration != "" && configuration != "{}" {
+		if err := json.Unmarshal([]byte(configuration), &template.Configuration); err != nil {
+			return domain.WorkspaceTemplate{}, fmt.Errorf("decode template configuration: %w", err)
+		}
+	}
+	if template.Revision <= 0 {
+		template.Revision = 1
 	}
 	template.Enabled = enabled != 0
 	template.CreatedAt = time.Unix(createdUnix, 0).UTC()
@@ -328,12 +384,12 @@ func (s *Store) FindWorkspaceByOwnerAndName(ctx context.Context, ownerUserID, na
 
 func (s *Store) CreateWorkspace(ctx context.Context, workspace domain.Workspace) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO workspaces
-		(id, owner_user_id, template_id, name, desired_state, observed_state, runtime_id, observed_error,
+		(id, owner_user_id, template_id, template_revision, template_configuration_json, name, desired_state, observed_state, runtime_id, observed_error,
 		 allocated_cpu_millis, allocated_memory_bytes, allocated_storage_bytes, initial_connection_timeout_seconds,
 		 stopped_retention_seconds, data_retention_seconds, created_at, updated_at, observed_at, started_at,
 		 last_connected_at, stopped_at, container_deleted_at, data_archive_eligible_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, workspace.ID, workspace.OwnerUserID, workspace.TemplateID,
-		workspace.Name, workspace.DesiredState, workspace.ObservedState, workspace.RuntimeID, workspace.ObservedError,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, workspace.ID, workspace.OwnerUserID, workspace.TemplateID,
+		workspace.TemplateRevision, templateConfigurationJSON(workspace.TemplateConfiguration), workspace.Name, workspace.DesiredState, workspace.ObservedState, workspace.RuntimeID, workspace.ObservedError,
 		workspace.AllocatedCPUMillis, workspace.AllocatedMemoryBytes, workspace.AllocatedStorageBytes,
 		workspace.InitialConnectionTimeoutSeconds, workspace.StoppedRetentionSeconds, workspace.DataRetentionSeconds,
 		unixOrZero(workspace.CreatedAt), unixOrZero(workspace.UpdatedAt), unixOrZero(workspace.ObservedAt), unixOrZero(workspace.StartedAt),
@@ -520,7 +576,7 @@ func (s *Store) UpsertHostSettings(ctx context.Context, settings domain.HostSett
 }
 
 const workspaceSelect = `SELECT id, owner_user_id, template_id, name, desired_state, observed_state, runtime_id,
-	observed_error, allocated_cpu_millis, allocated_memory_bytes, allocated_storage_bytes, created_at, updated_at,
+	template_revision, template_configuration_json, observed_error, allocated_cpu_millis, allocated_memory_bytes, allocated_storage_bytes, created_at, updated_at,
 	observed_at, initial_connection_timeout_seconds, stopped_retention_seconds, data_retention_seconds,
 	started_at, last_connected_at, stopped_at, container_deleted_at, data_archive_eligible_at,
 	operation, operation_status, operation_error, operation_started_at, operation_updated_at FROM workspaces`
@@ -549,6 +605,7 @@ func scanWorkspace(row scanner) (domain.Workspace, error) {
 	var (
 		workspace                                                                 domain.Workspace
 		desiredState                                                              string
+		templateConfiguration                                                     string
 		createdUnix                                                               int64
 		updatedUnix                                                               int64
 		observedAtUnix                                                            int64
@@ -557,7 +614,7 @@ func scanWorkspace(row scanner) (domain.Workspace, error) {
 		operation, operationStatus, operationError                                string
 	)
 	if err := row.Scan(&workspace.ID, &workspace.OwnerUserID, &workspace.TemplateID, &workspace.Name, &desiredState,
-		&workspace.ObservedState, &workspace.RuntimeID, &workspace.ObservedError, &workspace.AllocatedCPUMillis,
+		&workspace.ObservedState, &workspace.RuntimeID, &workspace.TemplateRevision, &templateConfiguration, &workspace.ObservedError, &workspace.AllocatedCPUMillis,
 		&workspace.AllocatedMemoryBytes, &workspace.AllocatedStorageBytes, &createdUnix, &updatedUnix,
 		&observedAtUnix, &workspace.InitialConnectionTimeoutSeconds, &workspace.StoppedRetentionSeconds,
 		&workspace.DataRetentionSeconds, &startedUnix, &connectedUnix, &stoppedUnix, &deletedUnix, &archiveEligibleUnix,
@@ -583,6 +640,11 @@ func scanWorkspace(row scanner) (domain.Workspace, error) {
 	workspace.OperationError = operationError
 	workspace.OperationStartedAt = timeFromUnix(operationStartedUnix)
 	workspace.OperationUpdatedAt = timeFromUnix(operationUpdatedUnix)
+	if templateConfiguration != "" && templateConfiguration != "{}" {
+		if err := json.Unmarshal([]byte(templateConfiguration), &workspace.TemplateConfiguration); err != nil {
+			return domain.Workspace{}, fmt.Errorf("decode workspace template configuration: %w", err)
+		}
+	}
 	return workspace, nil
 }
 
@@ -608,6 +670,14 @@ func unixOrZero(value time.Time) int64 {
 		return 0
 	}
 	return value.Unix()
+}
+
+func templateConfigurationJSON(value domain.TemplateConfiguration) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "{}"
+	}
+	return string(encoded)
 }
 
 func timeFromUnix(value int64) time.Time {

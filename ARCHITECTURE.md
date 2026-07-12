@@ -39,6 +39,23 @@ with Docker or Podman. The runtime socket should be available only to the COWS
 process, or later to a narrowly privileged host agent. Containers use private
 networking where practical; no workspace port is a public routing mechanism.
 
+## Template runtime configuration
+
+Templates contain a validated, administrator-controlled configuration document
+for command, environment, managed mounts, and internal services. The backend
+snapshots this document into each workspace and resolves a small allowlist of
+COWS placeholders only after authorizing the request and allocating resources.
+Users submit neither Docker arguments nor rendered values. Service host ports
+are reserved in SQLite from administrator-defined ranges and are bound to
+loopback by the Docker-compatible adapter. This prepares future terminal,
+desktop, and application gateways without exposing container ports directly.
+
+The configuration is intentionally not a generic Docker `HostConfig` map. The
+resolver rejects unknown placeholders, duplicate names, invalid paths, unsafe
+environment names, and dangerous runtime configuration. Managed mounts become
+named volumes derived from the COWS workspace ID; arbitrary host paths are not
+available through templates.
+
 Terminal, desktop, and proxy sessions are authenticated COWS sessions whose
 targets are selected from server-side workspace records and template policy.
 They are not generic reverse proxies.

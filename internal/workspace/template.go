@@ -41,6 +41,7 @@ type TemplateInput struct {
 	InitialConnectionTimeoutSeconds int64
 	StoppedRetentionSeconds         int64
 	DataRetentionSeconds            int64
+	Configuration                   domain.TemplateConfiguration
 	AccessMethods                   []domain.AccessMethod
 	AllowedRoles                    []domain.Role
 	Enabled                         bool
@@ -114,6 +115,8 @@ func (s *Service) CreateTemplate(ctx context.Context, actorID string, input Temp
 		InitialConnectionTimeoutSeconds: input.InitialConnectionTimeoutSeconds,
 		StoppedRetentionSeconds:         input.StoppedRetentionSeconds,
 		DataRetentionSeconds:            input.DataRetentionSeconds,
+		Revision:                        1,
+		Configuration:                   cloneTemplateConfiguration(input.Configuration),
 		AccessMethods:                   append([]domain.AccessMethod(nil), input.AccessMethods...),
 		AllowedRoles:                    append([]domain.Role(nil), input.AllowedRoles...),
 		Enabled:                         input.Enabled,
@@ -155,6 +158,11 @@ func (s *Service) UpdateTemplate(ctx context.Context, actorID, id string, input 
 	existing.InitialConnectionTimeoutSeconds = input.InitialConnectionTimeoutSeconds
 	existing.StoppedRetentionSeconds = input.StoppedRetentionSeconds
 	existing.DataRetentionSeconds = input.DataRetentionSeconds
+	existing.Revision++
+	if existing.Revision <= 0 {
+		existing.Revision = 1
+	}
+	existing.Configuration = cloneTemplateConfiguration(input.Configuration)
 	existing.AccessMethods = append([]domain.AccessMethod(nil), input.AccessMethods...)
 	existing.AllowedRoles = append([]domain.Role(nil), input.AllowedRoles...)
 	existing.Enabled = input.Enabled
@@ -227,6 +235,9 @@ func validateTemplate(input TemplateInput) error {
 	if !validTimeout(input.InitialConnectionTimeoutSeconds) || !validTimeout(input.StoppedRetentionSeconds) || !validTimeout(input.DataRetentionSeconds) {
 		return ErrInvalidTemplate
 	}
+	if err := validateTemplateConfiguration(input.Configuration); err != nil {
+		return err
+	}
 	if len(input.AccessMethods) == 0 || hasDuplicateAccessMethod(input.AccessMethods) {
 		return ErrInvalidTemplate
 	}
@@ -244,6 +255,15 @@ func validateTemplate(input TemplateInput) error {
 		}
 	}
 	return nil
+}
+
+func cloneTemplateConfiguration(value domain.TemplateConfiguration) domain.TemplateConfiguration {
+	return domain.TemplateConfiguration{
+		Command:     append([]string(nil), value.Command...),
+		Environment: append([]domain.TemplateEnvironment(nil), value.Environment...),
+		Mounts:      append([]domain.TemplateMount(nil), value.Mounts...),
+		Services:    append([]domain.TemplateService(nil), value.Services...),
+	}
 }
 
 func validTimeout(seconds int64) bool {

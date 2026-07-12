@@ -72,6 +72,8 @@ type WorkspaceTemplate struct {
 	InitialConnectionTimeoutSeconds int64
 	StoppedRetentionSeconds         int64
 	DataRetentionSeconds            int64
+	Revision                        int64
+	Configuration                   TemplateConfiguration
 	AccessMethods                   []AccessMethod
 	AllowedRoles                    []Role
 	Enabled                         bool
@@ -90,6 +92,8 @@ type Workspace struct {
 	ID                              string
 	OwnerUserID                     string
 	TemplateID                      string
+	TemplateRevision                int64
+	TemplateConfiguration           TemplateConfiguration
 	Name                            string
 	DesiredState                    DesiredWorkspaceState
 	ObservedState                   string

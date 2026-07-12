@@ -30,6 +30,9 @@ partial operations, and compromised or misconfigured images.
 - Every backend operation checks authentication and authorization independently.
 - Browser requests never choose runtime targets, internal URLs, arbitrary ports,
   images, mounts, capabilities, or runtime arguments.
+- Template configuration is administrator-controlled, typed, and resolved on
+  the server. Users cannot edit template JSON, placeholders, ports, mounts, or
+  runtime parameters.
 - Sessions use secure, HttpOnly, SameSite cookies where appropriate, with CSRF
   protection for state-changing requests.
 - User-controlled values are escaped by `html/template` and are not inserted
@@ -56,6 +59,9 @@ partial operations, and compromised or misconfigured images.
   and any future archive implementation must be separately audited.
 - Runtime objects without a matching COWS workspace are treated as orphaned
   observations and are not automatically removed by reconciliation.
+- Template placeholders cannot access host environment variables, host paths,
+  secrets, or arbitrary runtime objects. Port bindings are loopback-only and
+  managed mounts are named volumes; host bind mounts are not supported.
 
 ## Access gateway risks
 
