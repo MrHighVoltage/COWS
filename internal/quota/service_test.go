@@ -110,6 +110,29 @@ func TestSchedulerFailsClosed(t *testing.T) {
 	}
 }
 
+func TestAdministratorsAreUnlimitedWithoutQuotaAndZeroLimitsAreUnlimited(t *testing.T) {
+	store, _, adminID, studentID := quotaTestStore(t)
+	ctx := context.Background()
+	service := New(store)
+	if _, err := service.EnsureHostSettings(ctx, HostSettingsInput{HostStorageBytes: 100 << 30}); err != nil {
+		t.Fatalf("initialize host settings: %v", err)
+	}
+	scheduler := NewScheduler(store, fakeCapacity{capacity: runtime.HostCapacity{CPUMillis: 4000, MemoryBytes: 8 << 30}})
+	request := domain.ResourceRequest{CPUMillis: 1000, MemoryBytes: 2 << 30, StorageBytes: 20 << 30}
+	if err := scheduler.CheckCreate(ctx, adminID, request); err != nil {
+		t.Fatalf("administrator without quota result = %v, want allowed by user quota", err)
+	}
+	if err := scheduler.CheckCreate(ctx, studentID, request); !errors.Is(err, ErrQuotaUnavailable) {
+		t.Fatalf("ordinary user without quota result = %v, want quota unavailable", err)
+	}
+	if _, err := service.Set(ctx, adminID, studentID, Input{}); err != nil {
+		t.Fatalf("set unlimited quota: %v", err)
+	}
+	if err := scheduler.CheckCreate(ctx, studentID, request); err != nil {
+		t.Fatalf("zero-valued unlimited quota result = %v, want allowed", err)
+	}
+}
+
 func TestHostSettingsAreSeededOnceAndAppliedDynamically(t *testing.T) {
 	store, _, adminID, studentID := quotaTestStore(t)
 	ctx := context.Background()

@@ -6,16 +6,21 @@ Status: accepted for the workspace preparation milestone
 
 COWS uses a deterministic admission check before recording a workspace:
 
-1. Load the user's assigned CPU, memory, storage, and workspace-count quota.
-2. Sum allocations for the user's existing workspace records.
-3. Reject the request if user quota would be exceeded.
-4. Load host CPU, memory, and storage capacity.
-5. Subtract reserved capacity and all existing workspace allocations.
-6. Reject the request if any requested resource does not fit.
+1. Load the user and determine whether the active account is an administrator.
+2. Load the user's assigned CPU, memory, storage, and workspace-count quota.
+3. Sum allocations for the user's existing workspace records.
+4. Reject the request if an ordinary user has no assigned quota or if an
+   assigned finite quota would be exceeded.
+5. Load host CPU, memory, and storage capacity.
+6. Subtract reserved capacity and all existing workspace allocations.
+7. Reject the request if any requested resource does not fit.
 
 There is no unsafe overcommit. Allocations remain reserved for stopped
-workspaces under the initial policy. A missing quota or unknown host capacity is
-an error, not permission to continue.
+workspaces under the initial policy. A missing quota is an error for ordinary
+users, while administrators are unlimited when no quota row is assigned. A
+zero value in an assigned quota explicitly means unlimited for that resource.
+Unknown host capacity remains an error for every user, including
+administrators.
 
 ## Capacity sources
 

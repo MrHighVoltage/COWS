@@ -964,19 +964,19 @@ func timeoutPhaseText(phase workspace.TimeoutPhase) string {
 }
 
 func parseQuotaForm(form quotaFormData) (quota.Input, error) {
-	cpu, err := parsePositiveInt(form.MaxCPUMillis)
+	cpu, err := parseNonNegativeInt(form.MaxCPUMillis)
 	if err != nil {
 		return quota.Input{}, quota.ErrInvalidQuota
 	}
-	memory, err := parseResource(form.MaxMemoryMiB, 1<<20)
+	memory, err := parseNonNegativeResource(form.MaxMemoryMiB, 1<<20)
 	if err != nil {
 		return quota.Input{}, quota.ErrInvalidQuota
 	}
-	storage, err := parseResource(form.MaxStorageGiB, 1<<30)
+	storage, err := parseNonNegativeResource(form.MaxStorageGiB, 1<<30)
 	if err != nil {
 		return quota.Input{}, quota.ErrInvalidQuota
 	}
-	workspaces, err := parsePositiveInt(form.MaxWorkspaces)
+	workspaces, err := parseNonNegativeInt(form.MaxWorkspaces)
 	if err != nil {
 		return quota.Input{}, quota.ErrInvalidQuota
 	}
@@ -1248,7 +1248,7 @@ func workspaceActionVerb(action string) string {
 
 func quotaFormError(err error) string {
 	if errors.Is(err, quota.ErrInvalidQuota) {
-		return "Enter positive CPU, memory, storage, and workspace limits within the allowed ranges."
+		return "Enter zero or positive CPU, memory, storage, and workspace limits within the allowed ranges. Zero means unlimited."
 	}
 	return "The quota could not be saved."
 }
