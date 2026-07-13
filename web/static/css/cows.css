@@ -96,6 +96,10 @@ code { color: #465866; font-size: .82rem; }
 .terminal { min-height: 28rem; padding: .75rem; overflow: hidden; border: 1px solid #263746; border-radius: .35rem; color: #f4f6f8; background: #101820; }
 .terminal .xterm { height: 26rem; }
 .terminal-panel .alert { margin-bottom: 0; }
+.desktop-panel { padding-bottom: 1rem; }
+.desktop-display { min-height: 32rem; overflow: hidden; border: 1px solid #263746; border-radius: .35rem; background: #101820; }
+.desktop-display canvas { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+.desktop-panel .alert { margin-bottom: 0; }
 .quota-form { display: grid; grid-template-columns: repeat(4, minmax(4rem, 1fr)) auto; gap: .35rem; align-items: center; min-width: 28rem; }
 .quota-form input { min-height: 2rem; width: 100%; padding: .35rem; border: 1px solid #9fb0bd; border-radius: .3rem; font: inherit; }
 .muted { color: #647482; font-size: .85rem; }

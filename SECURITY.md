@@ -65,11 +65,13 @@ partial operations, and compromised or misconfigured images.
 
 ## Access gateway risks
 
-Terminal and desktop WebSockets must validate the authenticated user, workspace
+Terminal and desktop WebSockets validate the authenticated user, workspace
 ownership or administrator permission, workspace state, template permission,
-and session expiry. The server selects the runtime target and handles terminal
-resize; the browser cannot submit a container ID or address. noVNC must route
-through COWS and must never expose a workspace VNC port.
+and session expiry. The server selects the runtime target and internal service
+port; the browser cannot submit a container ID, address, or port. The desktop
+gateway accepts only the template's `desktop` TCP service, verifies its
+loopback-only runtime mapping, and bridges raw VNC traffic through COWS. noVNC
+must never expose a workspace VNC port.
 
 The web-application proxy must be allowlisted by template and internal port.
 It is not a generic URL proxy. SSRF, redirects, cookies, host headers, origins,
@@ -118,9 +120,10 @@ Local username/password authentication, mandatory first-login password change,
 stored email fields, server-side opaque sessions, CSRF protected forms,
 administrator checks, login rate limiting, and basic audit persistence now
 exist. The implementation has no password recovery, account deletion workflow,
-desktop, proxy, file manager, or production HTTPS configuration. Terminal
-access currently uses a fixed shell through the Docker-compatible exec API and
-requires runtime support for the selected container. Docker lifecycle
+generic application proxy, file manager, or production HTTPS configuration.
+Terminal access uses a fixed shell and desktop access uses a template-approved
+VNC service through the Docker-compatible runtime adapter; both require runtime
+support for the selected container. Docker lifecycle
 operations are limited to approved images,
 labels, resource limits, and isolated network policy; runtime-specific
 integration and audit failure handling still need further review. Operational

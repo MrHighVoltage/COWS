@@ -137,6 +137,13 @@ type ShellRuntime interface {
 	OpenShell(ctx context.Context, runtimeID string, command []string) (Terminal, error)
 }
 
+// InternalServiceRuntime opens a server-selected TCP service through the
+// runtime's private loopback forwarding. It is intentionally not a generic
+// browser proxy capability.
+type InternalServiceRuntime interface {
+	OpenInternalService(ctx context.Context, runtimeID string, containerPort, hostPort int) (io.ReadWriteCloser, error)
+}
+
 type Runtime interface {
 	Name(ctx context.Context) (string, error)
 	Capabilities(ctx context.Context) (Capabilities, error)

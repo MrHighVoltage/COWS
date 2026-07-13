@@ -1,8 +1,10 @@
 package workspace
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -13,14 +15,21 @@ import (
 )
 
 type lifecycleRuntime struct {
-	created  int
-	started  int
-	stopped  int
-	removed  int
-	lastID   string
-	lastSpec runtime.WorkspaceSpec
-	observed []runtime.ObservedWorkspace
+	created                      int
+	started                      int
+	stopped                      int
+	removed                      int
+	lastID                       string
+	lastSpec                     runtime.WorkspaceSpec
+	observed                     []runtime.ObservedWorkspace
+	internalServiceRuntimeID     string
+	internalServiceContainerPort int
+	internalServiceHostPort      int
 }
+
+type desktopStream struct{ bytes.Buffer }
+
+func (desktopStream) Close() error { return nil }
 
 func (r *lifecycleRuntime) Name(context.Context) (string, error) {
 	return runtime.RuntimeNameDocker, nil
@@ -45,6 +54,12 @@ func (r *lifecycleRuntime) StopWorkspace(context.Context, string, time.Duration)
 func (r *lifecycleRuntime) RemoveWorkspace(context.Context, string) error { r.removed++; return nil }
 func (r *lifecycleRuntime) InspectWorkspace(context.Context, string) (runtime.ObservedWorkspace, error) {
 	return runtime.ObservedWorkspace{}, nil
+}
+func (r *lifecycleRuntime) OpenInternalService(_ context.Context, runtimeID string, containerPort, hostPort int) (io.ReadWriteCloser, error) {
+	r.internalServiceRuntimeID = runtimeID
+	r.internalServiceContainerPort = containerPort
+	r.internalServiceHostPort = hostPort
+	return &desktopStream{}, nil
 }
 
 func TestLifecycleTimeoutStopsAndDeletesWorkspace(t *testing.T) {
@@ -157,6 +172,45 @@ func TestManualDeleteRemovesWorkspaceRecordAfterContainer(t *testing.T) {
 	}
 	if allocations.WorkspaceCount != 0 || allocations.Resources.CPUMillis != 0 || allocations.Resources.MemoryBytes != 0 || allocations.Resources.StorageBytes != 0 {
 		t.Fatalf("allocations after delete = %+v, want zero", allocations)
+	}
+}
+
+func TestOpenDesktopUsesApprovedAllocatedService(t *testing.T) {
+	service, authService, adminID, store := testService(t)
+	input := validTemplateInput()
+	input.Configuration = domain.TemplateConfiguration{Services: []domain.TemplateService{{Name: "desktop", Protocol: "tcp", ContainerPort: 5900, PortPool: "desktop", HostPortStart: 10000, HostPortEnd: 10000}}}
+	template, err := service.CreateTemplate(context.Background(), adminID, input)
+	if err != nil {
+		t.Fatalf("create desktop template: %v", err)
+	}
+	if _, err := authService.CreateUser(context.Background(), adminID, auth.CreateUserInput{Username: "desktop-user", Password: "another correct password", Role: domain.RoleUser}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	user, _, err := authService.Authenticate(context.Background(), "desktop-user", "another correct password")
+	if err != nil {
+		t.Fatalf("authenticate user: %v", err)
+	}
+	if err := authService.ChangePassword(context.Background(), user.ID, "another correct password", "changed desktop password"); err != nil {
+		t.Fatalf("change password: %v", err)
+	}
+	value, err := service.CreateWorkspace(context.Background(), user.ID, CreateWorkspaceInput{Name: "Desktop workspace", TemplateID: template.ID})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	fake := &lifecycleRuntime{}
+	service = NewWithRuntime(store, fake)
+	if err := service.UpdateObservedState(context.Background(), value.ID, "running", "runtime-123", "", time.Now()); err != nil {
+		t.Fatalf("mark workspace running: %v", err)
+	}
+	connection, err := service.OpenDesktop(context.Background(), user.ID, value.ID)
+	if err != nil {
+		t.Fatalf("open desktop: %v", err)
+	}
+	if err := connection.Close(); err != nil {
+		t.Fatalf("close desktop: %v", err)
+	}
+	if fake.internalServiceRuntimeID != "runtime-123" || fake.internalServiceContainerPort != 5900 || fake.internalServiceHostPort != 10000 {
+		t.Fatalf("desktop target = %q:%d -> %d", fake.internalServiceRuntimeID, fake.internalServiceContainerPort, fake.internalServiceHostPort)
 	}
 }
 

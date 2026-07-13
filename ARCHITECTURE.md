@@ -70,6 +70,16 @@ resize forwarding, and start/end audit events. The Docker-compatible adapter
 uses the runtime exec API's upgraded stream and keeps the runtime-specific
 transport details inside the adapter.
 
+The desktop gateway uses the same access boundary but only for a service named
+`desktop` in the workspace's snapshotted template configuration. The service's
+persisted host-port allocation is loopback-only. Before dialing, the Docker
+adapter verifies that the managed container is running and that its inspected
+TCP mapping matches the expected container and host ports. COWS then bridges
+the raw VNC stream to a local noVNC core client over an authenticated WebSocket.
+There is no browser-selected target, arbitrary port, or generic reverse-proxy
+route. Desktop sessions use the same 15-minute idle and one-hour maximum
+lifetimes as terminal sessions.
+
 ## Request and state flow
 
 ```mermaid
