@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -207,6 +208,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /workspaces/{id}/delete", s.workspaceDelete)
 	mux.HandleFunc("GET /workspaces/{id}/terminal", s.workspaceTerminalPage)
 	mux.HandleFunc("GET /workspaces/{id}/terminal/ws", s.workspaceTerminalWebSocket)
+	mux.HandleFunc("GET /workspaces/{id}/desktop", s.workspaceDesktopPage)
+	mux.HandleFunc("GET /workspaces/{id}/desktop/ws", s.workspaceDesktopWebSocket)
 	mux.HandleFunc("GET /admin/users", s.adminUsers)
 	mux.HandleFunc("GET /admin/users/new", s.adminUsersNew)
 	mux.HandleFunc("POST /admin/users", s.adminUsersCreate)
@@ -629,6 +632,109 @@ func readTerminalOutput(ctx context.Context, terminal runtime.Terminal, output c
 			return
 		}
 	}
+}
+
+func (s *Server) workspaceDesktopPage(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	value, err := s.workspace.GetWorkspace(r.Context(), user.ID, r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "workspace not found", http.StatusNotFound)
+		return
+	}
+	s.render(w, http.StatusOK, "workspace-desktop-page", pageData{Title: "Desktop | COWS", User: user, ActiveWorkspace: &value})
+}
+
+func (s *Server) workspaceDesktopWebSocket(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	desktop, err := s.workspace.OpenDesktop(r.Context(), user.ID, r.PathValue("id"))
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, repository.ErrNotFound) {
+			status = http.StatusNotFound
+		} else if errors.Is(err, workspace.ErrWorkspaceNotAuthorized) || errors.Is(err, workspace.ErrDesktopNotAvailable) {
+			status = http.StatusForbidden
+		}
+		http.Error(w, desktopErrorText(err), status)
+		return
+	}
+	defer desktop.Close()
+	defer s.workspace.RecordDesktopDisconnect(context.Background(), user.ID, r.PathValue("id"))
+
+	conn, err := websocket.Accept(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.CloseNow()
+	sessionCookie, err := r.Cookie(sessionCookieName)
+	if err != nil || sessionCookie.Value == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), terminalMaxLifetime)
+	defer cancel()
+	browser := websocket.NetConn(ctx, conn, websocket.MessageBinary)
+	defer browser.Close()
+
+	lastActivity := &atomic.Int64{}
+	lastActivity.Store(time.Now().UnixNano())
+	browserStream := &activityStream{ReadWriteCloser: browser, lastActivity: lastActivity}
+	desktopStream := &activityStream{ReadWriteCloser: desktop, lastActivity: lastActivity}
+	done := make(chan error, 2)
+	go copyDesktopStream(desktopStream, browserStream, done)
+	go copyDesktopStream(browserStream, desktopStream, done)
+
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	sessionTicker := time.NewTicker(terminalSessionCheckInterval)
+	defer sessionTicker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			if time.Since(time.Unix(0, lastActivity.Load())) >= terminalIdleTimeout {
+				return
+			}
+		case <-sessionTicker.C:
+			current, sessionErr := s.auth.UserForSession(ctx, sessionCookie.Value)
+			if sessionErr != nil || current.ID != user.ID || current.Disabled || current.MustChangePassword {
+				return
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+type activityStream struct {
+	io.ReadWriteCloser
+	lastActivity *atomic.Int64
+}
+
+func (s *activityStream) Read(value []byte) (int, error) {
+	count, err := s.ReadWriteCloser.Read(value)
+	if count > 0 {
+		s.lastActivity.Store(time.Now().UnixNano())
+	}
+	return count, err
+}
+
+func (s *activityStream) Write(value []byte) (int, error) {
+	count, err := s.ReadWriteCloser.Write(value)
+	if count > 0 {
+		s.lastActivity.Store(time.Now().UnixNano())
+	}
+	return count, err
+}
+
+func copyDesktopStream(destination io.Writer, source io.Reader, done chan<- error) {
+	_, err := io.Copy(destination, source)
+	done <- err
 }
 
 func (s *Server) logoutPost(w http.ResponseWriter, r *http.Request) {
@@ -1507,6 +1613,19 @@ func terminalErrorText(err error) string {
 		return "Terminal access is not enabled for this workspace template."
 	default:
 		return "The terminal session could not be opened."
+	}
+}
+
+func desktopErrorText(err error) string {
+	switch {
+	case errors.Is(err, workspace.ErrRuntimeUnavailable), errors.Is(err, runtime.ErrUnavailable):
+		return "The container runtime is unavailable."
+	case errors.Is(err, workspace.ErrWorkspaceStateConflict), errors.Is(err, runtime.ErrConflict):
+		return "The workspace must be running with an approved desktop service."
+	case errors.Is(err, workspace.ErrDesktopNotAvailable):
+		return "Desktop access is not enabled or configured for this workspace template."
+	default:
+		return "The graphical desktop session could not be opened."
 	}
 }
 

@@ -165,6 +165,23 @@ func TestCapabilitiesDetectCgroupV2ResourceLimits(t *testing.T) {
 	}
 }
 
+func TestOpenInternalServiceRequiresLoopbackPortMapping(t *testing.T) {
+	adapter := &Adapter{client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/version":
+			return dockerResponse(http.StatusOK, `{"ApiVersion":"1.45"}`), nil
+		case "/v1.45/containers/abcdef0123456789/json":
+			return dockerResponse(http.StatusOK, `{"Id":"abcdef0123456789","State":{"Status":"running"},"NetworkSettings":{"Ports":{"5900/tcp":[{"HostIp":"0.0.0.0","HostPort":"10000"}]}}}`), nil
+		default:
+			return dockerResponse(http.StatusNotFound, `not found`), nil
+		}
+	})}}
+	_, err := adapter.OpenInternalService(context.Background(), "abcdef0123456789", 5900, 10000)
+	if !errors.Is(err, runtime.ErrConflict) {
+		t.Fatalf("internal service error = %v, want loopback mapping conflict", err)
+	}
+}
+
 func TestOpenShellUsesDockerExecUpgradeAndResize(t *testing.T) {
 	var calls []string
 	stream := &testStream{Reader: strings.NewReader("shell> ")}

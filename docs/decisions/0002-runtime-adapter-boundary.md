@@ -13,9 +13,10 @@ The initial interface covers capability reporting, managed-workspace listing,
 create/start/stop/remove lifecycle operations, and inspection. The selected
 Docker adapter currently implements only capability reporting, host capacity,
 managed-workspace listing, and inspection; mutation returns `ErrNotSupported`.
-Terminal attach,
-desktop forwarding, logs, and resource sampling remain separate design work;
-they are not forced into this base interface.
+Terminal attach, logs, and resource sampling remain separate design work; they
+are not forced into this base interface. A separate optional
+`InternalServiceRuntime` interface supports the dedicated, server-selected VNC
+desktop gateway without turning the base runtime contract into a generic proxy.
 
 ## State and reconciliation semantics
 
@@ -39,7 +40,7 @@ targets; those values remain service-side data.
 - Docker or Podman SDK dependencies.
 - Container creation, start/stop, or deletion.
 - Runtime-specific resource-limit translation.
-- Terminal, graphical desktop, proxy, and log-stream interfaces.
+- Terminal, generic graphical desktop, proxy, and log-stream interfaces.
 - Multi-host agents and remote transport.
 
 The interface-only inspection coordinator now exercises the read-only portion

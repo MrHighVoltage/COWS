@@ -350,6 +350,34 @@ func (a *Adapter) OpenShell(ctx context.Context, runtimeID string, command []str
 	return &terminal{stream: stream, adapter: a, execID: created.ID}, nil
 }
 
+func (a *Adapter) OpenInternalService(ctx context.Context, runtimeID string, containerPort, hostPort int) (io.ReadWriteCloser, error) {
+	if !validRuntimeID(runtimeID) || containerPort < 1 || containerPort > 65535 || hostPort < 1024 || hostPort > 65535 {
+		return nil, runtime.ErrConflict
+	}
+	var container containerInspect
+	if err := a.get(ctx, "/containers/"+url.PathEscape(runtimeID)+"/json", &container); err != nil {
+		return nil, err
+	}
+	if stateFromDocker(container.State.Status) != runtime.StateRunning {
+		return nil, runtime.ErrConflict
+	}
+	bindings, ok := container.NetworkSettings.Ports[strconv.Itoa(containerPort)+"/tcp"]
+	if !ok {
+		return nil, runtime.ErrConflict
+	}
+	expectedHostPort := strconv.Itoa(hostPort)
+	for _, binding := range bindings {
+		if binding.HostPort == expectedHostPort && binding.HostIP == "127.0.0.1" {
+			connection, err := (&net.Dialer{Timeout: defaultRequestTimeout}).DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", expectedHostPort))
+			if err != nil {
+				return nil, fmt.Errorf("%w: connect internal service: %v", runtime.ErrUnavailable, err)
+			}
+			return connection, nil
+		}
+	}
+	return nil, runtime.ErrConflict
+}
+
 type terminal struct {
 	stream  io.ReadWriteCloser
 	adapter *Adapter
@@ -383,6 +411,12 @@ type containerInspect struct {
 		Status   string `json:"Status"`
 		ExitCode int    `json:"ExitCode"`
 	} `json:"State"`
+	NetworkSettings struct {
+		Ports map[string][]struct {
+			HostIP   string `json:"HostIp"`
+			HostPort string `json:"HostPort"`
+		} `json:"Ports"`
+	} `json:"NetworkSettings"`
 }
 
 func (a *Adapter) version(ctx context.Context) (string, error) {
@@ -562,3 +596,4 @@ func validRuntimeID(value string) bool {
 
 var _ runtime.Runtime = (*Adapter)(nil)
 var _ runtime.CapacityProvider = (*Adapter)(nil)
+var _ runtime.InternalServiceRuntime = (*Adapter)(nil)

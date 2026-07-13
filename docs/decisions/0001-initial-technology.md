@@ -26,7 +26,7 @@ Status: accepted for Milestone 0
 | HTMX | 2.0.10, vendored locally | Dependency-free browser library with direct downloadable browser distribution and no build requirement. |
 | Alpine.js | 3.14.9, vendored locally | Small browser-local behavior with a direct script distribution; not authoritative state. |
 | xterm.js | xterm.js 5.3.0, vendored locally | Specialized terminal rendering should not be recreated. MIT license, browser runtime only, no Node.js or npm requirement in COWS builds. |
-| noVNC | Deferred to the desktop milestone | Specialized library is appropriate, but it is not vendored until graphical access is implemented. |
+| noVNC | noVNC 1.6.0, vendored locally | Specialized VNC browser client; only the core ES modules are used. MPL-2.0 license, browser runtime only, no Node.js or npm requirement in COWS builds. |
 | Tests | Go testing, `httptest`, temporary SQLite | Standard library covers initial behavior without requiring Docker or Podman. |
 | Formatting/static analysis | `gofmt`, `go vet`; optional `staticcheck` | Built-in tools are available everywhere; Staticcheck is useful when adopted by CI. |
 

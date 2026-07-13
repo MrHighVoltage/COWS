@@ -74,8 +74,11 @@ remain hardening work.
 
 ## Milestone 5: Graphical desktop access
 
-Integrate noVNC through an authenticated COWS WebSocket, template-controlled
-desktop access, session cleanup, and tests proving that VNC ports are private.
+Completed initial implementation: local noVNC 1.6.0 core modules, an
+authenticated COWS WebSocket, template-controlled `desktop` TCP service access,
+loopback port verification, session cleanup, and tests proving that non-loopback
+VNC mappings are rejected. Browser accessibility review and runtime integration
+tests against VNC-enabled Docker and Podman images remain hardening work.
 
 ## Milestone 6: Workspace web applications
 

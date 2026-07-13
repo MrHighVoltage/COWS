@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -22,6 +23,7 @@ var (
 	ErrRuntimeUnavailable     = errors.New("workspace runtime unavailable")
 	ErrWorkspaceStateConflict = errors.New("workspace state conflict")
 	ErrTerminalNotAvailable   = errors.New("workspace terminal is not available")
+	ErrDesktopNotAvailable    = errors.New("workspace desktop is not available")
 )
 
 type CreateWorkspaceInput struct {
@@ -362,6 +364,70 @@ func (s *Service) OpenTerminal(ctx context.Context, actorID, workspaceID string)
 
 func (s *Service) RecordTerminalDisconnect(ctx context.Context, actorID, workspaceID string) {
 	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "terminal.session_ended", TargetType: "workspace", TargetID: workspaceID})
+}
+
+// OpenDesktop authorizes the fixed desktop service and asks the runtime to
+// connect only to the persisted loopback port allocated for that service.
+func (s *Service) OpenDesktop(ctx context.Context, actorID, workspaceID string) (io.ReadWriteCloser, error) {
+	if s.runtime == nil {
+		return nil, ErrRuntimeUnavailable
+	}
+	value, err := s.GetWorkspace(ctx, actorID, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	if value.ObservedState != string(runtime.StateRunning) || value.RuntimeID == "" {
+		return nil, ErrWorkspaceStateConflict
+	}
+	template, err := s.store.FindTemplateByID(ctx, value.TemplateID)
+	if err != nil {
+		return nil, err
+	}
+	if !hasAccessMethod(template.AccessMethods, domain.AccessDesktop) {
+		return nil, ErrDesktopNotAvailable
+	}
+	configuration, err := s.effectiveConfiguration(ctx, value)
+	if err != nil {
+		return nil, err
+	}
+	var desktopService domain.TemplateService
+	for _, service := range configuration.Services {
+		if service.Name == "desktop" && service.Protocol == "tcp" {
+			desktopService = service
+			break
+		}
+	}
+	if desktopService.Name == "" {
+		return nil, ErrDesktopNotAvailable
+	}
+	allocations, err := s.store.ListWorkspacePortAllocations(ctx, value.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, allocation := range allocations {
+		if allocation.ServiceName != desktopService.Name || allocation.Protocol != "tcp" {
+			continue
+		}
+		desktopRuntime, ok := s.runtime.(runtime.InternalServiceRuntime)
+		if !ok {
+			return nil, ErrDesktopNotAvailable
+		}
+		connection, err := desktopRuntime.OpenInternalService(ctx, value.RuntimeID, desktopService.ContainerPort, allocation.HostPort)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.RecordWorkspaceConnection(ctx, actorID, workspaceID); err != nil {
+			_ = connection.Close()
+			return nil, err
+		}
+		s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "desktop.session_started", TargetType: "workspace", TargetID: workspaceID})
+		return connection, nil
+	}
+	return nil, ErrDesktopNotAvailable
+}
+
+func (s *Service) RecordDesktopDisconnect(ctx context.Context, actorID, workspaceID string) {
+	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "desktop.session_ended", TargetType: "workspace", TargetID: workspaceID})
 }
 
 func (s *Service) RunTimeouts(ctx context.Context) error {

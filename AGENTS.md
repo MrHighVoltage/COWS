@@ -38,8 +38,10 @@ port bindings, or browser-controlled environment values.
 Terminal access is implemented through the runtime shell capability and must
 retain fixed server-selected commands, ownership/template/state checks,
 WebSocket session limits, resize validation, and audit events. Do not expose
-public workspace ports. Do not implement future desktop, proxy, file-manager,
-or multi-host runtime features prematurely.
+public workspace ports. Desktop access is implemented only through the fixed
+template-approved VNC service and must retain loopback mapping verification,
+WebSocket session limits, and audit events. Do not implement a generic proxy,
+file-manager, or multi-host runtime feature prematurely.
 
 Workspace timeout policies are backend-enforced and must not depend on browser
 timers. Keep the initial no-connection stop, stopped-container deletion, and
