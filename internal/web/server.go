@@ -242,6 +242,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /workspaces/{id}/desktop/ws", s.workspaceDesktopWebSocket)
 	mux.HandleFunc("GET /workspaces/{id}/files", s.workspaceFilesPage)
 	mux.HandleFunc("GET /workspaces/{id}/files/download", s.workspaceFileDownload)
+	mux.HandleFunc("GET /workspaces/{id}/files/download.zip", s.workspaceFileDownloadZip)
 	mux.HandleFunc("POST /workspaces/{id}/files/mkdir", s.workspaceFileMkdir)
 	mux.HandleFunc("POST /workspaces/{id}/files/delete", s.workspaceFileDelete)
 	mux.HandleFunc("POST /workspaces/{id}/files/rename", s.workspaceFileRename)
@@ -819,6 +820,24 @@ func (s *Server) workspaceFileDownload(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 	w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(path.Base(r.URL.Query().Get("path"))))
 	http.ServeContent(w, r, info.Name(), info.ModTime(), file)
+}
+
+func (s *Server) workspaceFileDownloadZip(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	archive, filename, err := s.files.OpenZip(r.Context(), user.ID, r.PathValue("id"), r.URL.Query().Get("mount"), r.URL.Query().Get("path"))
+	if err != nil {
+		http.Error(w, fileErrorText(err), fileErrorStatus(err))
+		return
+	}
+	defer archive.Close()
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(filename))
+	if _, err := io.Copy(w, archive); err != nil {
+		return
+	}
 }
 
 func (s *Server) workspaceFileMkdir(w http.ResponseWriter, r *http.Request) {
@@ -1783,6 +1802,12 @@ func fileErrorText(err error) string {
 		return "The upload exceeds the 128 MiB limit."
 	case errors.Is(err, files.ErrInvalidPath):
 		return "The requested path or filename is invalid."
+	case errors.Is(err, files.ErrNotDirectory):
+		return "Only directories can be downloaded as ZIP archives."
+	case errors.Is(err, files.ErrArchiveTooLarge):
+		return "The directory is too large to download as a ZIP archive."
+	case errors.Is(err, files.ErrArchiveTooMany):
+		return "The directory contains too many entries to download as a ZIP archive."
 	default:
 		return "The file operation could not be completed."
 	}

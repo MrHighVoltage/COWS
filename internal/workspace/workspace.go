@@ -310,7 +310,7 @@ func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID stri
 		if err != nil {
 			return err
 		}
-		if err := removeMountDirectories(s.mountRoot, value.ID, configuration.Mounts); err != nil {
+		if err := archiveMountDirectories(s.mountRoot, value.ID, configuration.Mounts); err != nil {
 			return err
 		}
 		if err := s.store.DeleteWorkspace(ctx, value.ID); err != nil {
@@ -337,7 +337,7 @@ func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID stri
 		_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
 		return err
 	}
-	if err := removeMountDirectories(s.mountRoot, value.ID, configuration.Mounts); err != nil {
+	if err := archiveMountDirectories(s.mountRoot, value.ID, configuration.Mounts); err != nil {
 		_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
 		return err
 	}

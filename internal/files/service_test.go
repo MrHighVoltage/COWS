@@ -1,6 +1,8 @@
 package files
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -79,6 +81,61 @@ func TestRootedDownloadRejectsSymlinkEscape(t *testing.T) {
 	}
 	if _, _, err := service.OpenDownload(context.Background(), "user-1", "workspace-1", "data", "escape"); err == nil {
 		t.Fatal("symlink escape was allowed")
+	}
+}
+
+func TestOpenZipStreamsDirectoryContents(t *testing.T) {
+	service, root := newFileService(t, true)
+	if err := os.Mkdir(filepath.Join(root, "project"), 0o700); err != nil {
+		t.Fatalf("create project directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "project", "readme.txt"), []byte("hello"), 0o600); err != nil {
+		t.Fatalf("write project file: %v", err)
+	}
+	reader, filename, err := service.OpenZip(context.Background(), "user-1", "workspace-1", "data", "project")
+	if err != nil {
+		t.Fatalf("open ZIP: %v", err)
+	}
+	data, err := io.ReadAll(reader)
+	closeErr := reader.Close()
+	if err != nil || closeErr != nil {
+		t.Fatalf("read ZIP: read=%v close=%v", err, closeErr)
+	}
+	if filename != "project.zip" {
+		t.Fatalf("ZIP filename = %q", filename)
+	}
+	archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatalf("read ZIP archive: %v", err)
+	}
+	if len(archive.File) != 2 {
+		t.Fatalf("ZIP entries = %d, want directory and file", len(archive.File))
+	}
+	var fileEntry *zip.File
+	for _, entry := range archive.File {
+		if entry.Name == "project/readme.txt" {
+			fileEntry = entry
+			break
+		}
+	}
+	if fileEntry == nil {
+		t.Fatal("ZIP did not contain project/readme.txt")
+	}
+	file, err := fileEntry.Open()
+	if err != nil {
+		t.Fatalf("open ZIP file: %v", err)
+	}
+	contents, err := io.ReadAll(file)
+	_ = file.Close()
+	if err != nil || string(contents) != "hello" {
+		t.Fatalf("ZIP file contents = %q, error = %v", contents, err)
+	}
+}
+
+func TestOpenZipRejectsFiles(t *testing.T) {
+	service, _ := newFileService(t, true)
+	if _, _, err := service.OpenZip(context.Background(), "user-1", "workspace-1", "data", "hello.txt"); !errors.Is(err, ErrNotDirectory) {
+		t.Fatalf("file ZIP error = %v", err)
 	}
 }
 

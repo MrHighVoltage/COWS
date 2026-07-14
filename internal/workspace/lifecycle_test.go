@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -131,7 +133,11 @@ func TestLifecycleTimeoutStopsAndDeletesWorkspace(t *testing.T) {
 
 func TestManualDeleteRemovesWorkspaceRecordAfterContainer(t *testing.T) {
 	service, authService, adminID, store := testService(t)
-	template, err := service.CreateTemplate(context.Background(), adminID, validTemplateInput())
+	mountRoot := t.TempDir()
+	service = NewWithRuntimeAndMountRoot(store, nil, mountRoot)
+	templateInput := validTemplateInput()
+	templateInput.Configuration.Mounts = []domain.TemplateMount{{Name: "designs", Type: domain.TemplateMountDirectory, ContainerPath: "/designs"}}
+	template, err := service.CreateTemplate(context.Background(), adminID, templateInput)
 	if err != nil {
 		t.Fatalf("create template: %v", err)
 	}
@@ -150,7 +156,7 @@ func TestManualDeleteRemovesWorkspaceRecordAfterContainer(t *testing.T) {
 		t.Fatalf("create workspace: %v", err)
 	}
 	fake := &lifecycleRuntime{}
-	service = NewWithRuntime(store, fake)
+	service = NewWithRuntimeAndMountRoot(store, fake, mountRoot)
 	if err := service.StartWorkspace(context.Background(), user.ID, value.ID); err != nil {
 		t.Fatalf("start workspace: %v", err)
 	}
@@ -159,6 +165,10 @@ func TestManualDeleteRemovesWorkspaceRecordAfterContainer(t *testing.T) {
 	}
 	if err := service.DeleteWorkspace(context.Background(), user.ID, value.ID); err != nil {
 		t.Fatalf("delete workspace: %v", err)
+	}
+	managedName := mountRootName(value.ID, templateInput.Configuration.Mounts[0])
+	if _, err := os.Stat(filepath.Join(mountRoot, "archive", managedName)); err != nil {
+		t.Fatalf("archived mount directory: %v", err)
 	}
 	if fake.removed != 1 {
 		t.Fatalf("runtime remove calls = %d, want 1", fake.removed)

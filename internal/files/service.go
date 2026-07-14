@@ -1,6 +1,7 @@
 package files
 
 import (
+	"archive/zip"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -24,9 +25,16 @@ var (
 	ErrUploadTooLarge    = errors.New("files: upload is too large")
 	ErrNameConflict      = errors.New("files: name already exists")
 	ErrFileManagerAccess = errors.New("files: file manager access is unavailable")
+	ErrNotDirectory      = errors.New("files: not a directory")
+	ErrArchiveTooLarge   = errors.New("files: archive is too large")
+	ErrArchiveTooMany    = errors.New("files: archive contains too many entries")
 )
 
-const MaxUploadBytes int64 = 128 << 20
+const (
+	MaxUploadBytes    int64 = 128 << 20
+	MaxArchiveBytes   int64 = 4 << 30
+	MaxArchiveEntries       = 100000
+)
 
 type MountResolver interface {
 	ListFileMounts(ctx context.Context, actorID, workspaceID string) ([]workspace.FileMount, error)
@@ -112,6 +120,150 @@ func (s *Service) OpenDownload(ctx context.Context, actorID, workspaceID, mountN
 		return nil, nil, err
 	}
 	return file, info, nil
+}
+
+// OpenZip starts a bounded, streamed ZIP response for an approved directory.
+// The archive is generated in a pipe so COWS never buffers the directory in
+// memory or creates a second temporary copy on disk.
+func (s *Service) OpenZip(ctx context.Context, actorID, workspaceID, mountName, relativePath string) (io.ReadCloser, string, error) {
+	mount, root, relativePath, err := s.openMount(ctx, actorID, workspaceID, mountName, relativePath)
+	if err != nil {
+		return nil, "", err
+	}
+	info, err := root.Lstat(relativePath)
+	if err != nil {
+		root.Close()
+		return nil, "", mapPathError(err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		root.Close()
+		return nil, "", ErrInvalidPath
+	}
+	if !info.IsDir() {
+		root.Close()
+		return nil, "", ErrNotDirectory
+	}
+	name := mount.Name
+	if relativePath != "." {
+		name = path.Base(relativePath)
+	}
+	reader, writer := io.Pipe()
+	go func() {
+		defer root.Close()
+		archive := zip.NewWriter(writer)
+		state := archiveState{}
+		writeErr := writeZip(ctx, root, relativePath, archive, &state)
+		closeErr := archive.Close()
+		if writeErr != nil {
+			_ = writer.CloseWithError(writeErr)
+			return
+		}
+		if closeErr != nil {
+			_ = writer.CloseWithError(closeErr)
+			return
+		}
+		_ = writer.Close()
+	}()
+	return reader, name + ".zip", nil
+}
+
+type archiveState struct {
+	bytes   int64
+	entries int
+}
+
+func writeZip(ctx context.Context, root *os.Root, relativePath string, archive *zip.Writer, state *archiveState) error {
+	return fs.WalkDir(root.FS(), relativePath, func(currentPath string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return mapPathError(walkErr)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		if currentPath == "." {
+			return nil
+		}
+		if state.entries >= MaxArchiveEntries {
+			return ErrArchiveTooMany
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return ErrInvalidPath
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return mapPathError(err)
+		}
+		archiveName := path.Clean(currentPath)
+		if entry.IsDir() {
+			header, err := zip.FileInfoHeader(info)
+			if err != nil {
+				return err
+			}
+			header.Name = archiveName + "/"
+			header.Method = zip.Store
+			if _, err := archive.CreateHeader(header); err != nil {
+				return err
+			}
+			state.entries++
+			return nil
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		header, err := zip.FileInfoHeader(info)
+		if err != nil {
+			return err
+		}
+		header.Name = archiveName
+		header.Method = zip.Deflate
+		output, err := archive.CreateHeader(header)
+		if err != nil {
+			return err
+		}
+		file, err := root.Open(currentPath)
+		if err != nil {
+			return mapPathError(err)
+		}
+		_, copyErr := io.Copy(output, &archiveReader{ctx: ctx, source: file, state: state})
+		closeErr := file.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		state.entries++
+		return nil
+	})
+}
+
+type archiveReader struct {
+	ctx    context.Context
+	source io.Reader
+	state  *archiveState
+}
+
+func (r *archiveReader) Read(value []byte) (int, error) {
+	select {
+	case <-r.ctx.Done():
+		return 0, r.ctx.Err()
+	default:
+	}
+	if r.state.bytes >= MaxArchiveBytes {
+		return 0, ErrArchiveTooLarge
+	}
+	remaining := MaxArchiveBytes - r.state.bytes
+	if int64(len(value)) > remaining {
+		value = value[:int(remaining)]
+	}
+	count, err := r.source.Read(value)
+	r.state.bytes += int64(count)
+	if r.state.bytes >= MaxArchiveBytes && err == nil {
+		return count, ErrArchiveTooLarge
+	}
+	return count, err
 }
 
 func (s *Service) CreateDirectory(ctx context.Context, actorID, workspaceID, mountName, relativePath, name string) error {

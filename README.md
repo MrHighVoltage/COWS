@@ -15,8 +15,8 @@ operations, workspace persistence, quotas, fail-closed capacity checks, and
 template-controlled timeout processing, an authenticated browser terminal, and
 an authenticated noVNC desktop gateway through the Docker-compatible runtime
 adapter, and a restricted file manager for approved directory mounts. It does
-not provide generic proxied application access, archive operations, or
-named-volume file access yet. It is not production-ready.
+not provide generic proxied application access, archive extraction, automatic
+retention archival, or named-volume file access yet. It is not production-ready.
 
 ## Goals
 
