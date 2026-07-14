@@ -119,6 +119,7 @@ type Workspace struct {
 	DesiredState                    DesiredWorkspaceState
 	ObservedState                   string
 	RuntimeID                       string
+	ObservedErrorCode               string
 	ObservedError                   string
 	AllocatedCPUMillis              int64
 	AllocatedMemoryBytes            int64

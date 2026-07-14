@@ -282,24 +282,25 @@ func (s *Service) StartWorkspace(ctx context.Context, actorID, workspaceID strin
 		}
 		handle, err := s.runtime.CreateWorkspace(ctx, spec)
 		if err != nil {
-			_ = s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateFailed), "", err.Error(), s.now().UTC(), s.now().UTC())
+			_ = s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateFailed), "", "runtime_create_failed", err.Error(), s.now().UTC(), s.now().UTC())
 			_ = s.finishOperation(ctx, value.ID, "start", "failed", err.Error(), operationStarted)
 			return err
 		}
 		value.RuntimeID = handle.RuntimeID
-		if err := s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateCreated), handle.RuntimeID, "", s.now().UTC(), s.now().UTC()); err != nil {
+		if err := s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateCreated), handle.RuntimeID, "", "", s.now().UTC(), s.now().UTC()); err != nil {
 			return err
 		}
 	}
 	if err := s.runtime.StartWorkspace(ctx, value.RuntimeID); err != nil {
-		_ = s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateCreated), value.RuntimeID, err.Error(), s.now().UTC(), s.now().UTC())
+		_ = s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateCreated), value.RuntimeID, "runtime_start_failed", err.Error(), s.now().UTC(), s.now().UTC())
 		_ = s.finishOperation(ctx, value.ID, "start", "failed", err.Error(), operationStarted)
 		return err
 	}
 	now := s.now().UTC()
 	value.StartedAt = now
+	value.LastConnectedAt = time.Time{}
 	value.StoppedAt = time.Time{}
-	if err := s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateRunning), value.RuntimeID, "", now, now); err != nil {
+	if err := s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateRunning), value.RuntimeID, "", "", now, now); err != nil {
 		return err
 	}
 	if err := s.store.UpdateWorkspaceLifecycle(ctx, value.ID, value.StartedAt, value.LastConnectedAt, value.StoppedAt, value.ContainerDeletedAt, value.DataArchiveEligibleAt, now); err != nil {
@@ -336,7 +337,7 @@ func (s *Service) StopWorkspace(ctx context.Context, actorID, workspaceID string
 	}
 	now := s.now().UTC()
 	value.StoppedAt = now
-	if err := s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateStopped), value.RuntimeID, "", now, now); err != nil {
+	if err := s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateStopped), value.RuntimeID, "", "", now, now); err != nil {
 		return err
 	}
 	if err := s.store.UpdateWorkspaceLifecycle(ctx, value.ID, value.StartedAt, value.LastConnectedAt, value.StoppedAt, value.ContainerDeletedAt, value.DataArchiveEligibleAt, now); err != nil {
@@ -585,7 +586,7 @@ func (s *Service) RunTimeouts(ctx context.Context) error {
 			}
 			_ = s.store.SetWorkspaceDesiredState(ctx, value.ID, domain.DesiredWorkspaceStopped, now)
 			value.StoppedAt = now
-			_ = s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateStopped), value.RuntimeID, "", now, now)
+			_ = s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateStopped), value.RuntimeID, "", "", now, now)
 			_ = s.store.UpdateWorkspaceLifecycle(ctx, value.ID, value.StartedAt, value.LastConnectedAt, value.StoppedAt, value.ContainerDeletedAt, value.DataArchiveEligibleAt, now)
 			_ = s.finishOperation(ctx, value.ID, "timeout-stop", "succeeded", "", operationStarted)
 			s.recordAudit(ctx, domain.AuditEvent{EventType: "workspace.timeout_stopped", TargetType: "workspace", TargetID: value.ID})
@@ -605,7 +606,7 @@ func (s *Service) RunTimeouts(ctx context.Context) error {
 			}
 			value.ContainerDeletedAt = now
 			value.DataArchiveEligibleAt = time.Time{}
-			_ = s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateRemoved), value.RuntimeID, "", now, now)
+			_ = s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateRemoved), value.RuntimeID, "", "", now, now)
 			_ = s.store.UpdateWorkspaceLifecycle(ctx, value.ID, value.StartedAt, value.LastConnectedAt, value.StoppedAt, value.ContainerDeletedAt, value.DataArchiveEligibleAt, now)
 			_ = s.finishOperation(ctx, value.ID, "timeout-delete", "succeeded", "", operationStarted)
 			s.recordAudit(ctx, domain.AuditEvent{EventType: "workspace.timeout_container_deleted", TargetType: "workspace", TargetID: value.ID})
@@ -648,7 +649,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 			if value.RuntimeID == "" || value.ObservedState == string(runtime.StateRemoved) {
 				continue
 			}
-			_ = s.store.UpdateWorkspaceObservedState(ctx, value.ID, "missing", value.RuntimeID, "managed container was not found during runtime reconciliation", inspection.ObservedAt, now)
+			_ = s.store.UpdateWorkspaceObservedState(ctx, value.ID, "missing", value.RuntimeID, "runtime_missing", "managed container was not found during runtime reconciliation", inspection.ObservedAt, now)
 			continue
 		}
 		state := normalizeObservedState(observed.State)
@@ -667,7 +668,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		if state == string(runtime.StateStopped) && stoppedAt.IsZero() {
 			stoppedAt = observedAt
 		}
-		if err := s.store.UpdateWorkspaceObservedState(ctx, value.ID, state, observed.RuntimeID, "", observedAt, now); err != nil {
+		if err := s.store.UpdateWorkspaceObservedState(ctx, value.ID, state, observed.RuntimeID, "", "", observedAt, now); err != nil {
 			return err
 		}
 		if err := s.store.UpdateWorkspaceLifecycle(ctx, value.ID, startedAt, value.LastConnectedAt, stoppedAt, value.ContainerDeletedAt, value.DataArchiveEligibleAt, now); err != nil {
@@ -758,7 +759,11 @@ func (s *Service) effectiveConfiguration(ctx context.Context, value domain.Works
 // UpdateObservedState is called by reconciliation code, not by browser
 // handlers. It keeps runtime truth separate from the desired state.
 func (s *Service) UpdateObservedState(ctx context.Context, workspaceID, observedState, runtimeID, observedError string, observedAt time.Time) error {
-	return s.store.UpdateWorkspaceObservedState(ctx, workspaceID, observedState, runtimeID, observedError, observedAt, s.now().UTC())
+	errorCode := ""
+	if observedError != "" {
+		errorCode = "runtime_observation_failed"
+	}
+	return s.store.UpdateWorkspaceObservedState(ctx, workspaceID, observedState, runtimeID, errorCode, observedError, observedAt, s.now().UTC())
 }
 
 func (s *Service) requireActor(ctx context.Context, actorID string) (domain.User, error) {

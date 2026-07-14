@@ -320,6 +320,25 @@ func TestNonAdministratorCannotOpenAdministratorUI(t *testing.T) {
 	}
 }
 
+func TestObservedErrorTextDoesNotExposeRuntimeDetails(t *testing.T) {
+	tests := []struct {
+		code string
+		want string
+	}{
+		{code: "runtime_create_failed", want: "Container creation failed."},
+		{code: "runtime_start_failed", want: "Container start failed."},
+		{code: "runtime_missing", want: "The managed container is missing from Podman."},
+		{code: "unknown_runtime_detail", want: "The runtime reported a workspace problem."},
+	}
+	for _, test := range tests {
+		t.Run(test.code, func(t *testing.T) {
+			if got := observedErrorText(test.code); got != test.want {
+				t.Fatalf("observed error text = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func cookieByName(cookies []*http.Cookie, name string) *http.Cookie {
 	for _, cookie := range cookies {
 		if cookie.Name == name {

@@ -214,7 +214,10 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 		"timeoutPhaseText": func(value workspace.TimeoutPhase) string { return timeoutPhaseText(value) },
 		"timeoutText":      func(seconds int64) string { return formatTimeout(seconds) },
 		"operationText":    func(value string) string { return operationText(value) },
-		"fileSize":         formatFileSize,
+		"observedErrorText": func(value string) string {
+			return observedErrorText(value)
+		},
+		"fileSize": formatFileSize,
 		"hasID": func(values []string, wanted string) bool {
 			for _, value := range values {
 				if value == wanted {
@@ -1869,6 +1872,19 @@ func operationText(operation string) string {
 		return "Automatic deletion"
 	default:
 		return "Workspace operation"
+	}
+}
+
+func observedErrorText(code string) string {
+	switch code {
+	case "runtime_create_failed":
+		return "Container creation failed."
+	case "runtime_start_failed":
+		return "Container start failed."
+	case "runtime_missing":
+		return "The managed container is missing from Podman."
+	default:
+		return "The runtime reported a workspace problem."
 	}
 }
 
