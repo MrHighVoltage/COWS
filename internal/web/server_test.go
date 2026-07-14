@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -14,6 +15,8 @@ import (
 	"github.com/cows-project/cows/internal/auth"
 	"github.com/cows-project/cows/internal/database"
 	"github.com/cows-project/cows/internal/domain"
+	"github.com/cows-project/cows/internal/quota"
+	"github.com/cows-project/cows/internal/repository"
 	"github.com/cows-project/cows/internal/repository/sqlite"
 	"github.com/cows-project/cows/internal/workspace"
 )
@@ -25,12 +28,13 @@ func testServer(t *testing.T) (*Server, *auth.Service) {
 		t.Fatalf("open test database: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
-	authService, err := auth.New(sqlite.New(db), time.Hour)
+	store := sqlite.New(db)
+	authService, err := auth.New(store, time.Hour)
 	if err != nil {
 		t.Fatalf("create auth service: %v", err)
 	}
-	templateService := workspace.New(sqlite.New(db))
-	server, err := New(db, authService, templateService, nil, nil, Options{SessionLifetime: time.Hour})
+	templateService := workspace.New(store)
+	server, err := New(db, authService, templateService, quota.New(store), nil, Options{SessionLifetime: time.Hour})
 	if err != nil {
 		t.Fatalf("create web server: %v", err)
 	}
@@ -317,6 +321,54 @@ func TestNonAdministratorCannotOpenAdministratorUI(t *testing.T) {
 	server.Handler().ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("non-administrator response = %d, want 403", recorder.Code)
+	}
+}
+
+func TestAdministratorCanRemoveExplicitUserQuota(t *testing.T) {
+	server, authService := testServer(t)
+	ctx := context.Background()
+	if _, err := authService.BootstrapAdministrator(ctx, auth.CreateUserInput{Username: "admin", Password: "correct horse battery staple"}); err != nil {
+		t.Fatalf("bootstrap administrator: %v", err)
+	}
+	admin, _, err := authService.Authenticate(ctx, "admin", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate administrator: %v", err)
+	}
+	if err := authService.ChangePassword(ctx, admin.ID, "correct horse battery staple", "changed correct horse battery staple"); err != nil {
+		t.Fatalf("change administrator password: %v", err)
+	}
+	student, err := authService.CreateUser(ctx, admin.ID, auth.CreateUserInput{Username: "quota-user", Password: "another correct password", Role: domain.RoleUser})
+	if err != nil {
+		t.Fatalf("create quota user: %v", err)
+	}
+	if _, err := server.quota.Set(ctx, admin.ID, student.ID, quota.Input{MaxCPUMillis: 1000}); err != nil {
+		t.Fatalf("assign quota: %v", err)
+	}
+	_, token, err := authService.Authenticate(ctx, "admin", "changed correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate changed administrator: %v", err)
+	}
+	sessionCookie := &http.Cookie{Name: "cows_session", Value: token}
+	pageRequest := httptest.NewRequest(http.MethodGet, "/admin/quotas", nil)
+	pageRequest.AddCookie(sessionCookie)
+	pageRecorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(pageRecorder, pageRequest)
+	csrfCookie := cookieByName(pageRecorder.Result().Cookies(), "cows_csrf")
+	if pageRecorder.Code != http.StatusOK || csrfCookie == nil {
+		t.Fatalf("quota page response: status=%d csrf=%#v", pageRecorder.Code, csrfCookie)
+	}
+	form := url.Values{"csrf_token": {csrfCookie.Value}}
+	request := httptest.NewRequest(http.MethodPost, "/admin/quotas/user/"+student.ID+"/delete", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(sessionCookie)
+	request.AddCookie(csrfCookie)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusSeeOther || recorder.Header().Get("Location") != "/admin/quotas" {
+		t.Fatalf("remove quota response: status=%d location=%q body=%s", recorder.Code, recorder.Header().Get("Location"), recorder.Body.String())
+	}
+	if _, err := server.quota.Get(ctx, admin.ID, student.ID); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("quota after removal = %v, want not found", err)
 	}
 }
 

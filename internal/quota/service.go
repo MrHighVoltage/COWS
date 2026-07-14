@@ -117,6 +117,20 @@ func (s *Service) SetGroup(ctx context.Context, actorID, groupID string, input I
 	return existing, nil
 }
 
+func (s *Service) UnsetGroup(ctx context.Context, actorID, groupID string) error {
+	if _, err := s.requireAdministrator(ctx, actorID); err != nil {
+		return err
+	}
+	if _, err := s.store.FindGroupByID(ctx, groupID); err != nil {
+		return err
+	}
+	if err := s.store.DeleteGroupQuota(ctx, groupID); err != nil {
+		return err
+	}
+	_ = s.store.RecordAuditEvent(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "quota.group_removed", TargetType: "group", TargetID: groupID})
+	return nil
+}
+
 func effectiveQuota(ctx context.Context, store repository.Store, userID string) (domain.UserQuota, error) {
 	if quota, err := store.FindUserQuota(ctx, userID); err == nil {
 		return quota, nil
@@ -186,6 +200,20 @@ func (s *Service) Set(ctx context.Context, actorID, userID string, input Input) 
 	}
 	_ = s.store.RecordAuditEvent(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "quota.updated", TargetType: "user", TargetID: userID})
 	return existing, nil
+}
+
+func (s *Service) Unset(ctx context.Context, actorID, userID string) error {
+	if _, err := s.requireAdministrator(ctx, actorID); err != nil {
+		return err
+	}
+	if _, err := s.store.FindUserByID(ctx, userID); err != nil {
+		return err
+	}
+	if err := s.store.DeleteUserQuota(ctx, userID); err != nil {
+		return err
+	}
+	_ = s.store.RecordAuditEvent(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "quota.removed", TargetType: "user", TargetID: userID})
+	return nil
 }
 
 // EnsureHostSettings creates the initial settings row without replacing an

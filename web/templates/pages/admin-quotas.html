@@ -12,7 +12,7 @@
   {{ range .Quotas }}
   <tr>
     <td><strong>{{ .User.DisplayName }}</strong><span class="table-subtext">{{ .User.Username }}{{ if .User.Email }} · {{ .User.Email }}{{ end }}</span></td>
-    <td>{{ if .Assigned }}<div class="quota-summary"><div><span>CPU while running</span><strong>{{ if eq .Quota.MaxCPUMillis 0 }}Unlimited{{ else }}{{ .Quota.MaxCPUMillis }} mCPU{{ end }}</strong></div><div><span>Memory while running</span><strong>{{ if eq .Quota.MaxMemoryBytes 0 }}Unlimited{{ else }}{{ mib .Quota.MaxMemoryBytes }} MiB{{ end }}</strong></div><div><span>Storage used</span><strong>{{ if eq .Quota.MaxStorageBytes 0 }}Unlimited{{ else }}{{ gib .Quota.MaxStorageBytes }} GiB{{ end }}</strong></div><div><span>Total workspaces</span><strong>{{ if eq .Quota.MaxWorkspaces 0 }}Unlimited{{ else }}{{ .Quota.MaxWorkspaces }}{{ end }}</strong></div><div><span>Running workspaces</span><strong>{{ if eq .Quota.MaxRunningWorkspaces 0 }}Unlimited{{ else }}{{ .Quota.MaxRunningWorkspaces }}{{ end }}</strong></div></div>{{ else }}<div class="quota-unassigned"><span class="badge">Unassigned</span><span>{{ if .User.IsAdministrator }}Administrators are unlimited without an assigned row.{{ else }}This user cannot create workspaces until a quota is assigned.{{ end }}</span></div>{{ end }}</td>
+    <td>{{ if .Assigned }}<div class="quota-summary"><div><span>CPU while running</span><strong>{{ if eq .Quota.MaxCPUMillis 0 }}Unlimited{{ else }}{{ .Quota.MaxCPUMillis }} mCPU{{ end }}</strong></div><div><span>Memory while running</span><strong>{{ if eq .Quota.MaxMemoryBytes 0 }}Unlimited{{ else }}{{ mib .Quota.MaxMemoryBytes }} MiB{{ end }}</strong></div><div><span>Storage used</span><strong>{{ if eq .Quota.MaxStorageBytes 0 }}Unlimited{{ else }}{{ gib .Quota.MaxStorageBytes }} GiB{{ end }}</strong></div><div><span>Total workspaces</span><strong>{{ if eq .Quota.MaxWorkspaces 0 }}Unlimited{{ else }}{{ .Quota.MaxWorkspaces }}{{ end }}</strong></div><div><span>Running workspaces</span><strong>{{ if eq .Quota.MaxRunningWorkspaces 0 }}Unlimited{{ else }}{{ .Quota.MaxRunningWorkspaces }}{{ end }}</strong></div></div>{{ else }}<div class="quota-unassigned"><span class="badge">Unassigned</span><span>{{ if .User.IsAdministrator }}Uses group quotas when assigned; otherwise unlimited.{{ else }}Uses assigned group quotas. Without one, workspace creation is disabled.{{ end }}</span></div>{{ end }}</td>
     <td>
       <form class="quota-form" method="post" action="/admin/quotas/{{ .User.ID }}">
         <input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}">
@@ -23,6 +23,7 @@
         <div class="quota-field"><label for="quota-running-workspaces-{{ .User.ID }}">Running workspaces</label><input id="quota-running-workspaces-{{ .User.ID }}" name="max_running_workspaces" type="number" min="0" max="1000000" placeholder="Enter count" value="{{ if .Assigned }}{{ .Quota.MaxRunningWorkspaces }}{{ end }}" required><span>Running count; 0 = unlimited</span></div>
         <div class="quota-form-actions"><button class="table-action" type="submit">Save quota</button></div>
       </form>
+      {{ if .Assigned }}<form method="post" action="/admin/quotas/user/{{ .User.ID }}/delete" x-on:submit="if (!confirm('Remove this user quota and return to group-derived limits?')) $event.preventDefault()"><input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}"><button class="table-action danger-action" type="submit">Use group quotas</button></form>{{ end }}
     </td>
   </tr>
   {{ else }}<tr><td colspan="3" class="muted">No users found.</td></tr>{{ end }}
@@ -46,6 +47,7 @@
         <div class="quota-field"><label for="group-quota-running-{{ .Group.ID }}">Running workspaces</label><input id="group-quota-running-{{ .Group.ID }}" name="max_running_workspaces" type="number" min="0" max="1000000" value="{{ if .Assigned }}{{ .Quota.MaxRunningWorkspaces }}{{ end }}" required><span>Running; 0 = unlimited</span></div>
         <div class="quota-form-actions"><button class="table-action" type="submit">Save group quota</button></div>
       </form>
+      {{ if .Assigned }}<form method="post" action="/admin/quotas/groups/{{ .Group.ID }}/delete" x-on:submit="if (!confirm('Remove this group quota assignment?')) $event.preventDefault()"><input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}"><button class="table-action danger-action" type="submit">Remove assignment</button></form>{{ end }}
     </td>
   </tr>
   {{ else }}<tr><td colspan="3" class="muted">No groups found.</td></tr>{{ end }}
