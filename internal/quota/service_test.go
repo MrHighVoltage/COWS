@@ -217,4 +217,21 @@ func TestGroupQuotasAggregateAndExplicitUserQuotaOverrides(t *testing.T) {
 	if err != nil || effective.MaxCPUMillis != 4000 || effective.MaxStorageBytes != 40<<30 || effective.MaxWorkspaces != 4 {
 		t.Fatalf("explicit user quota did not override groups: %+v err=%v", effective, err)
 	}
+	if err := service.Unset(ctx, adminID, studentID); err != nil {
+		t.Fatalf("remove explicit user quota: %v", err)
+	}
+	effective, err = service.GetForUser(ctx, studentID)
+	if err != nil || effective.MaxMemoryBytes != 5<<30 || effective.MaxWorkspaces != 3 {
+		t.Fatalf("removed user quota did not restore group inheritance: %+v err=%v", effective, err)
+	}
+	if err := service.UnsetGroup(ctx, adminID, second.ID); err != nil {
+		t.Fatalf("remove second group quota: %v", err)
+	}
+	effective, err = service.GetForUser(ctx, studentID)
+	if err != nil || effective.MaxCPUMillis != 1000 || effective.MaxMemoryBytes != 2<<30 || effective.MaxWorkspaces != 1 {
+		t.Fatalf("removed group quota remained in effective quota: %+v err=%v", effective, err)
+	}
+	if err := service.Unset(ctx, studentID, studentID); err == nil {
+		t.Fatal("ordinary user removed a quota assignment")
+	}
 }

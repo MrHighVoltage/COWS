@@ -315,7 +315,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/groups", s.adminGroupsCreate)
 	mux.HandleFunc("GET /admin/quotas", s.adminQuotas)
 	mux.HandleFunc("POST /admin/quotas/{id}", s.adminQuotaUpdate)
+	mux.HandleFunc("POST /admin/quotas/user/{id}/delete", s.adminQuotaDelete)
 	mux.HandleFunc("POST /admin/quotas/groups/{id}", s.adminGroupQuotaUpdate)
+	mux.HandleFunc("POST /admin/quotas/groups/{id}/delete", s.adminGroupQuotaDelete)
 	mux.HandleFunc("GET /admin/settings", s.adminSettings)
 	mux.HandleFunc("POST /admin/settings", s.adminSettingsUpdate)
 	mux.HandleFunc("GET /admin/templates", s.adminTemplates)
@@ -1282,6 +1284,23 @@ func (s *Server) adminQuotaUpdate(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin/quotas", http.StatusSeeOther)
 }
 
+func (s *Server) adminQuotaDelete(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if !s.validCSRF(r) {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return
+	}
+	if err := s.quota.Unset(r.Context(), user.ID, r.PathValue("id")); err != nil {
+		http.Error(w, "quota assignment could not be removed", http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, "/admin/quotas", http.StatusSeeOther)
+}
+
 func (s *Server) adminGroupQuotaUpdate(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAdministrator(w, r)
 	if !ok {
@@ -1306,6 +1325,23 @@ func (s *Server) adminGroupQuotaUpdate(w http.ResponseWriter, r *http.Request) {
 		views, _ := s.loadQuotaViews(r.Context(), user.ID)
 		groupViews, _ := s.loadGroupQuotaViews(r.Context(), user.ID)
 		s.render(w, http.StatusBadRequest, "admin-quotas-page", pageData{Title: "Quotas | COWS", User: &user, Quotas: views, GroupQuotas: groupViews, Quota: form, CSRFToken: s.ensureCSRF(w, r)})
+		return
+	}
+	http.Redirect(w, r, "/admin/quotas", http.StatusSeeOther)
+}
+
+func (s *Server) adminGroupQuotaDelete(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if !s.validCSRF(r) {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return
+	}
+	if err := s.quota.UnsetGroup(r.Context(), user.ID, r.PathValue("id")); err != nil {
+		http.Error(w, "group quota assignment could not be removed", http.StatusBadRequest)
 		return
 	}
 	http.Redirect(w, r, "/admin/quotas", http.StatusSeeOther)

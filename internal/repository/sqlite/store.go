@@ -642,6 +642,10 @@ func (s *Store) UpsertUserQuota(ctx context.Context, quota domain.UserQuota) err
 	return nil
 }
 
+func (s *Store) DeleteUserQuota(ctx context.Context, userID string) error {
+	return deleteQuota(ctx, s.db, "DELETE FROM user_quotas WHERE user_id = ?", userID, "user")
+}
+
 func (s *Store) FindGroupQuota(ctx context.Context, groupID string) (domain.GroupQuota, error) {
 	return scanGroupQuota(s.db.QueryRowContext(ctx, `SELECT group_id, max_cpu_millis, max_memory_bytes,
 		max_storage_bytes, max_workspaces, max_running_workspaces, created_at, updated_at FROM group_quotas WHERE group_id = ?`, groupID))
@@ -703,6 +707,25 @@ func (s *Store) UpsertGroupQuota(ctx context.Context, quota domain.GroupQuota) e
 		unixOrZero(quota.CreatedAt), unixOrZero(quota.UpdatedAt))
 	if err != nil {
 		return fmt.Errorf("upsert group quota: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) DeleteGroupQuota(ctx context.Context, groupID string) error {
+	return deleteQuota(ctx, s.db, "DELETE FROM group_quotas WHERE group_id = ?", groupID, "group")
+}
+
+func deleteQuota(ctx context.Context, db *sql.DB, query, id, quotaType string) error {
+	result, err := db.ExecContext(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("delete %s quota: %w", quotaType, err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check %s quota deletion: %w", quotaType, err)
+	}
+	if count == 0 {
+		return repository.ErrNotFound
 	}
 	return nil
 }

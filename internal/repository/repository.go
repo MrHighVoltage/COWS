@@ -83,10 +83,12 @@ type QuotaRepository interface {
 	FindUserQuota(ctx context.Context, userID string) (domain.UserQuota, error)
 	ListUserQuotas(ctx context.Context) ([]domain.UserQuota, error)
 	UpsertUserQuota(ctx context.Context, quota domain.UserQuota) error
+	DeleteUserQuota(ctx context.Context, userID string) error
 	FindGroupQuota(ctx context.Context, groupID string) (domain.GroupQuota, error)
 	ListGroupQuotas(ctx context.Context) ([]domain.GroupQuota, error)
 	ListGroupQuotasForUser(ctx context.Context, userID string) ([]domain.GroupQuota, error)
 	UpsertGroupQuota(ctx context.Context, quota domain.GroupQuota) error
+	DeleteGroupQuota(ctx context.Context, groupID string) error
 }
 
 type HostSettingsRepository interface {
