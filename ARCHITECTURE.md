@@ -56,8 +56,9 @@ environment names, and dangerous runtime configuration. Managed mounts become
 named volumes or bind mounts derived from the COWS workspace ID. Directory
 mounts are created below the configured COWS mount root with names of the form
 `cows-<workspace-id>-<prefix><mount-name><suffix>`. Templates can mark a
-directory mount read-only or read-write for the browser file manager. Users
-cannot choose arbitrary host paths or rendered runtime arguments.
+directory or named-volume mount read-only or read-write for the browser file
+manager. Users cannot choose arbitrary host paths or rendered runtime
+arguments.
 
 Templates may opt into a typed `container_user` block. COWS uses the existing
 application username as the default container username and resolves the
@@ -106,15 +107,14 @@ user or placed in a URL.
 The file manager is another server-rendered workspace access tab. Each request
 resolves the workspace through the workspace service, checks ownership or
 administrator permission, requires a running workspace and the template's
-`files` access method, and selects a marked directory mount from the stored
-workspace configuration. The browser supplies only a mount name and relative
-path; it cannot supply a host path, volume name, runtime ID, or container
-address. The current rooted `os.Root` implementation is suitable for mounts
-whose host ownership is directly accessible to COWS. Rootless Podman mounts
-prepared with subordinate-ID ownership require a future runtime-namespace
-file-operation adapter before this UI can safely expose their contents; COWS
-must not weaken the mapping to make host access appear to work. Named volumes
-and directory mounts without `file_manager` remain inaccessible to this UI.
+`files` access method, and selects a marked directory or volume mount from the
+stored workspace configuration. The browser supplies only a mount name and
+relative path; it cannot supply a host path, volume name, runtime ID, or
+container address. File operations use the runtime file-access capability.
+Rootless Podman starts the local COWS file helper through `podman unshare`,
+enters the server-selected source directory, drops to the mapped container
+UID/GID, and then operates through rooted filesystem calls. Named volumes are
+resolved through the runtime adapter, never by browser-visible storage paths.
 Directory downloads can be streamed as bounded ZIP archives without
 temporary files; uploads, archive extraction, and file previews are deferred.
 

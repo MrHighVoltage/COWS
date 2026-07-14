@@ -63,8 +63,8 @@ partial operations, and compromised or misconfigured images.
   secrets, or arbitrary runtime objects. Port bindings are loopback-only.
   Managed volume and directory mounts use engine-generated names derived from
   the workspace ID and administrator-controlled prefix/suffix values; users
-  cannot choose or edit them. Only directory mounts explicitly marked for the
-  file manager are exposed through rooted file operations.
+  cannot choose or edit them. Directory or named-volume mounts explicitly
+  marked for the file manager are exposed through rooted runtime operations.
 - The optional template `container_user` block is administrator-controlled. It
   is resolved from the server-side COWS username and validated UID/GID, home,
   shell, and display-name fields. Rootless Podman uses explicit UID/GID
@@ -127,12 +127,15 @@ capacity, or multiple active schedulers.
 ## File-manager risks
 
 The initial file manager is intentionally narrow. It exposes only
-administrator-approved directory mounts marked `file_manager`, never named
-volumes, arbitrary container paths, runtime sockets, or host paths. The backend
-uses server-side workspace authorization, relative-path validation, `os.Root`,
-safe filenames, read-only checks, bounded uploads, temporary files, and
-server-side mount selection. These controls reduce but do not eliminate risk
-from a malicious workspace process, filesystem races, or host misconfiguration.
+administrator-approved directory or named-volume mounts marked `file_manager`,
+never arbitrary container paths, runtime sockets, or host paths. The backend
+uses server-side workspace authorization, relative-path validation, the runtime
+file-access capability, rooted filesystem operations, safe filenames, read-only
+checks, bounded uploads, temporary files, and server-side mount selection.
+Rootless Podman operations run through the COWS namespace helper; COWS does not
+weaken ownership mappings to make direct host access work. These controls
+reduce but do not eliminate risk from a malicious workspace process, filesystem
+races, or host misconfiguration.
 Directory downloads are streamed as ZIP archives with a 4 GiB uncompressed
 and 100,000-entry bound. Symlinks and non-regular special files are not
 included, and no temporary archive is created. Archive extraction, bulk
@@ -147,9 +150,9 @@ stored email fields, server-side opaque sessions, CSRF protected forms,
 administrator checks, login rate limiting, and basic audit persistence now
 exist. The implementation has no password recovery, account deletion workflow,
 generic application proxy, or production HTTPS configuration. The initial file
-manager supports approved directory listing, bounded upload, individual file
-download, streamed directory ZIP download, folder creation, rename, and
-deletion; it does not support archive extraction or named-volume access.
+manager supports approved directory and named-volume listing, bounded upload,
+individual file download, streamed directory ZIP download, folder creation,
+rename, and deletion; it does not support archive extraction.
 Terminal access uses a fixed shell and desktop access uses a template-approved
 VNC service through the Docker-compatible runtime adapter; desktop sessions
 automatically authenticate using the template-selected VNC secret when one is

@@ -214,7 +214,8 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 	if err != nil {
 		return nil, fmt.Errorf("open static assets: %w", err)
 	}
-	return &Server{db: db, auth: authService, workspace: templateService, quota: quotaService, runtime: runtimeAdapter, files: files.New(templateService), options: options, templates: templates, static: static}, nil
+	fileAccessRuntime, _ := runtimeAdapter.(runtime.FileAccessRuntime)
+	return &Server{db: db, auth: authService, workspace: templateService, quota: quotaService, runtime: runtimeAdapter, files: files.New(templateService, fileAccessRuntime), options: options, templates: templates, static: static}, nil
 }
 
 func (s *Server) Handler() http.Handler {
@@ -819,7 +820,14 @@ func (s *Server) workspaceFileDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 	w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(path.Base(r.URL.Query().Get("path"))))
-	http.ServeContent(w, r, info.Name(), info.ModTime(), file)
+	w.Header().Set("Content-Type", "application/octet-stream")
+	if info.Size() >= 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+	}
+	if !info.ModTime().IsZero() {
+		w.Header().Set("Last-Modified", info.ModTime().UTC().Format(http.TimeFormat))
+	}
+	_, _ = io.Copy(w, file)
 }
 
 func (s *Server) workspaceFileDownloadZip(w http.ResponseWriter, r *http.Request) {

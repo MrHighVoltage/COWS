@@ -33,12 +33,13 @@ sibling archive root. Both roots must be on the same filesystem for the
 atomic move. Named volumes remain owned and removed by the runtime lifecycle.
 Timeout cleanup currently keeps data for later retention handling.
 
-Templates may set `file_manager: true` only on directory mounts. They must also
-include the `files` access method. The browser file manager resolves mounts
-from the authorized workspace service and uses rooted filesystem operations;
-it accepts only relative paths and safe entry names. Named volumes are not
-exposed to the browser in this milestone because a safe, user-facing volume
-policy needs a separate design.
+Templates may set `file_manager: true` on directory or volume mounts. They
+must also include the `files` access method. The browser file manager resolves
+mounts from the authorized workspace service and uses the runtime file-access
+capability with rooted filesystem operations; it accepts only relative paths
+and safe entry names. Rootless Podman operations run through the namespace
+helper documented in ADR 0011. Named volumes are exposed only through this
+server-selected capability; their storage paths never reach the browser.
 
 Directory downloads are generated as bounded ZIP streams. COWS does not buffer
 the archive in memory or write a temporary archive, rejects symlinks, and does
@@ -58,6 +59,6 @@ Directory mounts require writable local COWS mount and archive roots and
 inherit host filesystem availability. Explicit workspace deletion moves the
 per-container directory before deleting the workspace record. The stable
 container directory name and all inner mount names are preserved. Timeout
-deletion does not archive data; it only marks later retention eligibility. The initial file manager does
-not provide archive extraction, bulk operations, file previews, or named-volume
-access. Those features require additional limits and security tests.
+deletion does not archive data; it only marks later retention eligibility. The
+initial file manager does not provide archive extraction, bulk operations, or
+file previews. Those features require additional limits and security tests.

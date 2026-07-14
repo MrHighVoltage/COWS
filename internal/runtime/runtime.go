@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"time"
 )
 
@@ -163,6 +164,42 @@ type ShellRuntime interface {
 // browser proxy capability.
 type InternalServiceRuntime interface {
 	OpenInternalService(ctx context.Context, runtimeID string, containerPort, hostPort int) (io.ReadWriteCloser, error)
+}
+
+type FileAccessSpec struct {
+	RuntimeID     string
+	MountType     string
+	Source        string
+	ContainerPath string
+	ContainerUID  int64
+	ContainerGID  int64
+	ReadOnly      bool
+}
+
+type FileEntry struct {
+	Name    string
+	IsDir   bool
+	Size    int64
+	ModTime time.Time
+}
+
+// FileAccess is deliberately narrower than a general filesystem interface.
+// The runtime adapter owns the storage namespace and COWS owns authorization
+// and relative-path validation before invoking these methods.
+type FileAccess interface {
+	io.Closer
+	List(ctx context.Context, relativePath string) ([]FileEntry, error)
+	Stat(ctx context.Context, relativePath string) (fs.FileInfo, error)
+	OpenRead(ctx context.Context, relativePath string) (io.ReadCloser, fs.FileInfo, error)
+	OpenZip(ctx context.Context, relativePath string) (io.ReadCloser, error)
+	CreateDirectory(ctx context.Context, relativePath, name string) error
+	Delete(ctx context.Context, relativePath string) error
+	Rename(ctx context.Context, relativePath, oldName, newName string) error
+	Upload(ctx context.Context, relativePath, filename string, source io.Reader) error
+}
+
+type FileAccessRuntime interface {
+	OpenFileAccess(ctx context.Context, spec FileAccessSpec) (FileAccess, error)
 }
 
 type Runtime interface {

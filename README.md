@@ -14,9 +14,11 @@ administrator-managed workspace templates, Docker inspection and lifecycle
 operations, workspace persistence, quotas, fail-closed capacity checks, and
 template-controlled timeout processing, an authenticated browser terminal, and
 an authenticated noVNC desktop gateway through the Docker-compatible runtime
-adapter, and a restricted file manager for approved directory mounts. It does
-not provide generic proxied application access, archive extraction, automatic
-retention archival, or named-volume file access yet. It is not production-ready.
+adapter, and a restricted file manager for approved directory and named-volume
+mounts. Rootless Podman file access uses the local namespace helper described
+in [ADR 0011](docs/decisions/0011-runtime-file-access.md). It does not provide
+generic proxied application access, archive extraction, or automatic retention
+archival. It is not production-ready.
 
 ## Goals
 
@@ -80,8 +82,10 @@ creation to fail closed. Directory mounts are created below `COWS_MOUNT_ROOT`
 (default `./data/cows-mounts`) in per-container directories named from the
 immutable COWS workspace identifier. Explicit deletion moves that complete
 directory to `COWS_MOUNT_ARCHIVE_ROOT` (default `./data/cows-mounts-archive`)
-on the same filesystem. Only directory mounts marked for file-manager access are visible in the browser;
-named volumes remain runtime-managed.
+on the same filesystem. Directory and named-volume mounts marked for
+file-manager access are visible in the browser. File operations are resolved
+by COWS and the runtime adapter; runtime storage paths and volume names are
+never browser inputs.
 
 ## Security warning
 

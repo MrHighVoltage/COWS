@@ -14,6 +14,7 @@ import (
 	"github.com/cows-project/cows/internal/auth"
 	"github.com/cows-project/cows/internal/config"
 	"github.com/cows-project/cows/internal/database"
+	"github.com/cows-project/cows/internal/fileagent"
 	"github.com/cows-project/cows/internal/quota"
 	"github.com/cows-project/cows/internal/repository/sqlite"
 	"github.com/cows-project/cows/internal/runtime/docker"
@@ -22,6 +23,13 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "file-helper" {
+		if err := fileagent.Run(os.Args[2:], os.Stdin, os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintf(os.Stderr, "cows file-helper: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

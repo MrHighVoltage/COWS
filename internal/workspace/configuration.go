@@ -93,9 +93,6 @@ func validateTemplateConfiguration(configuration domain.TemplateConfiguration) e
 		if value.NamePrefix != "" && !mountNamePartPattern.MatchString(value.NamePrefix) || value.NameSuffix != "" && !mountNamePartPattern.MatchString(value.NameSuffix) {
 			return ErrInvalidTemplate
 		}
-		if value.FileManager && mountType != domain.TemplateMountDirectory {
-			return ErrInvalidTemplate
-		}
 		managedName := managedMountName("workspace-id", value)
 		if len(managedName) > 128 {
 			return ErrInvalidTemplate
