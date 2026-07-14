@@ -37,6 +37,29 @@ func testServer(t *testing.T) (*Server, *auth.Service) {
 	return server, authService
 }
 
+func TestQuotaProgressClass(t *testing.T) {
+	tests := []struct {
+		name    string
+		current int64
+		limit   int64
+		want    string
+	}{
+		{name: "unassigned", current: 10, limit: 0, want: ""},
+		{name: "unlimited", current: 10, limit: -1, want: ""},
+		{name: "normal", current: 79, limit: 100, want: ""},
+		{name: "warning", current: 80, limit: 100, want: "quota-progress-warning"},
+		{name: "full", current: 100, limit: 100, want: "quota-progress-danger"},
+		{name: "over limit", current: 120, limit: 100, want: "quota-progress-danger"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := quotaProgressClass(test.current, test.limit); got != test.want {
+				t.Fatalf("quotaProgressClass(%d, %d) = %q, want %q", test.current, test.limit, got, test.want)
+			}
+		})
+	}
+}
+
 func TestHomeRendersLocalServerDrivenPage(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
