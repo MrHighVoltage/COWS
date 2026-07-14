@@ -16,6 +16,11 @@ type FileMount struct {
 	Name          string
 	ContainerPath string
 	Root          string
+	RuntimeID     string
+	MountType     string
+	Source        string
+	ContainerUID  int64
+	ContainerGID  int64
 	ReadOnly      bool
 }
 
@@ -41,17 +46,39 @@ func (s *Service) ListFileMounts(ctx context.Context, actorID, workspaceID strin
 	if err := ensureMountDirectories(s.mountRoot, value.ID, configuration.Mounts); err != nil {
 		return nil, err
 	}
+	owner, err := s.store.FindUserByID(ctx, value.OwnerUserID)
+	if err != nil {
+		return nil, err
+	}
+	allocations, err := s.store.ListWorkspacePortAllocations(ctx, value.ID)
+	if err != nil {
+		return nil, err
+	}
+	resolved, err := resolveConfiguration(configuration, owner, value.ID, value.Name, allocations, value.TemplateSecrets)
+	if err != nil {
+		return nil, err
+	}
 	root, err := filepath.Abs(s.mountRoot)
 	if err != nil {
 		return nil, ErrMountUnavailable
 	}
 	mounts := make([]FileMount, 0)
 	for _, mount := range configuration.Mounts {
-		if !mount.FileManager || normalizedMountType(mount.Type) != domain.TemplateMountDirectory {
+		if !mount.FileManager {
 			continue
 		}
-		mountRoot := filepath.Join(root, mountRootName(value.ID, mount))
-		mounts = append(mounts, FileMount{Name: mount.Name, ContainerPath: mount.ContainerPath, Root: mountRoot, ReadOnly: mount.ReadOnly})
+		mountType := normalizedMountType(mount.Type)
+		mountRoot := ""
+		source := managedVolumeName(value.ID, mount)
+		if mountType == domain.TemplateMountDirectory {
+			mountRoot = filepath.Join(root, mountRootName(value.ID, mount))
+			source = mountRoot
+		}
+		uid, gid := int64(0), int64(0)
+		if resolved.User != nil {
+			uid, gid = resolved.User.UID, resolved.User.GID
+		}
+		mounts = append(mounts, FileMount{Name: mount.Name, ContainerPath: mount.ContainerPath, Root: mountRoot, RuntimeID: value.RuntimeID, MountType: mountType, Source: source, ContainerUID: uid, ContainerGID: gid, ReadOnly: mount.ReadOnly})
 	}
 	if len(mounts) == 0 {
 		return nil, ErrFileManagerNotAvailable

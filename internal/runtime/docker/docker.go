@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -27,8 +28,10 @@ const (
 var apiVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+$`)
 
 type Adapter struct {
-	client       *http.Client
-	streamClient *http.Client
+	client           *http.Client
+	streamClient     *http.Client
+	helperExecutable string
+	podmanBinary     string
 }
 
 func New(socketPath string) (*Adapter, error) {
@@ -41,9 +44,12 @@ func New(socketPath string) (*Adapter, error) {
 			return (&net.Dialer{Timeout: defaultRequestTimeout}).DialContext(ctx, "unix", socketPath)
 		},
 	}
+	helperExecutable, _ := os.Executable()
 	return &Adapter{
-		client:       &http.Client{Transport: transport, Timeout: defaultRequestTimeout},
-		streamClient: &http.Client{Transport: transport},
+		client:           &http.Client{Transport: transport, Timeout: defaultRequestTimeout},
+		streamClient:     &http.Client{Transport: transport},
+		helperExecutable: helperExecutable,
+		podmanBinary:     "podman",
 	}, nil
 }
 

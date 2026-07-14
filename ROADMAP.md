@@ -102,16 +102,17 @@ timeout phases with browser-only or metrics-only behavior.
 
 ## Milestone 8: Restricted file manager
 
-Initial directory-mount file manager implemented: templates can enable the
-`files` access method and mark approved directory mounts read-only or
-read-write. COWS creates engine-managed directory names below its configured
-mount root, supports server-side listings, bounded uploads, downloads, folder
-creation, rename, deletion, and streamed bounded ZIP downloads, and keeps named
-volumes out of the browser UI. Explicit workspace deletion archives managed
-directory mounts while timeout cleanup leaves data in place. Remaining exit
-work is automatic retention archival only if justified, stronger temporary
-storage and file-count policy, symlink-race hardening, audit events for every
-file mutation, and broader browser accessibility review.
+Templates can enable the `files` access method and mark approved directory or
+named-volume mounts read-only or read-write. COWS creates engine-managed
+directory names below its configured mount root, supports server-side listings,
+bounded uploads, downloads, folder creation, rename, deletion, and streamed
+bounded ZIP downloads. Rootless Podman operations use the runtime-backed file
+access helper in ADR 0011, preserving the mapped container identity. Explicit
+workspace deletion archives managed directory mounts while timeout cleanup
+leaves data in place. Remaining exit work is automatic retention archival only
+if justified, stronger temporary storage and file-count policy, symlink-race
+hardening, audit events for every file mutation, and broader browser
+accessibility review.
 
 ## Later
 

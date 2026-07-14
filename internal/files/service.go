@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/cows-project/cows/internal/runtime"
 	"github.com/cows-project/cows/internal/workspace"
 )
 
@@ -42,6 +43,7 @@ type MountResolver interface {
 
 type Service struct {
 	workspaces MountResolver
+	runtime    runtime.FileAccessRuntime
 }
 
 type Entry struct {
@@ -58,8 +60,12 @@ type Listing struct {
 	Items []Entry
 }
 
-func New(workspaces MountResolver) *Service {
-	return &Service{workspaces: workspaces}
+func New(workspaces MountResolver, runtimes ...runtime.FileAccessRuntime) *Service {
+	var runtimeAccess runtime.FileAccessRuntime
+	if len(runtimes) > 0 {
+		runtimeAccess = runtimes[0]
+	}
+	return &Service{workspaces: workspaces, runtime: runtimeAccess}
 }
 
 func (s *Service) Mounts(ctx context.Context, actorID, workspaceID string) ([]workspace.FileMount, error) {
@@ -70,11 +76,32 @@ func (s *Service) Mounts(ctx context.Context, actorID, workspaceID string) ([]wo
 }
 
 func (s *Service) List(ctx context.Context, actorID, workspaceID, mountName, relativePath string) (Listing, error) {
-	mount, root, relativePath, err := s.openMount(ctx, actorID, workspaceID, mountName, relativePath)
+	mount, relativePath, err := s.resolveMount(ctx, actorID, workspaceID, mountName, relativePath)
 	if err != nil {
 		return Listing{}, err
 	}
-	defer root.Close()
+	backend, err := s.openBackend(ctx, mount)
+	if err != nil {
+		return Listing{}, err
+	}
+	defer backend.Close()
+	if backend.access != nil {
+		access := backend.access
+		items, err := access.List(ctx, relativePath)
+		if err != nil {
+			return Listing{}, mapRuntimeError(err)
+		}
+		listing := Listing{Mount: mount, Path: relativePath, Items: make([]Entry, 0, len(items))}
+		for _, item := range items {
+			itemPath := item.Name
+			if relativePath != "." {
+				itemPath = path.Join(relativePath, item.Name)
+			}
+			listing.Items = append(listing.Items, Entry{Name: item.Name, Path: itemPath, IsDir: item.IsDir, Size: item.Size, ModTime: item.ModTime})
+		}
+		return listing, nil
+	}
+	root := backend.root
 	items, err := fs.ReadDir(root.FS(), relativePath)
 	if err != nil {
 		return Listing{}, mapPathError(err)
@@ -94,11 +121,25 @@ func (s *Service) List(ctx context.Context, actorID, workspaceID, mountName, rel
 	return listing, nil
 }
 
-func (s *Service) OpenDownload(ctx context.Context, actorID, workspaceID, mountName, relativePath string) (*os.File, fs.FileInfo, error) {
-	_, root, relativePath, err := s.openMount(ctx, actorID, workspaceID, mountName, relativePath)
+func (s *Service) OpenDownload(ctx context.Context, actorID, workspaceID, mountName, relativePath string) (io.ReadCloser, fs.FileInfo, error) {
+	mount, relativePath, err := s.resolveMount(ctx, actorID, workspaceID, mountName, relativePath)
 	if err != nil {
 		return nil, nil, err
 	}
+	backend, err := s.openBackend(ctx, mount)
+	if err != nil {
+		return nil, nil, err
+	}
+	if backend.access != nil {
+		access := backend.access
+		file, info, err := access.OpenRead(ctx, relativePath)
+		if err != nil {
+			access.Close()
+			return nil, nil, mapRuntimeError(err)
+		}
+		return &accessFile{reader: file, access: access}, info, nil
+	}
+	root := backend.root
 	file, err := root.Open(relativePath)
 	if err != nil {
 		root.Close()
@@ -107,15 +148,15 @@ func (s *Service) OpenDownload(ctx context.Context, actorID, workspaceID, mountN
 	info, err := file.Stat()
 	if err != nil {
 		file.Close()
-		root.Close()
+		backend.Close()
 		return nil, nil, mapPathError(err)
 	}
 	if !info.Mode().IsRegular() {
 		file.Close()
-		root.Close()
+		backend.Close()
 		return nil, nil, ErrNotRegular
 	}
-	if err := root.Close(); err != nil {
+	if err := backend.Close(); err != nil {
 		file.Close()
 		return nil, nil, err
 	}
@@ -126,30 +167,44 @@ func (s *Service) OpenDownload(ctx context.Context, actorID, workspaceID, mountN
 // The archive is generated in a pipe so COWS never buffers the directory in
 // memory or creates a second temporary copy on disk.
 func (s *Service) OpenZip(ctx context.Context, actorID, workspaceID, mountName, relativePath string) (io.ReadCloser, string, error) {
-	mount, root, relativePath, err := s.openMount(ctx, actorID, workspaceID, mountName, relativePath)
+	mount, relativePath, err := s.resolveMount(ctx, actorID, workspaceID, mountName, relativePath)
 	if err != nil {
 		return nil, "", err
 	}
+	name := mount.Name
+	if relativePath != "." {
+		name = path.Base(relativePath)
+	}
+	backend, err := s.openBackend(ctx, mount)
+	if err != nil {
+		return nil, "", err
+	}
+	if backend.access != nil {
+		access := backend.access
+		archive, err := access.OpenZip(ctx, relativePath)
+		if err != nil {
+			access.Close()
+			return nil, "", mapRuntimeError(err)
+		}
+		return &accessFile{reader: archive, access: access}, name + ".zip", nil
+	}
+	root := backend.root
 	info, err := root.Lstat(relativePath)
 	if err != nil {
-		root.Close()
+		backend.Close()
 		return nil, "", mapPathError(err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		root.Close()
+		backend.Close()
 		return nil, "", ErrInvalidPath
 	}
 	if !info.IsDir() {
 		root.Close()
 		return nil, "", ErrNotDirectory
 	}
-	name := mount.Name
-	if relativePath != "." {
-		name = path.Base(relativePath)
-	}
 	reader, writer := io.Pipe()
 	go func() {
-		defer root.Close()
+		defer backend.Close()
 		archive := zip.NewWriter(writer)
 		state := archiveState{}
 		writeErr := writeZip(ctx, root, relativePath, archive, &state)
@@ -267,11 +322,10 @@ func (r *archiveReader) Read(value []byte) (int, error) {
 }
 
 func (s *Service) CreateDirectory(ctx context.Context, actorID, workspaceID, mountName, relativePath, name string) error {
-	mount, root, relativePath, err := s.openMount(ctx, actorID, workspaceID, mountName, relativePath)
+	mount, relativePath, err := s.resolveMount(ctx, actorID, workspaceID, mountName, relativePath)
 	if err != nil {
 		return err
 	}
-	defer root.Close()
 	if mount.ReadOnly {
 		return ErrReadOnly
 	}
@@ -279,6 +333,20 @@ func (s *Service) CreateDirectory(ctx context.Context, actorID, workspaceID, mou
 	if err != nil {
 		return err
 	}
+	backend, err := s.openBackend(ctx, mount)
+	if err != nil {
+		return err
+	}
+	if backend.access != nil {
+		access := backend.access
+		defer backend.Close()
+		if err := access.CreateDirectory(ctx, relativePath, name); err != nil {
+			return mapRuntimeError(err)
+		}
+		return nil
+	}
+	root := backend.root
+	defer backend.Close()
 	target := path.Join(relativePath, name)
 	if _, err := root.Lstat(target); err == nil {
 		return ErrNameConflict
@@ -292,17 +360,30 @@ func (s *Service) CreateDirectory(ctx context.Context, actorID, workspaceID, mou
 }
 
 func (s *Service) Delete(ctx context.Context, actorID, workspaceID, mountName, relativePath string) error {
-	mount, root, relativePath, err := s.openMount(ctx, actorID, workspaceID, mountName, relativePath)
+	mount, relativePath, err := s.resolveMount(ctx, actorID, workspaceID, mountName, relativePath)
 	if err != nil {
 		return err
 	}
-	defer root.Close()
 	if mount.ReadOnly || relativePath == "." {
 		if relativePath == "." {
 			return ErrInvalidPath
 		}
 		return ErrReadOnly
 	}
+	backend, err := s.openBackend(ctx, mount)
+	if err != nil {
+		return err
+	}
+	if backend.access != nil {
+		access := backend.access
+		defer backend.Close()
+		if err := access.Delete(ctx, relativePath); err != nil {
+			return mapRuntimeError(err)
+		}
+		return nil
+	}
+	root := backend.root
+	defer backend.Close()
 	if _, err := root.Lstat(relativePath); err != nil {
 		return mapPathError(err)
 	}
@@ -313,11 +394,10 @@ func (s *Service) Delete(ctx context.Context, actorID, workspaceID, mountName, r
 }
 
 func (s *Service) Rename(ctx context.Context, actorID, workspaceID, mountName, relativePath, oldName, newName string) error {
-	mount, root, relativePath, err := s.openMount(ctx, actorID, workspaceID, mountName, relativePath)
+	mount, relativePath, err := s.resolveMount(ctx, actorID, workspaceID, mountName, relativePath)
 	if err != nil {
 		return err
 	}
-	defer root.Close()
 	if mount.ReadOnly {
 		return ErrReadOnly
 	}
@@ -329,6 +409,20 @@ func (s *Service) Rename(ctx context.Context, actorID, workspaceID, mountName, r
 	if err != nil {
 		return err
 	}
+	backend, err := s.openBackend(ctx, mount)
+	if err != nil {
+		return err
+	}
+	if backend.access != nil {
+		access := backend.access
+		defer backend.Close()
+		if err := access.Rename(ctx, relativePath, oldName, newName); err != nil {
+			return mapRuntimeError(err)
+		}
+		return nil
+	}
+	root := backend.root
+	defer backend.Close()
 	oldPath := path.Join(relativePath, oldName)
 	newPath := path.Join(relativePath, newName)
 	if _, err := root.Lstat(oldPath); err != nil {
@@ -346,11 +440,10 @@ func (s *Service) Rename(ctx context.Context, actorID, workspaceID, mountName, r
 }
 
 func (s *Service) Upload(ctx context.Context, actorID, workspaceID, mountName, relativePath, filename string, source io.Reader) error {
-	mount, root, relativePath, err := s.openMount(ctx, actorID, workspaceID, mountName, relativePath)
+	mount, relativePath, err := s.resolveMount(ctx, actorID, workspaceID, mountName, relativePath)
 	if err != nil {
 		return err
 	}
-	defer root.Close()
 	if mount.ReadOnly {
 		return ErrReadOnly
 	}
@@ -358,6 +451,20 @@ func (s *Service) Upload(ctx context.Context, actorID, workspaceID, mountName, r
 	if err != nil {
 		return err
 	}
+	backend, err := s.openBackend(ctx, mount)
+	if err != nil {
+		return err
+	}
+	if backend.access != nil {
+		access := backend.access
+		defer backend.Close()
+		if err := access.Upload(ctx, relativePath, filename, source); err != nil {
+			return mapRuntimeError(err)
+		}
+		return nil
+	}
+	root := backend.root
+	defer backend.Close()
 	target := path.Join(relativePath, filename)
 	if existing, statErr := root.Lstat(target); statErr == nil && existing.Mode()&os.ModeSymlink != 0 {
 		return ErrInvalidPath
@@ -389,13 +496,13 @@ func (s *Service) Upload(ctx context.Context, actorID, workspaceID, mountName, r
 	return nil
 }
 
-func (s *Service) openMount(ctx context.Context, actorID, workspaceID, mountName, relativePath string) (workspace.FileMount, *os.Root, string, error) {
+func (s *Service) resolveMount(ctx context.Context, actorID, workspaceID, mountName, relativePath string) (workspace.FileMount, string, error) {
 	if s.workspaces == nil {
-		return workspace.FileMount{}, nil, "", ErrFileManagerAccess
+		return workspace.FileMount{}, "", ErrFileManagerAccess
 	}
 	mounts, err := s.Mounts(ctx, actorID, workspaceID)
 	if err != nil {
-		return workspace.FileMount{}, nil, "", err
+		return workspace.FileMount{}, "", err
 	}
 	var mount workspace.FileMount
 	for _, candidate := range mounts {
@@ -408,17 +515,85 @@ func (s *Service) openMount(ctx context.Context, actorID, workspaceID, mountName
 		mount = mounts[0]
 	}
 	if mount.Name == "" {
-		return workspace.FileMount{}, nil, "", ErrFileManagerAccess
+		return workspace.FileMount{}, "", ErrFileManagerAccess
 	}
 	cleaned, err := cleanRelativePath(relativePath)
 	if err != nil {
-		return workspace.FileMount{}, nil, "", err
+		return workspace.FileMount{}, "", err
+	}
+	return mount, cleaned, nil
+}
+
+func (s *Service) openLocalMount(mount workspace.FileMount) (*os.Root, error) {
+	if mount.Root == "" {
+		return nil, ErrFileManagerAccess
 	}
 	root, err := os.OpenRoot(mount.Root)
 	if err != nil {
-		return workspace.FileMount{}, nil, "", ErrFileManagerAccess
+		return nil, ErrFileManagerAccess
 	}
-	return mount, root, cleaned, nil
+	return root, nil
+}
+
+func (s *Service) openRuntimeAccess(ctx context.Context, mount workspace.FileMount) (runtime.FileAccess, error) {
+	if s.runtime == nil || mount.RuntimeID == "" || mount.Source == "" {
+		return nil, ErrFileManagerAccess
+	}
+	access, err := s.runtime.OpenFileAccess(ctx, runtime.FileAccessSpec{
+		RuntimeID:     mount.RuntimeID,
+		MountType:     mount.MountType,
+		Source:        mount.Source,
+		ContainerPath: mount.ContainerPath,
+		ContainerUID:  mount.ContainerUID,
+		ContainerGID:  mount.ContainerGID,
+		ReadOnly:      mount.ReadOnly,
+	})
+	if err != nil {
+		return nil, mapRuntimeError(err)
+	}
+	return access, nil
+}
+
+type fileBackend struct {
+	access runtime.FileAccess
+	root   *os.Root
+}
+
+func (b *fileBackend) Close() error {
+	if b.access != nil {
+		return b.access.Close()
+	}
+	return b.root.Close()
+}
+
+func (s *Service) openBackend(ctx context.Context, mount workspace.FileMount) (*fileBackend, error) {
+	if s.runtime != nil {
+		access, err := s.openRuntimeAccess(ctx, mount)
+		if err == nil {
+			return &fileBackend{access: access}, nil
+		}
+		// Rootful Docker directory mounts can still use the server-owned
+		// rooted path. Named volumes have no safe host fallback.
+		if mount.Root == "" || !errors.Is(err, ErrFileManagerAccess) {
+			return nil, err
+		}
+	}
+	root, err := s.openLocalMount(mount)
+	if err != nil {
+		return nil, err
+	}
+	return &fileBackend{root: root}, nil
+}
+
+type accessFile struct {
+	reader io.ReadCloser
+	access runtime.FileAccess
+}
+
+func (f *accessFile) Read(value []byte) (int, error) { return f.reader.Read(value) }
+
+func (f *accessFile) Close() error {
+	return firstError(f.reader.Close(), f.access.Close())
 }
 
 func cleanRelativePath(value string) (string, error) {
@@ -462,4 +637,17 @@ func mapPathError(err error) error {
 		return ErrNotFound
 	}
 	return err
+}
+
+func mapRuntimeError(err error) error {
+	switch {
+	case errors.Is(err, runtime.ErrNotFound):
+		return ErrNotFound
+	case errors.Is(err, runtime.ErrConflict):
+		return ErrNameConflict
+	case errors.Is(err, runtime.ErrNotSupported), errors.Is(err, runtime.ErrUnavailable):
+		return ErrFileManagerAccess
+	default:
+		return err
+	}
 }

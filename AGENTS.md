@@ -43,9 +43,10 @@ template-approved VNC service and must retain loopback mapping verification,
 WebSocket session limits, audit events, and template-selected VNC credentials
 without exposing them in URLs or logs. Do not implement a generic proxy or
 multi-host runtime feature prematurely. The initial file manager is limited to
-authorized directory mounts explicitly marked `file_manager`; keep named
-volumes out of browser routes and use rooted, server-selected paths for all
-file operations.
+authorized directory or named-volume mounts explicitly marked `file_manager`;
+use the runtime file-access capability and rooted, server-selected paths for
+all file operations. Keep runtime storage paths and volume names out of
+browser routes.
 
 Rootless Podman directory mounts with a configured container user use explicit
 subordinate UID/GID mappings, not `keep-id`, and keep the COWS-owned
