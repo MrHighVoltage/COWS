@@ -79,6 +79,8 @@ type EnvironmentVariable struct {
 
 type Mount struct {
 	Name          string
+	Type          string
+	Source        string
 	ContainerPath string
 	ReadOnly      bool
 }

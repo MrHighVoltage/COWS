@@ -7,15 +7,16 @@ environments through one authenticated HTTPS endpoint.
 
 ## Project status
 
-COWS has completed the initial **Milestone 5: graphical desktop access** checkpoint. The
+COWS has completed the initial **Milestone 8: restricted file manager** checkpoint. The
 current code provides local administrator bootstrap, password authentication,
 server-side sessions, CSRF-protected forms, basic user management,
 administrator-managed workspace templates, Docker inspection and lifecycle
 operations, workspace persistence, quotas, fail-closed capacity checks, and
 template-controlled timeout processing, an authenticated browser terminal, and
 an authenticated noVNC desktop gateway through the Docker-compatible runtime
-adapter. It does not provide generic proxied application access yet. It is not
-production-ready.
+adapter, and a restricted file manager for approved directory mounts. It does
+not provide generic proxied application access, archive operations, or
+named-volume file access yet. It is not production-ready.
 
 ## Goals
 
@@ -25,7 +26,7 @@ production-ready.
 - Reconcile database state with the actual Docker or Podman runtime.
 - Keep installation small: one Go service, SQLite, and locally served assets.
 
-Generic proxied applications and file management are planned milestones. See
+Generic proxied applications and expanded file management remain planned work. See
 [PROJECT.md](PROJECT.md),
 [ARCHITECTURE.md](ARCHITECTURE.md), and [ROADMAP.md](ROADMAP.md) for scope and
 design decisions.
@@ -75,7 +76,10 @@ the initial storage amount COWS may allocate. The value seeds the persistent
 host settings row only when it does not exist; administrators can change host
 storage and reserved CPU, memory, and storage in **Settings** without
 restarting COWS. Zero leaves storage capacity unknown and causes workspace
-creation to fail closed.
+creation to fail closed. Directory mounts are created below `COWS_MOUNT_ROOT`
+(default `./data/cows-mounts`) using engine-managed workspace names. Only
+directory mounts marked for file-manager access are visible in the browser;
+named volumes remain runtime-managed.
 
 ## Security warning
 

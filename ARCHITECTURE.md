@@ -53,8 +53,11 @@ desktop, and application gateways without exposing container ports directly.
 The configuration is intentionally not a generic Docker `HostConfig` map. The
 resolver rejects unknown placeholders, duplicate names, invalid paths, unsafe
 environment names, and dangerous runtime configuration. Managed mounts become
-named volumes derived from the COWS workspace ID; arbitrary host paths are not
-available through templates.
+named volumes or bind mounts derived from the COWS workspace ID. Directory
+mounts are created below the configured COWS mount root with names of the form
+`cows-<workspace-id>-<prefix><mount-name><suffix>`. Templates can mark a
+directory mount read-only or read-write for the browser file manager. Users
+cannot choose arbitrary host paths or rendered runtime arguments.
 
 Templates may opt into a typed `container_user` block. COWS uses the existing
 application username as the default container username and resolves the
@@ -95,6 +98,17 @@ COWS snapshots resolved secret values per workspace, marks resolved environment
 values sensitive, and supplies the selected password to noVNC only through an
 authorized no-store credentials request. The password is never entered by the
 user or placed in a URL.
+
+The file manager is another server-rendered workspace access tab. Each request
+resolves the workspace through the workspace service, checks ownership or
+administrator permission, requires a running workspace and the template's
+`files` access method, and selects a marked directory mount from the stored
+workspace configuration. The browser supplies only a mount name and relative
+path; it cannot supply a host path, volume name, runtime ID, or container
+address. Listings, downloads, directory creation, rename, deletion, and
+uploads operate through `os.Root` beneath the approved mount directory. Named
+volumes and directory mounts without `file_manager` remain inaccessible to
+this UI. Archive creation, extraction, and file previews are deferred.
 
 ## Request and state flow
 

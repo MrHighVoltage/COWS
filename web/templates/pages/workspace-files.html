@@ -1,0 +1,37 @@
+{{ define "workspace-files-page" }}
+{{ template "base-start" . }}
+<section class="intro" aria-labelledby="files-title">
+  <p class="eyebrow">Workspace files</p>
+  <div class="title-row">
+    <div><h1 id="files-title">File manager</h1><p class="lede">Approved workspace directories through COWS.</p></div>
+    <a class="secondary-button button-link" href="/workspaces">Back to workspaces</a>
+  </div>
+</section>
+{{ if .FileError }}<p class="alert alert-error" role="alert">{{ .FileError }}</p>{{ end }}
+{{ if .FileListing }}
+<section class="panel file-panel" aria-labelledby="file-panel-title">
+  <div class="panel-heading"><div><h2 id="file-panel-title">{{ .FileListing.Mount.Name }}</h2><p class="muted">Container path: <code>{{ .FileListing.Mount.ContainerPath }}</code>{{ if .FileListing.Mount.ReadOnly }} · Read-only{{ else }} · Read-write{{ end }}</p></div></div>
+  <form class="file-toolbar" method="get" action="/workspaces/{{ .ActiveWorkspace.ID }}/files">
+    <label for="file-mount">Mount</label>
+    <select id="file-mount" name="mount" onchange="this.form.submit()">
+      {{ range .FileMounts }}<option value="{{ .Name }}"{{ if eq .Name $.FileListing.Mount.Name }} selected{{ end }}>{{ .Name }} ({{ .ContainerPath }})</option>{{ end }}
+    </select>
+    <input type="hidden" name="path" value="{{ .FileListing.Path }}">
+  </form>
+  <nav class="file-breadcrumbs" aria-label="File path">
+    <a href="{{ fileURL .ActiveWorkspace.ID .FileListing.Mount.Name "." }}">Root</a>
+    {{ if ne .FileListing.Path "." }}<span>/</span><a href="{{ fileURL .ActiveWorkspace.ID .FileListing.Mount.Name (fileParent .FileListing.Path) }}">Up</a><span>/ {{ .FileListing.Path }}</span>{{ end }}
+  </nav>
+  {{ if not .FileListing.Mount.ReadOnly }}
+  <div class="file-actions">
+    <form method="post" action="/workspaces/{{ .ActiveWorkspace.ID }}/files/mkdir"><input type="hidden" name="csrf_token" value="{{ .CSRFToken }}"><input type="hidden" name="mount" value="{{ .FileListing.Mount.Name }}"><input type="hidden" name="path" value="{{ .FileListing.Path }}"><input name="name" type="text" maxlength="255" placeholder="New folder" required><button class="secondary-button" type="submit">Create folder</button></form>
+    <form method="post" action="/workspaces/{{ .ActiveWorkspace.ID }}/files/upload" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ .CSRFToken }}"><input type="hidden" name="mount" value="{{ .FileListing.Mount.Name }}"><input type="hidden" name="path" value="{{ .FileListing.Path }}"><input name="file" type="file" required><button class="secondary-button" type="submit">Upload</button></form>
+  </div>
+  {{ end }}
+  <div class="table-scroll"><table><thead><tr><th>Name</th><th>Type</th><th>Size</th><th>Modified</th><th>Actions</th></tr></thead><tbody>
+    {{ range .FileListing.Items }}<tr><td>{{ if .IsDir }}<a href="{{ fileURL $.ActiveWorkspace.ID $.FileListing.Mount.Name .Path }}"><strong>{{ .Name }}/</strong></a>{{ else }}<strong>{{ .Name }}</strong>{{ end }}</td><td>{{ if .IsDir }}Directory{{ else }}File{{ end }}</td><td>{{ if .IsDir }}-{{ else }}{{ fileSize .Size }}{{ end }}</td><td>{{ .ModTime.Local.Format "2006-01-02 15:04" }}</td><td><div class="file-entry-actions">{{ if not .IsDir }}<a class="table-action" href="/workspaces/{{ $.ActiveWorkspace.ID }}/files/download?mount={{ $.FileListing.Mount.Name }}&amp;path={{ .Path | urlquery }}">Download</a>{{ end }}{{ if not $.FileListing.Mount.ReadOnly }}<form method="post" action="/workspaces/{{ $.ActiveWorkspace.ID }}/files/rename"><input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}"><input type="hidden" name="mount" value="{{ $.FileListing.Mount.Name }}"><input type="hidden" name="path" value="{{ $.FileListing.Path }}"><input type="hidden" name="old_name" value="{{ .Name }}"><input name="new_name" type="text" value="{{ .Name }}" maxlength="255" required><button class="table-action" type="submit">Rename</button></form><form method="post" action="/workspaces/{{ $.ActiveWorkspace.ID }}/files/delete" x-on:submit="return confirm('Delete this file or directory?')"><input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}"><input type="hidden" name="mount" value="{{ $.FileListing.Mount.Name }}"><input type="hidden" name="path" value="{{ .Path }}"><button class="table-action danger-action" type="submit">Delete</button></form>{{ end }}</div></td></tr>{{ else }}<tr><td colspan="5" class="muted">This directory is empty.</td></tr>{{ end }}
+  </tbody></table></div>
+</section>
+{{ end }}
+{{ template "base-end" . }}
+{{ end }}

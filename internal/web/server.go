@@ -14,6 +14,8 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -22,6 +24,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/cows-project/cows/internal/auth"
 	"github.com/cows-project/cows/internal/domain"
+	"github.com/cows-project/cows/internal/files"
 	"github.com/cows-project/cows/internal/quota"
 	"github.com/cows-project/cows/internal/repository"
 	"github.com/cows-project/cows/internal/runtime"
@@ -49,6 +52,7 @@ type Server struct {
 	workspace *workspace.Service
 	quota     *quota.Service
 	runtime   runtime.Runtime
+	files     *files.Service
 	options   Options
 	templates *template.Template
 	static    fs.FS
@@ -126,6 +130,7 @@ type templateFormData struct {
 	TerminalAccess         bool
 	DesktopAccess          bool
 	WebAccess              bool
+	FilesAccess            bool
 	UserRole               bool
 	AdministratorRole      bool
 	Enabled                bool
@@ -153,6 +158,9 @@ type pageData struct {
 	SettingsForm    settingsFormData
 	Allocation      *allocationView
 	ActiveWorkspace *domain.Workspace
+	FileListing     *files.Listing
+	FileMounts      []workspace.FileMount
+	FileError       string
 }
 
 func New(db *sql.DB, authService *auth.Service, templateService *workspace.Service, quotaService *quota.Service, runtimeAdapter runtime.Runtime, options Options) (*Server, error) {
@@ -171,6 +179,20 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 		"timeoutPhaseText": func(value workspace.TimeoutPhase) string { return timeoutPhaseText(value) },
 		"timeoutText":      func(seconds int64) string { return formatTimeout(seconds) },
 		"operationText":    func(value string) string { return operationText(value) },
+		"fileSize":         formatFileSize,
+		"fileURL": func(workspaceID, mountName, relativePath string) string {
+			values := url.Values{}
+			values.Set("mount", mountName)
+			values.Set("path", relativePath)
+			return "/workspaces/" + workspaceID + "/files?" + values.Encode()
+		},
+		"fileParent": func(relativePath string) string {
+			parent := path.Dir(relativePath)
+			if parent == "" {
+				return "."
+			}
+			return parent
+		},
 		"deadlineText": func(value time.Time) string {
 			if value.IsZero() {
 				return ""
@@ -185,7 +207,7 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 	if err != nil {
 		return nil, fmt.Errorf("open static assets: %w", err)
 	}
-	return &Server{db: db, auth: authService, workspace: templateService, quota: quotaService, runtime: runtimeAdapter, options: options, templates: templates, static: static}, nil
+	return &Server{db: db, auth: authService, workspace: templateService, quota: quotaService, runtime: runtimeAdapter, files: files.New(templateService), options: options, templates: templates, static: static}, nil
 }
 
 func (s *Server) Handler() http.Handler {
@@ -211,6 +233,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /workspaces/{id}/desktop", s.workspaceDesktopPage)
 	mux.HandleFunc("GET /workspaces/{id}/desktop/credentials", s.workspaceDesktopCredentials)
 	mux.HandleFunc("GET /workspaces/{id}/desktop/ws", s.workspaceDesktopWebSocket)
+	mux.HandleFunc("GET /workspaces/{id}/files", s.workspaceFilesPage)
+	mux.HandleFunc("GET /workspaces/{id}/files/download", s.workspaceFileDownload)
+	mux.HandleFunc("POST /workspaces/{id}/files/mkdir", s.workspaceFileMkdir)
+	mux.HandleFunc("POST /workspaces/{id}/files/delete", s.workspaceFileDelete)
+	mux.HandleFunc("POST /workspaces/{id}/files/rename", s.workspaceFileRename)
+	mux.HandleFunc("POST /workspaces/{id}/files/upload", s.workspaceFileUpload)
 	mux.HandleFunc("GET /admin/users", s.adminUsers)
 	mux.HandleFunc("GET /admin/users/new", s.adminUsersNew)
 	mux.HandleFunc("POST /admin/users", s.adminUsersCreate)
@@ -733,6 +761,120 @@ func (s *Server) workspaceDesktopWebSocket(w http.ResponseWriter, r *http.Reques
 	}
 }
 
+func (s *Server) workspaceFilesPage(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	mountName := r.URL.Query().Get("mount")
+	relativePath := r.URL.Query().Get("path")
+	listing, err := s.files.List(r.Context(), user.ID, r.PathValue("id"), mountName, relativePath)
+	if err != nil {
+		s.renderFilePageError(w, r, user, r.PathValue("id"), mountName, relativePath, err)
+		return
+	}
+	mounts, err := s.files.Mounts(r.Context(), user.ID, r.PathValue("id"))
+	if err != nil {
+		s.renderFilePageError(w, r, user, r.PathValue("id"), mountName, relativePath, err)
+		return
+	}
+	s.render(w, http.StatusOK, "workspace-files-page", pageData{Title: "Files | COWS", User: user, CSRFToken: s.ensureCSRF(w, r), ActiveWorkspace: &domain.Workspace{ID: r.PathValue("id")}, FileListing: &listing, FileMounts: mounts})
+}
+
+func (s *Server) workspaceFileDownload(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	file, info, err := s.files.OpenDownload(r.Context(), user.ID, r.PathValue("id"), r.URL.Query().Get("mount"), r.URL.Query().Get("path"))
+	if err != nil {
+		http.Error(w, fileErrorText(err), fileErrorStatus(err))
+		return
+	}
+	defer file.Close()
+	w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(path.Base(r.URL.Query().Get("path"))))
+	http.ServeContent(w, r, info.Name(), info.ModTime(), file)
+}
+
+func (s *Server) workspaceFileMkdir(w http.ResponseWriter, r *http.Request) {
+	s.workspaceFileMutation(w, r, func(user *domain.User, workspaceID string) error {
+		return s.files.CreateDirectory(r.Context(), user.ID, workspaceID, r.FormValue("mount"), r.FormValue("path"), r.FormValue("name"))
+	})
+}
+
+func (s *Server) workspaceFileDelete(w http.ResponseWriter, r *http.Request) {
+	s.workspaceFileMutation(w, r, func(user *domain.User, workspaceID string) error {
+		return s.files.Delete(r.Context(), user.ID, workspaceID, r.FormValue("mount"), r.FormValue("path"))
+	})
+}
+
+func (s *Server) workspaceFileRename(w http.ResponseWriter, r *http.Request) {
+	s.workspaceFileMutation(w, r, func(user *domain.User, workspaceID string) error {
+		return s.files.Rename(r.Context(), user.ID, workspaceID, r.FormValue("mount"), r.FormValue("path"), r.FormValue("old_name"), r.FormValue("new_name"))
+	})
+}
+
+func (s *Server) workspaceFileUpload(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, files.MaxUploadBytes+1<<20)
+	if err := r.ParseMultipartForm(16 << 20); err != nil {
+		http.Error(w, "invalid upload", http.StatusBadRequest)
+		return
+	}
+	if !s.validCSRF(r) {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return
+	}
+	upload, header, err := r.FormFile("file")
+	if err != nil {
+		s.renderFilePageError(w, r, user, r.PathValue("id"), r.FormValue("mount"), r.FormValue("path"), err)
+		return
+	}
+	defer upload.Close()
+	if err := s.files.Upload(r.Context(), user.ID, r.PathValue("id"), r.FormValue("mount"), r.FormValue("path"), header.Filename, upload); err != nil {
+		s.renderFilePageError(w, r, user, r.PathValue("id"), r.FormValue("mount"), r.FormValue("path"), err)
+		return
+	}
+	s.redirectFiles(w, r, r.PathValue("id"), r.FormValue("mount"), r.FormValue("path"))
+}
+
+func (s *Server) workspaceFileMutation(w http.ResponseWriter, r *http.Request, action func(*domain.User, string) error) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if !s.validCSRF(r) {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return
+	}
+	if err := action(user, r.PathValue("id")); err != nil {
+		s.renderFilePageError(w, r, user, r.PathValue("id"), r.FormValue("mount"), r.FormValue("path"), err)
+		return
+	}
+	s.redirectFiles(w, r, r.PathValue("id"), r.FormValue("mount"), r.FormValue("path"))
+}
+
+func (s *Server) redirectFiles(w http.ResponseWriter, r *http.Request, workspaceID, mountName, relativePath string) {
+	values := url.Values{}
+	values.Set("mount", mountName)
+	values.Set("path", relativePath)
+	http.Redirect(w, r, "/workspaces/"+workspaceID+"/files?"+values.Encode(), http.StatusSeeOther)
+}
+
+func (s *Server) renderFilePageError(w http.ResponseWriter, r *http.Request, user *domain.User, workspaceID, mountName, relativePath string, err error) {
+	mounts, _ := s.files.Mounts(r.Context(), user.ID, workspaceID)
+	listing, _ := s.files.List(r.Context(), user.ID, workspaceID, mountName, relativePath)
+	s.render(w, fileErrorStatus(err), "workspace-files-page", pageData{Title: "Files | COWS", User: user, CSRFToken: s.ensureCSRF(w, r), ActiveWorkspace: &domain.Workspace{ID: workspaceID}, FileListing: &listing, FileMounts: mounts, FileError: fileErrorText(err)})
+}
+
 type activityStream struct {
 	io.ReadWriteCloser
 	lastActivity *atomic.Int64
@@ -1167,6 +1309,8 @@ func (s *Server) parseTemplateForm(r *http.Request) (templateFormData, workspace
 			form.DesktopAccess = true
 		case domain.AccessWeb:
 			form.WebAccess = true
+		case domain.AccessFiles:
+			form.FilesAccess = true
 		}
 	}
 	for _, role := range r.Form["allowed_roles"] {
@@ -1215,7 +1359,7 @@ func (s *Server) parseTemplateForm(r *http.Request) (templateFormData, workspace
 			return form, workspace.TemplateInput{}, workspace.ErrInvalidTemplate
 		}
 	}
-	methods := make([]domain.AccessMethod, 0, 3)
+	methods := make([]domain.AccessMethod, 0, 4)
 	if form.TerminalAccess {
 		methods = append(methods, domain.AccessTerminal)
 	}
@@ -1224,6 +1368,9 @@ func (s *Server) parseTemplateForm(r *http.Request) (templateFormData, workspace
 	}
 	if form.WebAccess {
 		methods = append(methods, domain.AccessWeb)
+	}
+	if form.FilesAccess {
+		methods = append(methods, domain.AccessFiles)
 	}
 	roles := make([]domain.Role, 0, 2)
 	if form.UserRole {
@@ -1315,6 +1462,21 @@ func formatTimeout(seconds int64) string {
 		parts = append(parts, fmt.Sprintf("%dm", minutes))
 	}
 	return strings.Join(parts, " ")
+}
+
+func formatFileSize(size int64) string {
+	if size < 1024 {
+		return fmt.Sprintf("%d B", size)
+	}
+	units := []string{"KiB", "MiB", "GiB", "TiB"}
+	value := float64(size)
+	for _, unit := range units {
+		value /= 1024
+		if value < 1024 || unit == units[len(units)-1] {
+			return fmt.Sprintf("%.1f %s", value, unit)
+		}
+	}
+	return fmt.Sprintf("%d B", size)
 }
 
 func timeoutPhaseText(phase workspace.TimeoutPhase) string {
@@ -1432,6 +1594,8 @@ func templateFormFromDomain(template domain.WorkspaceTemplate) templateFormData 
 			form.DesktopAccess = true
 		case domain.AccessWeb:
 			form.WebAccess = true
+		case domain.AccessFiles:
+			form.FilesAccess = true
 		}
 	}
 	for _, role := range template.AllowedRoles {
@@ -1577,6 +1741,38 @@ func templateFormError(err error) string {
 		return "A workspace template with that name already exists."
 	default:
 		return "The workspace template could not be saved."
+	}
+}
+
+func fileErrorText(err error) string {
+	switch {
+	case errors.Is(err, workspace.ErrFileManagerNotAvailable), errors.Is(err, files.ErrFileManagerAccess):
+		return "File manager access is not enabled for this workspace."
+	case errors.Is(err, files.ErrReadOnly):
+		return "This mount is read-only."
+	case errors.Is(err, files.ErrNotFound):
+		return "The requested file or directory was not found."
+	case errors.Is(err, files.ErrNameConflict):
+		return "A file or directory with that name already exists."
+	case errors.Is(err, files.ErrUploadTooLarge):
+		return "The upload exceeds the 128 MiB limit."
+	case errors.Is(err, files.ErrInvalidPath):
+		return "The requested path or filename is invalid."
+	default:
+		return "The file operation could not be completed."
+	}
+}
+
+func fileErrorStatus(err error) int {
+	switch {
+	case errors.Is(err, workspace.ErrFileManagerNotAvailable), errors.Is(err, files.ErrFileManagerAccess):
+		return http.StatusForbidden
+	case errors.Is(err, files.ErrNotFound):
+		return http.StatusNotFound
+	case errors.Is(err, files.ErrNameConflict):
+		return http.StatusConflict
+	default:
+		return http.StatusBadRequest
 	}
 }
 

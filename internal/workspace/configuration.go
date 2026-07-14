@@ -19,6 +19,7 @@ var (
 	configurationNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 	environmentNamePattern   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
 	containerUsernamePattern = regexp.MustCompile(`^[a-z][a-z0-9._-]{2,63}$`)
+	mountNamePartPattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
 	placeholderPattern       = regexp.MustCompile(`\{\{([a-z][a-z0-9_.-]*)\}\}`)
 	ErrPortPoolUnavailable   = errors.New("workspace port pool is unavailable")
 )
@@ -83,14 +84,30 @@ func validateTemplateConfiguration(configuration domain.TemplateConfiguration) e
 		}
 	}
 	mountNames := make(map[string]struct{}, len(configuration.Mounts))
+	managedMountNames := make(map[string]struct{}, len(configuration.Mounts))
 	for _, value := range configuration.Mounts {
-		if !configurationNamePattern.MatchString(value.Name) || !validContainerPath(value.ContainerPath) {
+		mountType := normalizedMountType(value.Type)
+		if !configurationNamePattern.MatchString(value.Name) || !validContainerPath(value.ContainerPath) || (mountType != domain.TemplateMountVolume && mountType != domain.TemplateMountDirectory) {
+			return ErrInvalidTemplate
+		}
+		if value.NamePrefix != "" && !mountNamePartPattern.MatchString(value.NamePrefix) || value.NameSuffix != "" && !mountNamePartPattern.MatchString(value.NameSuffix) {
+			return ErrInvalidTemplate
+		}
+		if value.FileManager && mountType != domain.TemplateMountDirectory {
+			return ErrInvalidTemplate
+		}
+		managedName := managedMountName("workspace-id", value)
+		if len(managedName) > 128 {
 			return ErrInvalidTemplate
 		}
 		if _, exists := mountNames[value.Name]; exists {
 			return ErrInvalidTemplate
 		}
+		if _, exists := managedMountNames[managedName]; exists {
+			return ErrInvalidTemplate
+		}
 		mountNames[value.Name] = struct{}{}
+		managedMountNames[managedName] = struct{}{}
 	}
 	serviceNames := make(map[string]struct{}, len(configuration.Services))
 	for _, value := range configuration.Services {
@@ -255,7 +272,7 @@ func resolveConfiguration(configuration domain.TemplateConfiguration, user domai
 		result.Environment = append(result.Environment, runtime.EnvironmentVariable{Name: value.Name, Value: resolved, Sensitive: sensitive})
 	}
 	for _, value := range configuration.Mounts {
-		result.Mounts = append(result.Mounts, runtime.Mount{Name: value.Name, ContainerPath: value.ContainerPath, ReadOnly: value.ReadOnly})
+		result.Mounts = append(result.Mounts, runtime.Mount{Name: value.Name, Type: normalizedMountType(value.Type), ContainerPath: value.ContainerPath, ReadOnly: value.ReadOnly})
 	}
 	for _, value := range configuration.Services {
 		port, ok := ports[value.Name]

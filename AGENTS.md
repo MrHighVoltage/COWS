@@ -41,8 +41,11 @@ WebSocket session limits, resize validation, and audit events. Do not expose
 public workspace ports. Desktop access is implemented only through the fixed
 template-approved VNC service and must retain loopback mapping verification,
 WebSocket session limits, audit events, and template-selected VNC credentials
-without exposing them in URLs or logs. Do not implement a generic proxy,
-file-manager, or multi-host runtime feature prematurely.
+without exposing them in URLs or logs. Do not implement a generic proxy or
+multi-host runtime feature prematurely. The initial file manager is limited to
+authorized directory mounts explicitly marked `file_manager`; keep named
+volumes out of browser routes and use rooted, server-selected paths for all
+file operations.
 
 Workspace timeout policies are backend-enforced and must not depend on browser
 timers. Keep the initial no-connection stop, stopped-container deletion, and

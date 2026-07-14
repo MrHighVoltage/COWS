@@ -101,9 +101,14 @@ timeout phases with browser-only or metrics-only behavior.
 
 ## Milestone 8: Restricted file manager
 
-Add approved roots, safe listings, uploads/downloads, generated ZIPs, and only
-then safe extraction if justified. Add path, symlink, archive, size, count, and
-temporary-storage tests before enabling it.
+Initial directory-mount file manager implemented: templates can enable the
+`files` access method and mark approved directory mounts read-only or
+read-write. COWS creates engine-managed directory names below its configured
+mount root, supports server-side listings, bounded uploads, downloads, folder
+creation, rename, and deletion, and keeps named volumes out of the browser UI.
+Remaining exit work is archive handling only if justified, stronger temporary
+storage and file-count policy, symlink-race hardening, audit events for every
+file mutation, and broader browser accessibility review.
 
 ## Later
 
