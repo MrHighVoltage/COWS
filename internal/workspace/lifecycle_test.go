@@ -190,7 +190,10 @@ func TestManualDeleteRemovesWorkspaceRecordAfterContainer(t *testing.T) {
 	mountRoot := t.TempDir()
 	service = NewWithRuntimeAndMountRoot(store, nil, mountRoot)
 	templateInput := validTemplateInput()
-	templateInput.Configuration.Mounts = []domain.TemplateMount{{Name: "designs", Type: domain.TemplateMountDirectory, ContainerPath: "/designs"}}
+	templateInput.Configuration.Mounts = []domain.TemplateMount{
+		{Name: "designs", Type: domain.TemplateMountDirectory, ContainerPath: "/designs"},
+		{Name: "cache", Type: domain.TemplateMountVolume, ContainerPath: "/cache", ReadOnly: true},
+	}
 	template, err := service.CreateTemplate(context.Background(), adminID, templateInput)
 	if err != nil {
 		t.Fatalf("create template: %v", err)
@@ -228,6 +231,13 @@ func TestManualDeleteRemovesWorkspaceRecordAfterContainer(t *testing.T) {
 	}
 	if _, err := store.FindWorkspaceByID(context.Background(), value.ID); !errors.Is(err, repository.ErrNotFound) {
 		t.Fatalf("workspace lookup after delete = %v, want not found", err)
+	}
+	retained, err := store.ListRetainedWorkspaceVolumes(context.Background(), value.ID)
+	if err != nil {
+		t.Fatalf("list retained volume metadata: %v", err)
+	}
+	if len(retained) != 1 || retained[0].VolumeName != managedVolumeName(value.ID, templateInput.Configuration.Mounts[1]) || retained[0].OwnerUserID != user.ID || retained[0].TemplateID != template.ID || retained[0].MountName != "cache" || retained[0].ContainerPath != "/cache" || !retained[0].ReadOnly || retained[0].RetainedAt.IsZero() {
+		t.Fatalf("retained volume metadata = %+v", retained)
 	}
 	allocations, err := store.WorkspaceAllocations(context.Background(), user.ID)
 	if err != nil {
