@@ -1,4 +1,4 @@
-package docker
+package podman
 
 import (
 	"bytes"
@@ -36,7 +36,7 @@ type Adapter struct {
 
 func New(socketPath string) (*Adapter, error) {
 	if strings.TrimSpace(socketPath) == "" {
-		return nil, errors.New("Docker socket path must not be empty")
+		return nil, errors.New("Podman socket path must not be empty")
 	}
 	transport := &http.Transport{
 		DisableKeepAlives: true,
@@ -58,6 +58,9 @@ func (a *Adapter) Name(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if !info.Rootless {
+		return "", fmt.Errorf("%w: COWS requires rootless Podman", runtime.ErrNotSupported)
+	}
 	return runtimeName(info), nil
 }
 
@@ -66,7 +69,10 @@ func (a *Adapter) Capabilities(ctx context.Context) (runtime.Capabilities, error
 	if err != nil {
 		return runtime.Capabilities{}, err
 	}
-	// Docker-compatible runtimes report legacy CFS fields for cgroup v1. On
+	if !info.Rootless {
+		return runtime.Capabilities{}, fmt.Errorf("%w: COWS requires rootless Podman", runtime.ErrNotSupported)
+	}
+	// Podman's compatibility API reports legacy CFS fields for cgroup v1. On
 	// cgroup v2, Podman reports those fields as false even when cpu.max is
 	// enforced by the delegated systemd cgroup.
 	cpu := (info.CPUCFSQuota && info.CPUCFSPeriod) || info.CgroupVersion == "2"
@@ -91,7 +97,10 @@ func (a *Adapter) HostCapacity(ctx context.Context) (runtime.HostCapacity, error
 		return runtime.HostCapacity{}, err
 	}
 	if info.NCPU <= 0 || info.MemTotal <= 0 {
-		return runtime.HostCapacity{}, fmt.Errorf("%w: Docker returned invalid host capacity", runtime.ErrInvalidObservation)
+		return runtime.HostCapacity{}, fmt.Errorf("%w: Podman returned invalid host capacity", runtime.ErrInvalidObservation)
+	}
+	if !info.Rootless {
+		return runtime.HostCapacity{}, fmt.Errorf("%w: COWS requires rootless Podman", runtime.ErrNotSupported)
 	}
 	return runtime.HostCapacity{CPUMillis: int64(info.NCPU) * 1000, MemoryBytes: info.MemTotal}, nil
 }
@@ -99,7 +108,7 @@ func (a *Adapter) HostCapacity(ctx context.Context) (runtime.HostCapacity, error
 func (a *Adapter) ListManaged(ctx context.Context) ([]runtime.ObservedWorkspace, error) {
 	filters, err := json.Marshal(map[string][]string{"label": {runtime.ManagedLabel + "=true"}})
 	if err != nil {
-		return nil, fmt.Errorf("encode Docker filters: %w", err)
+		return nil, fmt.Errorf("encode Podman filters: %w", err)
 	}
 	path := "/containers/json?all=true&filters=" + url.QueryEscape(string(filters))
 	var containers []containerSummary
@@ -111,7 +120,7 @@ func (a *Adapter) ListManaged(ctx context.Context) ([]runtime.ObservedWorkspace,
 		observed = append(observed, runtime.ObservedWorkspace{
 			RuntimeID:   container.ID,
 			WorkspaceID: container.Labels[runtime.WorkspaceIDLabel],
-			State:       stateFromDocker(container.State),
+			State:       stateFromPodman(container.State),
 			ObservedAt:  time.Now().UTC(),
 		})
 	}
@@ -129,7 +138,7 @@ func (a *Adapter) InspectWorkspace(ctx context.Context, runtimeID string) (runti
 	return runtime.ObservedWorkspace{
 		RuntimeID:   container.ID,
 		WorkspaceID: container.Config.Labels[runtime.WorkspaceIDLabel],
-		State:       stateFromDocker(container.State.Status),
+		State:       stateFromPodman(container.State.Status),
 		ExitCode:    &container.State.ExitCode,
 		ObservedAt:  time.Now().UTC(),
 	}, nil
@@ -240,7 +249,7 @@ func (a *Adapter) CreateWorkspace(ctx context.Context, spec runtime.WorkspaceSpe
 		return runtime.WorkspaceHandle{}, err
 	}
 	if !validRuntimeID(response.ID) {
-		return runtime.WorkspaceHandle{}, fmt.Errorf("%w: Docker returned invalid container ID", runtime.ErrInvalidObservation)
+		return runtime.WorkspaceHandle{}, fmt.Errorf("%w: Podman returned invalid container ID", runtime.ErrInvalidObservation)
 	}
 	return runtime.WorkspaceHandle{RuntimeID: response.ID, WorkspaceID: spec.WorkspaceID}, nil
 }
@@ -488,15 +497,15 @@ func (a *Adapter) OpenShell(ctx context.Context, runtimeID string, command []str
 		return nil, err
 	}
 	if !validRuntimeID(created.ID) {
-		return nil, fmt.Errorf("%w: Docker returned invalid exec ID", runtime.ErrInvalidObservation)
+		return nil, fmt.Errorf("%w: Podman returned invalid exec ID", runtime.ErrInvalidObservation)
 	}
 	version, err := a.version(ctx)
 	if err != nil {
 		return nil, err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://docker/v"+version+"/exec/"+url.PathEscape(created.ID)+"/start", strings.NewReader(`{"Detach":false,"Tty":true}`))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://podman/v"+version+"/exec/"+url.PathEscape(created.ID)+"/start", strings.NewReader(`{"Detach":false,"Tty":true}`))
 	if err != nil {
-		return nil, fmt.Errorf("create Docker exec request: %w", err)
+		return nil, fmt.Errorf("create Podman exec request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Connection", "Upgrade")
@@ -507,7 +516,7 @@ func (a *Adapter) OpenShell(ctx context.Context, runtimeID string, command []str
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("%w: Docker exec stream: %v", runtime.ErrUnavailable, err)
+		return nil, fmt.Errorf("%w: Podman exec stream: %v", runtime.ErrUnavailable, err)
 	}
 	if response.StatusCode != http.StatusSwitchingProtocols {
 		defer response.Body.Close()
@@ -518,12 +527,12 @@ func (a *Adapter) OpenShell(ctx context.Context, runtimeID string, command []str
 		} else if response.StatusCode == http.StatusConflict {
 			base = runtime.ErrConflict
 		}
-		return nil, fmt.Errorf("%w: Docker exec returned %s: %s", base, response.Status, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("%w: Podman exec returned %s: %s", base, response.Status, strings.TrimSpace(string(body)))
 	}
 	stream, ok := response.Body.(io.ReadWriteCloser)
 	if !ok {
 		response.Body.Close()
-		return nil, fmt.Errorf("%w: Docker did not return a writable exec stream", runtime.ErrUnavailable)
+		return nil, fmt.Errorf("%w: Podman did not return a writable exec stream", runtime.ErrUnavailable)
 	}
 	return &terminal{stream: stream, adapter: a, execID: created.ID}, nil
 }
@@ -536,7 +545,7 @@ func (a *Adapter) OpenInternalService(ctx context.Context, runtimeID string, con
 	if err := a.get(ctx, "/containers/"+url.PathEscape(runtimeID)+"/json", &container); err != nil {
 		return nil, err
 	}
-	if stateFromDocker(container.State.Status) != runtime.StateRunning {
+	if stateFromPodman(container.State.Status) != runtime.StateRunning {
 		return nil, runtime.ErrConflict
 	}
 	bindings, ok := container.NetworkSettings.Ports[strconv.Itoa(containerPort)+"/tcp"]
@@ -582,6 +591,7 @@ type containerSummary struct {
 
 type containerInspect struct {
 	ID     string `json:"Id"`
+	SizeRw int64  `json:"SizeRw"`
 	Config struct {
 		Labels map[string]string `json:"Labels"`
 	} `json:"Config"`
@@ -595,6 +605,42 @@ type containerInspect struct {
 			HostPort string `json:"HostPort"`
 		} `json:"Ports"`
 	} `json:"NetworkSettings"`
+}
+
+func (a *Adapter) WorkspaceStorageUsage(ctx context.Context, spec runtime.StorageUsageSpec) (int64, error) {
+	var total int64
+	if spec.RuntimeID != "" && !validRuntimeID(spec.RuntimeID) {
+		return 0, runtime.ErrConflict
+	}
+	if spec.RuntimeID != "" {
+		var container containerInspect
+		if err := a.get(ctx, "/containers/"+url.PathEscape(spec.RuntimeID)+"/json?size=true", &container); err != nil {
+			return 0, err
+		}
+		if container.SizeRw < 0 {
+			return 0, fmt.Errorf("%w: Podman returned a negative writable-layer size", runtime.ErrInvalidObservation)
+		}
+		total = container.SizeRw
+	}
+	for _, mount := range spec.Mounts {
+		access, err := a.OpenFileAccess(ctx, mount)
+		if err != nil {
+			return 0, err
+		}
+		usage, usageErr := access.Usage(ctx)
+		closeErr := access.Close()
+		if usageErr != nil {
+			return 0, usageErr
+		}
+		if closeErr != nil {
+			return 0, closeErr
+		}
+		if usage > (1<<62)-total {
+			return 0, fmt.Errorf("%w: workspace storage usage is too large", runtime.ErrInvalidObservation)
+		}
+		total += usage
+	}
+	return total, nil
 }
 
 type idMapping struct {
@@ -633,7 +679,7 @@ func (a *Adapter) version(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if !apiVersionPattern.MatchString(response.APIVersion) {
-		return "", fmt.Errorf("%w: invalid Docker API version %q", runtime.ErrInvalidObservation, response.APIVersion)
+		return "", fmt.Errorf("%w: invalid Podman API version %q", runtime.ErrInvalidObservation, response.APIVersion)
 	}
 	return response.APIVersion, nil
 }
@@ -671,7 +717,7 @@ func runtimeName(info hostInfo) string {
 			return runtime.RuntimeNamePodman
 		}
 	}
-	return runtime.RuntimeNameDocker
+	return runtime.RuntimeNamePodman
 }
 
 func (a *Adapter) get(ctx context.Context, path string, output any) error {
@@ -700,21 +746,21 @@ func (a *Adapter) requestMethod(ctx context.Context, method, path string, input,
 	if input != nil {
 		encoded, encodeErr := json.Marshal(input)
 		if encodeErr != nil {
-			return fmt.Errorf("encode Docker request: %w", encodeErr)
+			return fmt.Errorf("encode Podman request: %w", encodeErr)
 		}
-		request, err = http.NewRequestWithContext(ctx, method, "http://docker"+path, bytes.NewReader(encoded))
+		request, err = http.NewRequestWithContext(ctx, method, "http://podman"+path, bytes.NewReader(encoded))
 	} else {
-		request, err = http.NewRequestWithContext(ctx, method, "http://docker"+path, nil)
+		request, err = http.NewRequestWithContext(ctx, method, "http://podman"+path, nil)
 	}
 	if err != nil {
-		return fmt.Errorf("create Docker request: %w", err)
+		return fmt.Errorf("create Podman request: %w", err)
 	}
 	if input != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
 	response, err := a.client.Do(request)
 	if err != nil {
-		return fmt.Errorf("%w: Docker request: %v", runtime.ErrUnavailable, err)
+		return fmt.Errorf("%w: Podman request: %v", runtime.ErrUnavailable, err)
 	}
 	defer response.Body.Close()
 	if (response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices) && response.StatusCode != http.StatusNotModified {
@@ -725,14 +771,14 @@ func (a *Adapter) requestMethod(ctx context.Context, method, path string, input,
 		} else if response.StatusCode == http.StatusConflict {
 			base = runtime.ErrConflict
 		}
-		return fmt.Errorf("%w: Docker API returned %s: %s", base, response.Status, strings.TrimSpace(string(body)))
+		return fmt.Errorf("%w: Podman API returned %s: %s", base, response.Status, strings.TrimSpace(string(body)))
 	}
 	if output == nil || response.StatusCode == http.StatusNoContent || response.StatusCode == http.StatusNotModified {
 		return nil
 	}
 	decoder := json.NewDecoder(io.LimitReader(response.Body, maxResponseBytes))
 	if err := decoder.Decode(output); err != nil {
-		return fmt.Errorf("decode Docker response: %w", err)
+		return fmt.Errorf("decode Podman response: %w", err)
 	}
 	return nil
 }
@@ -775,7 +821,7 @@ func copyLabels(labels map[string]string) map[string]string {
 	return copy
 }
 
-func stateFromDocker(value string) runtime.State {
+func stateFromPodman(value string) runtime.State {
 	switch strings.ToLower(value) {
 	case "created":
 		return runtime.StateCreated

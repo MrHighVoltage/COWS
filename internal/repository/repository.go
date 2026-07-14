@@ -28,6 +28,14 @@ type UserRepository interface {
 	CreateUser(ctx context.Context, user domain.User, passwordHash string) error
 	UpdateUserPassword(ctx context.Context, id, passwordHash string, mustChangePassword bool) error
 	SetUserDisabled(ctx context.Context, id string, disabled bool) error
+	ListUserGroupIDs(ctx context.Context, userID string) ([]string, error)
+	SetUserGroups(ctx context.Context, userID string, groupIDs []string) error
+}
+
+type GroupRepository interface {
+	ListGroups(ctx context.Context) ([]domain.Group, error)
+	FindGroupByID(ctx context.Context, id string) (domain.Group, error)
+	CreateGroup(ctx context.Context, group domain.Group) error
 }
 
 type SessionRepository interface {
@@ -87,6 +95,7 @@ type Store interface {
 	SessionRepository
 	AuditRepository
 	TemplateRepository
+	GroupRepository
 	PortAllocationRepository
 	WorkspaceRepository
 	QuotaRepository

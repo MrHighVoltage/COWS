@@ -30,14 +30,14 @@ The resolver accepts only these placeholders:
 ```
 
 There is no general Go-template execution, shell expansion, host environment
-lookup, or user-provided Docker argument map. The resolver validates every
+lookup, or user-provided runtime argument map. The resolver validates every
 field before producing a COWS runtime specification.
 
 Port allocations are persisted in SQLite and protected by a unique protocol /
 host-port constraint. Allocations are stable while a workspace exists and are
 released when timeout cleanup deletes its container or when the workspace is
 explicitly deleted. Service bindings are loopback-only host bindings for the
-initial Docker-compatible adapter. A later access gateway may use those
+initial Podman adapter. A later access gateway may use those
 bindings without making them public container ports.
 
 ## Consequences
@@ -46,7 +46,7 @@ Template edits do not silently change existing workspace configuration. The
 workspace snapshot provides deterministic retries and a clear reconciliation
 input. Template revision history beyond the workspace snapshot is deferred.
 
-Runtime-specific fields remain in the Docker or Podman adapter. Dangerous
+Runtime-specific fields remain in the Podman adapter. Dangerous
 options such as privileged mode, host networking, arbitrary binds, devices,
 and capabilities are not represented by this configuration model.
 
@@ -54,10 +54,9 @@ When `container_user` is present, COWS resolves the existing application
 username for the workspace owner and builds a passwd entry in the form
 `username:x:uid:gid:name:home:shell`. The template may override the username
 only with `{{cows.user.username}}`; it may override the other fields with
-literal values or the approved user placeholders. Docker receives the
-controlled `uid:gid` selection. Podman uses its Libpod create API so the
-passwd entry is actually written into the container. A Docker runtime rejects
-templates that require the Podman-only passwd-entry capability.
+literal values or the approved user placeholders. Podman receives the
+controlled `uid:gid` selection and uses its Libpod create API so the
+passwd entry is actually written into the container.
 
 Sensitive environment values are stored as administrator configuration and are
 never returned to users or written to audit metadata. A dedicated secret store

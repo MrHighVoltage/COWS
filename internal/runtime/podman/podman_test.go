@@ -1,4 +1,4 @@
-package docker
+package podman
 
 import (
 	"bytes"
@@ -31,27 +31,27 @@ func TestStateMapping(t *testing.T) {
 		"unexpected": runtime.StateUnknown,
 	}
 	for input, expected := range tests {
-		if actual := stateFromDocker(input); actual != expected {
-			t.Errorf("stateFromDocker(%q) = %q, want %q", input, actual, expected)
+		if actual := stateFromPodman(input); actual != expected {
+			t.Errorf("stateFromPodman(%q) = %q, want %q", input, actual, expected)
 		}
 	}
 }
 
-func TestAdapterWithoutDockerReturnsUnavailable(t *testing.T) {
+func TestAdapterWithoutPodmanReturnsUnavailable(t *testing.T) {
 	adapter, err := New(t.TempDir() + "/missing.sock")
 	if err != nil {
 		t.Fatalf("create adapter: %v", err)
 	}
 	_, err = adapter.Capabilities(context.Background())
 	if !errors.Is(err, runtime.ErrUnavailable) {
-		t.Fatalf("missing Docker socket error = %v", err)
+		t.Fatalf("missing Podman socket error = %v", err)
 	}
 	if err := adapter.StopWorkspace(context.Background(), "abc", time.Second); !errors.Is(err, runtime.ErrUnavailable) {
-		t.Fatalf("stop Docker error = %v", err)
+		t.Fatalf("stop Podman error = %v", err)
 	}
 }
 
-func TestListManagedUsesVersionedDockerAPI(t *testing.T) {
+func TestListManagedUsesVersionedPodmanAPI(t *testing.T) {
 	adapter := &Adapter{client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		var body string
 		switch request.URL.Path {
@@ -73,7 +73,7 @@ func TestListManagedUsesVersionedDockerAPI(t *testing.T) {
 	}
 }
 
-func TestLifecycleUsesApprovedDockerRequests(t *testing.T) {
+func TestLifecycleUsesApprovedPodmanRequests(t *testing.T) {
 	var calls []string
 	adapter := &Adapter{client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		calls = append(calls, request.Method+" "+request.URL.Path+"?"+request.URL.RawQuery)
@@ -82,7 +82,7 @@ func TestLifecycleUsesApprovedDockerRequests(t *testing.T) {
 		case "/version":
 			body = `{"ApiVersion":"1.45"}`
 		case "/v1.45/info":
-			body = `{"NCPU":8,"MemTotal":8589934592,"MemoryLimit":true,"PidsLimit":true,"CpuCfsQuota":true,"CpuCfsPeriod":true}`
+			body = `{"NCPU":8,"MemTotal":8589934592,"MemoryLimit":true,"PidsLimit":true,"CpuCfsQuota":true,"CpuCfsPeriod":true,"Rootless":true}`
 		case "/v1.45/containers/create":
 			body = `{"Id":"abcdef0123456789"}`
 		case "/v1.45/containers/abcdef0123456789/start", "/v1.45/containers/abcdef0123456789/stop", "/v1.45/containers/abcdef0123456789":
@@ -109,7 +109,7 @@ func TestLifecycleUsesApprovedDockerRequests(t *testing.T) {
 		t.Fatalf("remove workspace: %v", err)
 	}
 	if len(calls) != 10 {
-		t.Fatalf("Docker API calls = %d, want 10: %v", len(calls), calls)
+		t.Fatalf("Podman API calls = %d, want 10: %v", len(calls), calls)
 	}
 }
 
@@ -152,9 +152,9 @@ func TestCapabilitiesDetectCgroupV2ResourceLimits(t *testing.T) {
 		case "/v1.44/info":
 			body = `{"NCPU":8,"MemTotal":8589934592,"MemoryLimit":true,"PidsLimit":true,"CpuCfsQuota":false,"CpuCfsPeriod":false,"CgroupVersion":"2","Rootless":true}`
 		default:
-			return dockerResponse(http.StatusNotFound, `not found`), nil
+			return podmanResponse(http.StatusNotFound, `not found`), nil
 		}
-		return dockerResponse(http.StatusOK, body), nil
+		return podmanResponse(http.StatusOK, body), nil
 	})}}
 	capabilities, err := adapter.Capabilities(context.Background())
 	if err != nil {
@@ -169,11 +169,11 @@ func TestOpenInternalServiceRequiresLoopbackPortMapping(t *testing.T) {
 	adapter := &Adapter{client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		switch request.URL.Path {
 		case "/version":
-			return dockerResponse(http.StatusOK, `{"ApiVersion":"1.45"}`), nil
+			return podmanResponse(http.StatusOK, `{"ApiVersion":"1.45"}`), nil
 		case "/v1.45/containers/abcdef0123456789/json":
-			return dockerResponse(http.StatusOK, `{"Id":"abcdef0123456789","State":{"Status":"running"},"NetworkSettings":{"Ports":{"5900/tcp":[{"HostIp":"0.0.0.0","HostPort":"10000"}]}}}`), nil
+			return podmanResponse(http.StatusOK, `{"Id":"abcdef0123456789","State":{"Status":"running"},"NetworkSettings":{"Ports":{"5900/tcp":[{"HostIp":"0.0.0.0","HostPort":"10000"}]}}}`), nil
 		default:
-			return dockerResponse(http.StatusNotFound, `not found`), nil
+			return podmanResponse(http.StatusNotFound, `not found`), nil
 		}
 	})}}
 	_, err := adapter.OpenInternalService(context.Background(), "abcdef0123456789", 5900, 10000)
@@ -182,16 +182,16 @@ func TestOpenInternalServiceRequiresLoopbackPortMapping(t *testing.T) {
 	}
 }
 
-func TestOpenShellUsesDockerExecUpgradeAndResize(t *testing.T) {
+func TestOpenShellUsesPodmanExecUpgradeAndResize(t *testing.T) {
 	var calls []string
 	stream := &testStream{Reader: strings.NewReader("shell> ")}
 	adapter := &Adapter{client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		calls = append(calls, request.Method+" "+request.URL.Path+"?"+request.URL.RawQuery)
 		switch request.URL.Path {
 		case "/version":
-			return dockerResponse(http.StatusOK, `{"ApiVersion":"1.45"}`), nil
+			return podmanResponse(http.StatusOK, `{"ApiVersion":"1.45"}`), nil
 		case "/v1.45/containers/abcdef0123456789/exec":
-			return dockerResponse(http.StatusCreated, `{"Id":"abc123"}`), nil
+			return podmanResponse(http.StatusCreated, `{"Id":"abc123"}`), nil
 		case "/v1.45/exec/abc123/start":
 			if request.Header.Get("Upgrade") != "tcp" || request.Header.Get("Connection") != "Upgrade" {
 				t.Fatalf("exec start did not request an upgraded stream: %+v", request.Header)
@@ -201,9 +201,9 @@ func TestOpenShellUsesDockerExecUpgradeAndResize(t *testing.T) {
 			if request.URL.Query().Get("w") != "120" || request.URL.Query().Get("h") != "40" {
 				t.Fatalf("unexpected resize query: %s", request.URL.RawQuery)
 			}
-			return dockerResponse(http.StatusOK, ``), nil
+			return podmanResponse(http.StatusOK, ``), nil
 		default:
-			return dockerResponse(http.StatusNotFound, `not found`), nil
+			return podmanResponse(http.StatusNotFound, `not found`), nil
 		}
 	})}}
 	terminal, err := adapter.OpenShell(context.Background(), "abcdef0123456789", []string{"/bin/sh", "-l"})
@@ -226,7 +226,7 @@ func TestOpenShellUsesDockerExecUpgradeAndResize(t *testing.T) {
 		t.Fatalf("stream input = %q, want %q", got, want)
 	}
 	if len(calls) != 6 {
-		t.Fatalf("Docker API calls = %d, want 6: %v", len(calls), calls)
+		t.Fatalf("Podman API calls = %d, want 6: %v", len(calls), calls)
 	}
 }
 
@@ -234,9 +234,9 @@ func TestCreateWorkspaceMapsTypedConfiguration(t *testing.T) {
 	adapter := &Adapter{client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		switch request.URL.Path {
 		case "/version":
-			return dockerResponse(http.StatusOK, `{"ApiVersion":"1.45"}`), nil
+			return podmanResponse(http.StatusOK, `{"ApiVersion":"1.45"}`), nil
 		case "/v1.45/info":
-			return dockerResponse(http.StatusOK, `{"NCPU":8,"MemTotal":8589934592,"MemoryLimit":true,"PidsLimit":true,"CpuCfsQuota":true,"CpuCfsPeriod":true}`), nil
+			return podmanResponse(http.StatusOK, `{"NCPU":8,"MemTotal":8589934592,"MemoryLimit":true,"PidsLimit":true,"CpuCfsQuota":true,"CpuCfsPeriod":true,"Rootless":true}`), nil
 		case "/v1.45/containers/create":
 			var body struct {
 				Cmd        []string `json:"Cmd"`
@@ -261,9 +261,9 @@ func TestCreateWorkspaceMapsTypedConfiguration(t *testing.T) {
 			if len(binding) != 1 || binding[0].HostIP != "127.0.0.1" || binding[0].HostPort != "10000" {
 				t.Fatalf("unexpected port binding: %+v", body.HostConfig.PortBindings)
 			}
-			return dockerResponse(http.StatusCreated, `{"Id":"abcdef0123456789"}`), nil
+			return podmanResponse(http.StatusCreated, `{"Id":"abcdef0123456789"}`), nil
 		default:
-			return dockerResponse(http.StatusNotFound, `not found`), nil
+			return podmanResponse(http.StatusNotFound, `not found`), nil
 		}
 	})}}
 	_, err := adapter.CreateWorkspace(context.Background(), runtime.WorkspaceSpec{
@@ -282,11 +282,11 @@ func TestCreateWorkspaceUsesPodmanLibpodForPasswdEntry(t *testing.T) {
 	adapter := &Adapter{client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		switch request.URL.Path {
 		case "/version":
-			return dockerResponse(http.StatusOK, `{"ApiVersion":"4.9"}`), nil
+			return podmanResponse(http.StatusOK, `{"ApiVersion":"4.9"}`), nil
 		case "/v4.9/info":
-			return dockerResponse(http.StatusOK, `{"NCPU":8,"MemTotal":8589934592,"MemoryLimit":true,"PidsLimit":true,"CgroupVersion":"2","Rootless":true,"IDMappings":{"UIDMap":[{"ContainerID":0,"HostID":100000,"Size":65536}],"GIDMap":[{"ContainerID":0,"HostID":100000,"Size":65536}]}}`), nil
+			return podmanResponse(http.StatusOK, `{"NCPU":8,"MemTotal":8589934592,"MemoryLimit":true,"PidsLimit":true,"CgroupVersion":"2","Rootless":true,"IDMappings":{"UIDMap":[{"ContainerID":0,"HostID":100000,"Size":65536}],"GIDMap":[{"ContainerID":0,"HostID":100000,"Size":65536}]}}`), nil
 		case "/v4.9/libpod/info":
-			return dockerResponse(http.StatusOK, `{"host":{"idMappings":{"uidmap":[{"container_id":0,"host_id":1000,"size":1},{"container_id":1,"host_id":100000,"size":65536}],"gidmap":[{"container_id":0,"host_id":1000,"size":1},{"container_id":1,"host_id":100000,"size":65536}]}}}`), nil
+			return podmanResponse(http.StatusOK, `{"host":{"idMappings":{"uidmap":[{"container_id":0,"host_id":1000,"size":1},{"container_id":1,"host_id":100000,"size":65536}],"gidmap":[{"container_id":0,"host_id":1000,"size":1},{"container_id":1,"host_id":100000,"size":65536}]}}}`), nil
 		case "/v4.9/libpod/containers/create":
 			var body struct {
 				User        string `json:"user"`
@@ -313,9 +313,9 @@ func TestCreateWorkspaceUsesPodmanLibpodForPasswdEntry(t *testing.T) {
 			if body.User != "1000:1001" || body.PasswdEntry != "alice:x:1000:1001:Alice:/home/alice:/bin/bash" || len(body.UserNS.UIDMappings) != 1 || len(body.UserNS.GIDMappings) != 1 || body.UserNS.UIDMappings[0].ContainerID != 0 || body.UserNS.UIDMappings[0].HostID != 1 || body.UserNS.UIDMappings[0].Size != 65536 || body.UserNS.GIDMappings[0].HostID != 1 || body.NetNS.Mode != "none" {
 				t.Fatalf("unexpected Podman identity configuration: %+v", body)
 			}
-			return dockerResponse(http.StatusCreated, `{"Id":"abcdef0123456789"}`), nil
+			return podmanResponse(http.StatusCreated, `{"Id":"abcdef0123456789"}`), nil
 		default:
-			return dockerResponse(http.StatusNotFound, `not found`), nil
+			return podmanResponse(http.StatusNotFound, `not found`), nil
 		}
 	})}}
 	_, err := adapter.CreateWorkspace(context.Background(), runtime.WorkspaceSpec{
@@ -342,7 +342,7 @@ func TestExplicitRootlessMappingLeavesInvokingUserUnmapped(t *testing.T) {
 	}
 }
 
-func dockerResponse(status int, body string) *http.Response {
+func podmanResponse(status int, body string) *http.Response {
 	return &http.Response{StatusCode: status, Status: http.StatusText(status), Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}
 }
 

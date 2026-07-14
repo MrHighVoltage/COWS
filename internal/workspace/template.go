@@ -40,10 +40,11 @@ type TemplateInput struct {
 	DefaultStorageBytes             int64
 	InitialConnectionTimeoutSeconds int64
 	StoppedRetentionSeconds         int64
-	DataRetentionSeconds            int64
 	Configuration                   domain.TemplateConfiguration
 	AccessMethods                   []domain.AccessMethod
 	AllowedRoles                    []domain.Role
+	GroupAccessMode                 string
+	AllowedGroupIDs                 []string
 	Enabled                         bool
 }
 
@@ -53,6 +54,7 @@ type Service struct {
 	runtime          runtime.Runtime
 	mountRoot        string
 	mountArchiveRoot string
+	storageUsage     *StorageUsageProvider
 	now              func() time.Time
 }
 
@@ -72,6 +74,9 @@ func NewWithRuntimeAndMountRoots(store repository.Store, runtimeAdapter runtime.
 	service := newService(store, runtimeAdapter, schedulers...)
 	service.mountRoot = mountRoot
 	service.mountArchiveRoot = mountArchiveRoot
+	if storageRuntime, ok := runtimeAdapter.(runtime.StorageUsageRuntime); ok {
+		service.storageUsage = NewStorageUsageProvider(storageRuntime, mountRoot)
+	}
 	return service
 }
 
@@ -127,11 +132,12 @@ func (s *Service) CreateTemplate(ctx context.Context, actorID string, input Temp
 		DefaultStorageBytes:             input.DefaultStorageBytes,
 		InitialConnectionTimeoutSeconds: input.InitialConnectionTimeoutSeconds,
 		StoppedRetentionSeconds:         input.StoppedRetentionSeconds,
-		DataRetentionSeconds:            input.DataRetentionSeconds,
 		Revision:                        1,
 		Configuration:                   cloneTemplateConfiguration(input.Configuration),
 		AccessMethods:                   append([]domain.AccessMethod(nil), input.AccessMethods...),
 		AllowedRoles:                    append([]domain.Role(nil), input.AllowedRoles...),
+		GroupAccessMode:                 normalizeGroupAccessMode(input.GroupAccessMode),
+		AllowedGroupIDs:                 append([]string(nil), input.AllowedGroupIDs...),
 		Enabled:                         input.Enabled,
 		CreatedAt:                       now,
 		UpdatedAt:                       now,
@@ -170,7 +176,6 @@ func (s *Service) UpdateTemplate(ctx context.Context, actorID, id string, input 
 	existing.DefaultStorageBytes = input.DefaultStorageBytes
 	existing.InitialConnectionTimeoutSeconds = input.InitialConnectionTimeoutSeconds
 	existing.StoppedRetentionSeconds = input.StoppedRetentionSeconds
-	existing.DataRetentionSeconds = input.DataRetentionSeconds
 	existing.Revision++
 	if existing.Revision <= 0 {
 		existing.Revision = 1
@@ -178,6 +183,8 @@ func (s *Service) UpdateTemplate(ctx context.Context, actorID, id string, input 
 	existing.Configuration = cloneTemplateConfiguration(input.Configuration)
 	existing.AccessMethods = append([]domain.AccessMethod(nil), input.AccessMethods...)
 	existing.AllowedRoles = append([]domain.Role(nil), input.AllowedRoles...)
+	existing.GroupAccessMode = normalizeGroupAccessMode(input.GroupAccessMode)
+	existing.AllowedGroupIDs = append([]string(nil), input.AllowedGroupIDs...)
 	existing.Enabled = input.Enabled
 	existing.UpdatedAt = s.now().UTC()
 	if err := s.store.UpdateTemplate(ctx, existing); err != nil {
@@ -245,7 +252,7 @@ func validateTemplate(input TemplateInput) error {
 	if input.DefaultStorageBytes <= 0 || input.DefaultStorageBytes > 1<<60 {
 		return ErrInvalidTemplate
 	}
-	if !validTimeout(input.InitialConnectionTimeoutSeconds) || !validTimeout(input.StoppedRetentionSeconds) || !validTimeout(input.DataRetentionSeconds) {
+	if !validTimeout(input.InitialConnectionTimeoutSeconds) || !validTimeout(input.StoppedRetentionSeconds) {
 		return ErrInvalidTemplate
 	}
 	if err := validateTemplateConfiguration(input.Configuration); err != nil {
@@ -274,12 +281,25 @@ func validateTemplate(input TemplateInput) error {
 	if len(input.AllowedRoles) == 0 || hasDuplicateRole(input.AllowedRoles) {
 		return ErrInvalidTemplate
 	}
+	if input.GroupAccessMode != "" && input.GroupAccessMode != domain.GroupAccessInclude && input.GroupAccessMode != domain.GroupAccessExclude {
+		return ErrInvalidTemplate
+	}
+	if hasDuplicateString(input.AllowedGroupIDs) {
+		return ErrInvalidTemplate
+	}
 	for _, role := range input.AllowedRoles {
 		if !role.Valid() {
 			return ErrInvalidTemplate
 		}
 	}
 	return nil
+}
+
+func normalizeGroupAccessMode(value string) string {
+	if value == "" {
+		return domain.GroupAccessExclude
+	}
+	return value
 }
 
 func cloneTemplateConfiguration(value domain.TemplateConfiguration) domain.TemplateConfiguration {
@@ -352,6 +372,20 @@ func hasDuplicateAccessMethod(values []domain.AccessMethod) bool {
 func hasDuplicateRole(values []domain.Role) bool {
 	seen := make(map[domain.Role]struct{}, len(values))
 	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			return true
+		}
+		seen[value] = struct{}{}
+	}
+	return false
+}
+
+func hasDuplicateString(values []string) bool {
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if value == "" {
+			return true
+		}
 		if _, ok := seen[value]; ok {
 			return true
 		}

@@ -17,6 +17,7 @@ var (
 	ErrQuotaExceeded        = errors.New("user quota exceeded")
 	ErrCapacityUnavailable  = errors.New("host capacity unavailable")
 	ErrCapacityInsufficient = errors.New("host capacity insufficient")
+	ErrStorageUnavailable   = errors.New("workspace storage usage unavailable")
 )
 
 type CapacityInsufficientError struct {
@@ -37,10 +38,11 @@ type Service struct {
 }
 
 type Input struct {
-	MaxCPUMillis    int64
-	MaxMemoryBytes  int64
-	MaxStorageBytes int64
-	MaxWorkspaces   int64
+	MaxCPUMillis         int64
+	MaxMemoryBytes       int64
+	MaxStorageBytes      int64
+	MaxWorkspaces        int64
+	MaxRunningWorkspaces int64
 }
 
 type HostSettingsInput struct {
@@ -100,6 +102,7 @@ func (s *Service) Set(ctx context.Context, actorID, userID string, input Input) 
 	existing.MaxMemoryBytes = input.MaxMemoryBytes
 	existing.MaxStorageBytes = input.MaxStorageBytes
 	existing.MaxWorkspaces = input.MaxWorkspaces
+	existing.MaxRunningWorkspaces = input.MaxRunningWorkspaces
 	existing.UpdatedAt = s.now().UTC()
 	if err := s.store.UpsertUserQuota(ctx, existing); err != nil {
 		return domain.UserQuota{}, err
@@ -173,16 +176,25 @@ func (s *Service) requireAdministrator(ctx context.Context, actorID string) (dom
 }
 
 func validInput(input Input) bool {
-	return input.MaxCPUMillis >= 0 && input.MaxCPUMillis <= 1_000_000 && input.MaxMemoryBytes >= 0 && input.MaxMemoryBytes <= 1<<50 && input.MaxStorageBytes >= 0 && input.MaxStorageBytes <= 1<<60 && input.MaxWorkspaces >= 0 && input.MaxWorkspaces <= 1_000_000
+	return input.MaxCPUMillis >= 0 && input.MaxCPUMillis <= 1_000_000 && input.MaxMemoryBytes >= 0 && input.MaxMemoryBytes <= 1<<50 && input.MaxStorageBytes >= 0 && input.MaxStorageBytes <= 1<<60 && input.MaxWorkspaces >= 0 && input.MaxWorkspaces <= 1_000_000 && input.MaxRunningWorkspaces >= 0 && input.MaxRunningWorkspaces <= 1_000_000
 }
 
 type Scheduler struct {
 	store    repository.Store
 	capacity runtime.CapacityProvider
+	storage  StorageUsageProvider
 }
 
-func NewScheduler(store repository.Store, capacity runtime.CapacityProvider) *Scheduler {
-	return &Scheduler{store: store, capacity: capacity}
+type StorageUsageProvider interface {
+	WorkspaceStorageUsage(ctx context.Context, value domain.Workspace) (int64, error)
+}
+
+func NewScheduler(store repository.Store, capacity runtime.CapacityProvider, storage ...StorageUsageProvider) *Scheduler {
+	var provider StorageUsageProvider
+	if len(storage) > 0 {
+		provider = storage[0]
+	}
+	return &Scheduler{store: store, capacity: capacity, storage: provider}
 }
 
 func (s *Scheduler) CheckCreate(ctx context.Context, userID string, request domain.ResourceRequest) error {
@@ -208,6 +220,21 @@ func (s *Scheduler) CheckCreate(ctx context.Context, userID string, request doma
 		return err
 	}
 	if quotaAssigned && exceedsQuota(userAllocations, request, userQuota) {
+		return ErrQuotaExceeded
+	}
+	userWorkspaces, err := s.store.ListWorkspacesForUser(ctx, userID)
+	if err != nil {
+		return err
+	}
+	allWorkspaces, err := s.store.ListAllWorkspaces(ctx)
+	if err != nil {
+		return err
+	}
+	userStorage, allStorage, err := s.measureStorage(ctx, userWorkspaces, allWorkspaces)
+	if err != nil {
+		return err
+	}
+	if quotaAssigned && userQuota.MaxStorageBytes > 0 && userStorage > userQuota.MaxStorageBytes-request.StorageBytes {
 		return ErrQuotaExceeded
 	}
 	if s.capacity == nil {
@@ -237,11 +264,63 @@ func (s *Scheduler) CheckCreate(ctx context.Context, userID string, request doma
 	if request.MemoryBytes > availableMemory {
 		return &CapacityInsufficientError{Resource: "memory", Available: availableMemory, Requested: request.MemoryBytes}
 	}
-	availableStorage := host.StorageBytes - settings.ReservedStorageBytes - allAllocations.Resources.StorageBytes
+	availableStorage := host.StorageBytes - settings.ReservedStorageBytes - allStorage
 	if request.StorageBytes > availableStorage {
 		return &CapacityInsufficientError{Resource: "storage", Available: availableStorage, Requested: request.StorageBytes}
 	}
 	return nil
+}
+
+func (s *Scheduler) CheckStart(ctx context.Context, userID string, request domain.ResourceRequest) error {
+	user, err := s.store.FindUserByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("load quota user: %w", err)
+	}
+	userQuota, err := s.store.FindUserQuota(ctx, userID)
+	quotaAssigned := true
+	if errors.Is(err, repository.ErrNotFound) {
+		quotaAssigned = false
+		if !user.IsAdministrator() {
+			return ErrQuotaUnavailable
+		}
+	} else if err != nil {
+		return fmt.Errorf("load user quota: %w", err)
+	}
+	if !quotaAssigned {
+		return nil
+	}
+	allocations, err := s.store.WorkspaceAllocations(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if userQuota.MaxRunningWorkspaces > 0 && allocations.RunningWorkspaceCount >= userQuota.MaxRunningWorkspaces {
+		return ErrQuotaExceeded
+	}
+	if exceeds(allocations.Resources.CPUMillis, request.CPUMillis, userQuota.MaxCPUMillis) || exceeds(allocations.Resources.MemoryBytes, request.MemoryBytes, userQuota.MaxMemoryBytes) {
+		return ErrQuotaExceeded
+	}
+	return nil
+}
+
+func (s *Scheduler) measureStorage(ctx context.Context, userWorkspaces, allWorkspaces []domain.Workspace) (int64, int64, error) {
+	if s.storage == nil {
+		return 0, 0, ErrStorageUnavailable
+	}
+	usage := make(map[string]int64, len(allWorkspaces))
+	var total int64
+	for _, value := range allWorkspaces {
+		bytes, err := s.storage.WorkspaceStorageUsage(ctx, value)
+		if err != nil || bytes < 0 {
+			return 0, 0, ErrStorageUnavailable
+		}
+		usage[value.ID] = bytes
+		total += bytes
+	}
+	var userTotal int64
+	for _, value := range userWorkspaces {
+		userTotal += usage[value.ID]
+	}
+	return userTotal, total, nil
 }
 
 func validHostSettings(input HostSettingsInput) bool {
@@ -255,6 +334,5 @@ func exceeds(current, requested, limit int64) bool {
 func exceedsQuota(current domain.AllocationSummary, request domain.ResourceRequest, limit domain.UserQuota) bool {
 	return (limit.MaxWorkspaces > 0 && current.WorkspaceCount+1 > limit.MaxWorkspaces) ||
 		exceeds(current.Resources.CPUMillis, request.CPUMillis, limit.MaxCPUMillis) ||
-		exceeds(current.Resources.MemoryBytes, request.MemoryBytes, limit.MaxMemoryBytes) ||
-		exceeds(current.Resources.StorageBytes, request.StorageBytes, limit.MaxStorageBytes)
+		exceeds(current.Resources.MemoryBytes, request.MemoryBytes, limit.MaxMemoryBytes)
 }

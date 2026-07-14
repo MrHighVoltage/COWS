@@ -32,7 +32,6 @@
       <div class="form-grid">
         <div><label for="initial-connection-hours">Stop if never connected (hours)</label><input id="initial-connection-hours" name="initial_connection_hours" type="number" min="0" max="87600" value="{{ .Template.InitialConnectionHours }}" required></div>
         <div><label for="stopped-retention-hours">Keep stopped container (hours)</label><input id="stopped-retention-hours" name="stopped_retention_hours" type="number" min="0" max="87600" value="{{ .Template.StoppedRetentionHours }}" required></div>
-        <div><label for="data-retention-days">Archive eligibility after deletion (days)</label><input id="data-retention-days" name="data_retention_days" type="number" min="0" max="3650" value="{{ .Template.DataRetentionDays }}" required></div>
       </div>
     </fieldset>
 
@@ -56,6 +55,22 @@
       <legend>Allowed roles</legend>
       <label class="check-row"><input type="checkbox" name="allowed_roles" value="user"{{ if .Template.UserRole }} checked{{ end }}> Users</label>
       <label class="check-row"><input type="checkbox" name="allowed_roles" value="administrator"{{ if .Template.AdministratorRole }} checked{{ end }}> Administrators</label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Group access</legend>
+      <label for="group-access-mode">Group policy</label>
+      <select id="group-access-mode" name="group_access_mode">
+        <option value="exclude"{{ if eq .Template.GroupAccessMode "exclude" }} selected{{ end }}>Exclude selected groups</option>
+        <option value="include"{{ if eq .Template.GroupAccessMode "include" }} selected{{ end }}>Include selected groups only</option>
+      </select>
+      {{ if .Groups }}
+        <div class="check-list">
+        {{ range .Groups }}
+          <label class="check-row"><input type="checkbox" name="allowed_group_ids" value="{{ .ID }}"{{ if hasID $.Template.AllowedGroupIDs .ID }} checked{{ end }}> {{ .Name }}</label>
+        {{ end }}
+        </div>
+      {{ else }}<p class="muted">No groups exist yet. Create groups from the Groups administration page.</p>{{ end }}
     </fieldset>
 
     <label class="check-row"><input type="checkbox" name="enabled"{{ if .Template.Enabled }} checked{{ end }}> Enabled for future workspace requests</label>

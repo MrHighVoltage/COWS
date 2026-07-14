@@ -23,10 +23,8 @@ the owner username is loaded server-side from the user record.
 
 ## Runtime handling
 
-The Docker-compatible API receives the controlled `uid:gid` process user. It
-cannot represent Podman's passwd-entry extension, so a Docker runtime rejects
-a specification that requires that extension instead of silently ignoring it.
-For Podman, the adapter uses the Libpod container-create endpoint and sends
+The Podman compatibility API receives the controlled `uid:gid` process user.
+The adapter uses the Libpod container-create endpoint and sends
 the typed `user`, `passwd_entry`, resource, mount, network, and port fields.
 In rootless mode it also sends explicit UID/GID mappings covering the
 subordinate range reported by Podman. The invoking COWS host UID/GID is not

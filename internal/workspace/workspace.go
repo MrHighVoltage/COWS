@@ -46,7 +46,11 @@ func (s *Service) ListAvailableTemplates(ctx context.Context, actorID string) ([
 	}
 	available := make([]domain.WorkspaceTemplate, 0, len(templates))
 	for _, template := range templates {
-		if template.Enabled && roleAllowed(template.AllowedRoles, user.Role) {
+		allowed, accessErr := s.templateAllowed(ctx, user, template)
+		if accessErr != nil {
+			return nil, accessErr
+		}
+		if template.Enabled && allowed {
 			available = append(available, template)
 		}
 	}
@@ -66,7 +70,11 @@ func (s *Service) CreateWorkspace(ctx context.Context, actorID string, input Cre
 	if err != nil {
 		return domain.Workspace{}, err
 	}
-	if !template.Enabled || !roleAllowed(template.AllowedRoles, user.Role) {
+	allowed, accessErr := s.templateAllowed(ctx, user, template)
+	if accessErr != nil {
+		return domain.Workspace{}, accessErr
+	}
+	if !template.Enabled || !allowed {
 		return domain.Workspace{}, ErrTemplateNotAvailable
 	}
 	templateSecrets, err := resolveTemplateSecrets(template.Configuration)
@@ -108,7 +116,6 @@ func (s *Service) CreateWorkspace(ctx context.Context, actorID string, input Cre
 		AllocatedStorageBytes:           template.DefaultStorageBytes,
 		InitialConnectionTimeoutSeconds: template.InitialConnectionTimeoutSeconds,
 		StoppedRetentionSeconds:         template.StoppedRetentionSeconds,
-		DataRetentionSeconds:            template.DataRetentionSeconds,
 		CreatedAt:                       now,
 		UpdatedAt:                       now,
 	}
@@ -131,6 +138,28 @@ func (s *Service) ListWorkspaces(ctx context.Context, actorID string) ([]domain.
 		return nil, err
 	}
 	if user.IsAdministrator() {
+		values, err := s.store.ListAllWorkspaces(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return s.withStorageUsage(ctx, values)
+	}
+	values, err := s.store.ListWorkspacesForUser(ctx, user.ID)
+	if err != nil {
+		return nil, err
+	}
+	return s.withStorageUsage(ctx, values)
+}
+
+// ListWorkspacesForRuntimeOverview returns control-plane records without
+// measuring storage. The runtime page must remain useful when a helper or
+// container is temporarily unavailable; admission still fails closed.
+func (s *Service) ListWorkspacesForRuntimeOverview(ctx context.Context, actorID string) ([]domain.Workspace, error) {
+	user, err := s.requireActor(ctx, actorID)
+	if err != nil {
+		return nil, err
+	}
+	if user.IsAdministrator() {
 		return s.store.ListAllWorkspaces(ctx)
 	}
 	return s.store.ListWorkspacesForUser(ctx, user.ID)
@@ -141,7 +170,39 @@ func (s *Service) AllocationSummary(ctx context.Context, actorID string) (domain
 	if err != nil {
 		return domain.AllocationSummary{}, err
 	}
-	return s.store.WorkspaceAllocations(ctx, user.ID)
+	values, err := s.store.ListWorkspacesForUser(ctx, user.ID)
+	if err != nil {
+		return domain.AllocationSummary{}, err
+	}
+	summary, err := s.store.WorkspaceAllocations(ctx, user.ID)
+	if err != nil {
+		return domain.AllocationSummary{}, err
+	}
+	if s.storageUsage != nil {
+		for _, value := range values {
+			usage, usageErr := s.storageUsage.WorkspaceStorageUsage(ctx, value)
+			if usageErr != nil {
+				return domain.AllocationSummary{}, usageErr
+			}
+			summary.Resources.StorageBytes += usage
+		}
+	}
+	return summary, nil
+}
+
+func (s *Service) withStorageUsage(ctx context.Context, values []domain.Workspace) ([]domain.Workspace, error) {
+	if s.storageUsage == nil {
+		return values, nil
+	}
+	for index := range values {
+		usage, err := s.storageUsage.WorkspaceStorageUsage(ctx, values[index])
+		if err != nil {
+			return nil, err
+		}
+		values[index].StorageUsageBytes = usage
+		values[index].StorageUsageKnown = true
+	}
+	return values, nil
 }
 
 func (s *Service) GetWorkspace(ctx context.Context, actorID, workspaceID string) (domain.Workspace, error) {
@@ -195,6 +256,11 @@ func (s *Service) StartWorkspace(ctx context.Context, actorID, workspaceID strin
 	value, err := s.GetWorkspace(ctx, actorID, workspaceID)
 	if err != nil {
 		return err
+	}
+	if value.ObservedState != string(runtime.StateRunning) && s.scheduler != nil {
+		if err := s.scheduler.CheckStart(ctx, value.OwnerUserID, domain.ResourceRequest{CPUMillis: value.AllocatedCPUMillis, MemoryBytes: value.AllocatedMemoryBytes}); err != nil {
+			return err
+		}
 	}
 	if err := s.store.SetWorkspaceDesiredState(ctx, value.ID, domain.DesiredWorkspaceRunning, s.now().UTC()); err != nil {
 		return err
@@ -545,9 +611,7 @@ func (s *Service) RunTimeouts(ctx context.Context) error {
 				continue
 			}
 			value.ContainerDeletedAt = now
-			if value.DataRetentionSeconds > 0 {
-				value.DataArchiveEligibleAt = now.Add(time.Duration(value.DataRetentionSeconds) * time.Second)
-			}
+			value.DataArchiveEligibleAt = time.Time{}
 			_ = s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateRemoved), value.RuntimeID, "", now, now)
 			_ = s.store.UpdateWorkspaceLifecycle(ctx, value.ID, value.StartedAt, value.LastConnectedAt, value.StoppedAt, value.ContainerDeletedAt, value.DataArchiveEligibleAt, now)
 			_ = s.finishOperation(ctx, value.ID, "timeout-delete", "succeeded", "", operationStarted)
@@ -725,6 +789,34 @@ func roleAllowed(roles []domain.Role, role domain.Role) bool {
 		}
 	}
 	return false
+}
+
+func (s *Service) templateAllowed(ctx context.Context, user domain.User, template domain.WorkspaceTemplate) (bool, error) {
+	if !roleAllowed(template.AllowedRoles, user.Role) {
+		return false, nil
+	}
+	if len(template.AllowedGroupIDs) == 0 {
+		return template.GroupAccessMode != domain.GroupAccessInclude, nil
+	}
+	groupIDs, err := s.store.ListUserGroupIDs(ctx, user.ID)
+	if err != nil {
+		return false, err
+	}
+	memberships := make(map[string]struct{}, len(groupIDs))
+	for _, groupID := range groupIDs {
+		memberships[groupID] = struct{}{}
+	}
+	matched := false
+	for _, groupID := range template.AllowedGroupIDs {
+		if _, ok := memberships[groupID]; ok {
+			matched = true
+			break
+		}
+	}
+	if template.GroupAccessMode == domain.GroupAccessInclude {
+		return matched, nil
+	}
+	return !matched, nil
 }
 
 func hasAccessMethod(methods []domain.AccessMethod, wanted domain.AccessMethod) bool {

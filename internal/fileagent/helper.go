@@ -22,6 +22,7 @@ const (
 	MaxUploadBytes    int64 = 128 << 20
 	MaxArchiveBytes   int64 = 4 << 30
 	MaxArchiveEntries       = 100000
+	MaxUsageEntries         = 1000000
 )
 
 type options struct {
@@ -72,6 +73,8 @@ func Run(args []string, input io.Reader, output, errorOutput io.Writer) error {
 	switch parsed.Operation {
 	case "list":
 		return list(root, relativePath, output)
+	case "usage":
+		return usage(root, output)
 	case "stat":
 		return stat(root, relativePath, output)
 	case "download":
@@ -133,7 +136,7 @@ func validateOptions(value options) error {
 		return errors.New("file root must be a clean absolute path")
 	}
 	switch value.Operation {
-	case "list", "stat", "download", "zip", "mkdir", "delete", "rename", "upload":
+	case "list", "usage", "stat", "download", "zip", "mkdir", "delete", "rename", "upload":
 		return nil
 	default:
 		return fmt.Errorf("unsupported file operation %q", value.Operation)
@@ -182,6 +185,40 @@ func list(root *os.Root, relativePath string, output io.Writer) error {
 		entries = append(entries, entry{Name: item.Name(), IsDir: info.IsDir(), Size: info.Size(), ModTime: info.ModTime()})
 	}
 	return json.NewEncoder(output).Encode(entries)
+}
+
+func usage(root *os.Root, output io.Writer) error {
+	var total int64
+	entries := 0
+	err := fs.WalkDir(root.FS(), ".", func(currentPath string, item fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		entries++
+		if entries > MaxUsageEntries {
+			return errors.New("usage contains too many entries")
+		}
+		if item.Type()&os.ModeSymlink != 0 {
+			return errors.New("symbolic links are not supported")
+		}
+		if !item.Type().IsRegular() {
+			return nil
+		}
+		info, err := item.Info()
+		if err != nil {
+			return err
+		}
+		if info.Size() < 0 || total > (1<<62)-info.Size() {
+			return errors.New("usage is too large")
+		}
+		total += info.Size()
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(output, total)
+	return err
 }
 
 func stat(root *os.Root, relativePath string, output io.Writer) error {

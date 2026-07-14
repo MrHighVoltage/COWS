@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted for the initial Docker/Podman file-manager implementation.
+Accepted for the initial rootless Podman file-manager implementation.
 
 ## Problem
 
@@ -19,7 +19,7 @@ browser still supplies only a workspace ID, approved mount name, and relative
 path. COWS resolves the workspace, template mount, runtime ID, container
 identity, and storage source before opening the capability.
 
-For rootless Podman on the initial single-host deployment, the Docker adapter
+For rootless Podman on the initial single-host deployment, the Podman adapter
 starts the same COWS executable as a short-lived file helper through:
 
 ```text
@@ -64,12 +64,10 @@ without changing browser routes or authorization rules.
 - The helper is a local runtime implementation detail, not a public service.
 - The COWS process must run as the same account that owns the rootless Podman
   service and must have `podman` available in `PATH`.
-- The initial Docker/Podman adapter uses the local helper path. Multi-host
+- The initial Podman adapter uses the local helper path. Multi-host
   execution requires a future host-agent boundary.
-- Rootful Docker directory mounts retain a direct COWS-owned rooted-filesystem
-  fallback. Rootful named-volume access is not enabled until a runtime-owned
-  privilege boundary is defined; the adapter fails closed rather than guessing
-  Docker's storage paths.
+- Non-rootless directory and named-volume mounts are outside the supported
+  deployment and require a separately reviewed privilege boundary.
 - File operations require a running workspace, as do terminal and desktop
   sessions in this milestone.
 - File contents and terminal contents are not written to audit logs.

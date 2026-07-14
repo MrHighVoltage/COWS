@@ -26,8 +26,27 @@
 </section>
 <section class="panel table-panel" aria-labelledby="managed-title">
   <h2 id="managed-title">Managed containers</h2>
-  <div class="table-scroll"><table><thead><tr><th>COWS workspace</th><th>Runtime ID</th><th>State</th><th>Observed</th></tr></thead><tbody>
-  {{ range .Inspection.Workspaces }}<tr><td><strong>{{ .WorkspaceID }}</strong></td><td><code>{{ .RuntimeID }}</code></td><td>{{ .State }}</td><td>{{ .ObservedAt }}</td></tr>{{ else }}<tr><td colspan="4" class="muted">No managed containers were found.</td></tr>{{ end }}
+  <div class="table-scroll"><table><thead><tr><th>Workspace</th><th>Owner</th><th>Template</th><th>State</th><th>Observed</th><th>Access and controls</th></tr></thead><tbody>
+  {{ range .RuntimeWorkspaces }}<tr>
+    <td><strong>{{ .WorkspaceID }}</strong>{{ if not .Managed }}<span class="badge">Orphan</span>{{ end }}</td>
+    <td>{{ if .Owner }}{{ .Owner }}{{ else }}<span class="muted">Unknown</span>{{ end }}</td>
+    <td>{{ if .Template }}{{ .Template }}{{ else }}<span class="muted">Unknown</span>{{ end }}</td>
+    <td>{{ .Observed.State }}</td><td>{{ .Observed.ObservedAt }}</td>
+    <td>
+      {{ if .Managed }}
+      <div class="table-actions">
+        {{ if eq .Observed.State "running" }}
+          <form method="post" action="/workspaces/{{ .WorkspaceID }}/stop"><input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}"><button class="table-action" type="submit">Stop</button></form>
+        {{ else }}
+          <form method="post" action="/workspaces/{{ .WorkspaceID }}/start"><input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}"><button class="table-action" type="submit">Start</button></form>
+        {{ end }}
+        {{ if .Access.Terminal }}<a class="table-action button-link" href="/workspaces/{{ .WorkspaceID }}/terminal">Terminal</a>{{ end }}
+        {{ if .Access.Desktop }}<a class="table-action button-link" href="/workspaces/{{ .WorkspaceID }}/desktop">Desktop</a>{{ end }}
+        {{ if .Access.Files }}<a class="table-action button-link" href="/workspaces/{{ .WorkspaceID }}/files">Files</a>{{ end }}
+      </div>
+      {{ else }}<span class="muted">No matching COWS record</span>{{ end }}
+    </td>
+  </tr>{{ else }}<tr><td colspan="6" class="muted">No managed containers were found.</td></tr>{{ end }}
   </tbody></table></div>
 </section>
 {{ end }}

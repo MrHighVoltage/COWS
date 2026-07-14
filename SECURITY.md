@@ -18,7 +18,7 @@ partial operations, and compromised or misconfigured images.
   authorization.
 - COWS HTTP handlers are the public application boundary.
 - Domain services enforce ownership, role, template, quota, and state policy.
-- The runtime adapter is the only boundary to Docker or Podman.
+- The runtime adapter is the only boundary to the local rootless Podman service.
 - Managed containers are isolated workloads, not trusted application code.
 - A reverse proxy is part of the deployment security boundary and must preserve
   HTTPS, secure headers, and correct client identity handling.
@@ -50,8 +50,8 @@ partial operations, and compromised or misconfigured images.
   unrestricted host mounts, arbitrary capabilities, and direct devices are not
   user-selectable.
 - COWS verifies runtime capability flags before creating a workspace. A
-  Docker-compatible API is not proof that CPU, memory, process, or storage
-  limits are enforced, especially for rootless Podman.
+  Podman compatibility API is not proof that CPU, memory, process, or storage
+  limits are enforced; COWS checks the reported rootless capabilities.
 - Timeout policies are administrator-controlled and evaluated by the backend;
   users cannot extend them by changing browser data or suppressing timers.
 - Container deletion and future data archival are separate actions. Archive
@@ -71,8 +71,8 @@ partial operations, and compromised or misconfigured images.
   mappings derived from its subordinate-ID map. The COWS host account is
   intentionally not mapped into the container; container-owned mount contents
   therefore use subordinate host IDs. The per-container parent remains
-  COWS-owned for lifecycle moves. Docker must reject a template requiring the
-  Podman-only passwd-entry extension instead of silently dropping it.
+  COWS-owned for lifecycle moves. Rootless Podman resolves the passwd-entry
+  extension server-side; users never select it.
 
 ## Access gateway risks
 
@@ -98,13 +98,13 @@ need explicit policy and tests before that milestone ships.
 
 ## Runtime and host risks
 
-Access to Docker or Podman can become host-level access. The initial single
+Access to rootless Podman can still become host-level access. The initial single
 process therefore owns that boundary. Deployments must protect the runtime
 socket and COWS data directory, use a dedicated service account where
 practical, and avoid exposing the service directly without HTTPS and a trusted
 reverse-proxy configuration.
 
-Resource limits must be enforced by Docker or Podman wherever possible. COWS
+Resource limits must be enforced by rootless Podman wherever possible. COWS
 quotas alone are not a containment mechanism. Capacity calculations must fail
 closed when host information is unavailable.
 
@@ -154,9 +154,9 @@ manager supports approved directory and named-volume listing, bounded upload,
 individual file download, streamed directory ZIP download, folder creation,
 rename, and deletion; it does not support archive extraction.
 Terminal access uses a fixed shell and desktop access uses a template-approved
-VNC service through the Docker-compatible runtime adapter; desktop sessions
+VNC service through the rootless Podman adapter; desktop sessions
 automatically authenticate using the template-selected VNC secret when one is
-configured. Both require runtime support for the selected container. Docker lifecycle
+configured. Both require runtime support for the selected container. Podman lifecycle
 operations are limited to approved images,
 labels, resource limits, and isolated network policy; runtime-specific
 integration and audit failure handling still need further review. Operational

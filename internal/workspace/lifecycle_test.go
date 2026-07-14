@@ -34,10 +34,10 @@ type desktopStream struct{ bytes.Buffer }
 func (desktopStream) Close() error { return nil }
 
 func (r *lifecycleRuntime) Name(context.Context) (string, error) {
-	return runtime.RuntimeNameDocker, nil
+	return runtime.RuntimeNamePodman, nil
 }
 func (r *lifecycleRuntime) Capabilities(context.Context) (runtime.Capabilities, error) {
-	return runtime.Capabilities{RuntimeName: runtime.RuntimeNameDocker, SupportsResourceLimits: true, SupportsManagedLabels: true}, nil
+	return runtime.Capabilities{RuntimeName: runtime.RuntimeNamePodman, SupportsResourceLimits: true, SupportsManagedLabels: true}, nil
 }
 func (r *lifecycleRuntime) ListManaged(context.Context) ([]runtime.ObservedWorkspace, error) {
 	return append([]runtime.ObservedWorkspace(nil), r.observed...), nil
@@ -70,7 +70,6 @@ func TestLifecycleTimeoutStopsAndDeletesWorkspace(t *testing.T) {
 	input := validTemplateInput()
 	input.InitialConnectionTimeoutSeconds = 1
 	input.StoppedRetentionSeconds = 1
-	input.DataRetentionSeconds = 60
 	template, err := service.CreateTemplate(context.Background(), adminID, input)
 	if err != nil {
 		t.Fatalf("create template: %v", err)
@@ -123,8 +122,8 @@ func TestLifecycleTimeoutStopsAndDeletesWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load updated workspace: %v", err)
 	}
-	if updated.ContainerDeletedAt.IsZero() || updated.DataArchiveEligibleAt.IsZero() {
-		t.Fatalf("timeout timestamps were not persisted: %+v", updated)
+	if updated.ContainerDeletedAt.IsZero() || !updated.DataArchiveEligibleAt.IsZero() {
+		t.Fatalf("timeout timestamps were not persisted as expected: %+v", updated)
 	}
 	if updated.Operation != "timeout-delete" || updated.OperationStatus != "succeeded" {
 		t.Fatalf("delete operation status = %q/%q", updated.Operation, updated.OperationStatus)

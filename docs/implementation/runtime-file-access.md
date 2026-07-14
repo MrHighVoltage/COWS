@@ -13,7 +13,7 @@ contract.
    return the currently available file mounts.
 3. The workspace service resolves the stored template mount, runtime ID,
    container UID/GID, read-only policy, and server-managed source.
-4. The Docker-compatible adapter opens a `runtime.FileAccess` capability from
+4. The Podman adapter opens a `runtime.FileAccess` capability from
    that server-selected specification.
 5. The adapter starts the same COWS executable with `podman unshare` for each
    operation. The helper enters the approved source directory before dropping
@@ -46,7 +46,7 @@ The initial helper requires the COWS process to run as the same account that
 owns the rootless Podman service and requires `podman` in `PATH`. This is a
 single-host implementation. A future host agent may own this capability for
 multi-host deployments without changing the browser-facing file service.
-Rootful Docker directory mounts retain the existing direct rooted-filesystem
+Non-rootless directory mounts are outside the supported deployment and require
 fallback; rootful named-volume access remains disabled until its privilege
 boundary is designed.
 
@@ -54,6 +54,6 @@ boundary is designed.
 
 Focused tests cover rooted helper operations, traversal and symlink rejection,
 runtime-backed service routing, and the existing local rooted file service.
-The ordinary unit suite does not require Docker or Podman. A live rootless
+The ordinary unit suite does not require Podman. A live rootless
 verification should list and download an approved mount while checking that
 the helper process exits after each operation.

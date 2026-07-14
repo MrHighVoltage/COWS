@@ -21,13 +21,13 @@ Status: accepted for Milestone 0
 | CSRF | Per-browser token cookie plus hidden form token | State-changing form requests require a constant-time token match. SameSite cookies are defense in depth, not the sole control. |
 | WebSockets | `github.com/coder/websocket` v1.8.12 | Focused Go WebSocket implementation; the standard library has no WebSocket server. ISC license. It is a runtime dependency with no Node.js or npm requirement. |
 | SSE | `net/http` streaming later | One-way updates need no new dependency. |
-| Runtime | Separate Docker and Podman adapters later | Avoids leaking runtime objects into COWS domain code; adapter contracts will be tested with fakes. |
+| Runtime | Rootless Podman adapter only for the initial deployment | Avoids a second runtime surface while preserving the COWS-facing adapter boundary. |
 | UI component library | Web Awesome evaluated, deferred | Its `dist-cdn` self-hosting mode can avoid a build tool, but the project’s documented installation path is npm-oriented and the complete vendored distribution/licensing update process still needs verification. Milestone 0 uses semantic HTML/CSS. |
 | HTMX | 2.0.10, vendored locally | Dependency-free browser library with direct downloadable browser distribution and no build requirement. |
 | Alpine.js | 3.14.9, vendored locally | Small browser-local behavior with a direct script distribution; not authoritative state. |
 | xterm.js | xterm.js 5.3.0, vendored locally | Specialized terminal rendering should not be recreated. MIT license, browser runtime only, no Node.js or npm requirement in COWS builds. |
 | noVNC | noVNC 1.6.0, vendored locally | Specialized VNC browser client; only the core ES modules are used. MPL-2.0 license, browser runtime only, no Node.js or npm requirement in COWS builds. |
-| Tests | Go testing, `httptest`, temporary SQLite | Standard library covers initial behavior without requiring Docker or Podman. |
+| Tests | Go testing, `httptest`, temporary SQLite, and optional rootless Podman integration tests | Ordinary tests remain independent of a runtime; live tests validate the supported rootless deployment. |
 | Formatting/static analysis | `gofmt`, `go vet`; optional `staticcheck` | Built-in tools are available everywhere; Staticcheck is useful when adopted by CI. |
 
 ## Dependency and asset policy

@@ -64,8 +64,8 @@ func TestTerminalWebSocketAuthorizesAndBridgesShell(t *testing.T) {
 		Name: "Terminal template", ImageReference: "registry.example/research:1", DefaultCPUMillis: 1000,
 		MaxCPUMillis: 2000, DefaultMemoryBytes: 2 << 30, MaxMemoryBytes: 4 << 30,
 		DefaultStorageBytes: 10 << 30, InitialConnectionTimeoutSeconds: 3600,
-		StoppedRetentionSeconds: 3600, DataRetentionSeconds: 3600,
-		AccessMethods: []domain.AccessMethod{domain.AccessTerminal}, AllowedRoles: []domain.Role{domain.RoleUser}, Enabled: true,
+		StoppedRetentionSeconds: 3600,
+		AccessMethods:           []domain.AccessMethod{domain.AccessTerminal}, AllowedRoles: []domain.Role{domain.RoleUser}, Enabled: true,
 	})
 	if err != nil {
 		t.Fatalf("create terminal template: %v", err)
@@ -120,10 +120,10 @@ type terminalRuntime struct {
 
 func newTerminalRuntime() *terminalRuntime { return &terminalRuntime{terminal: newFakeTerminal()} }
 func (r *terminalRuntime) Name(context.Context) (string, error) {
-	return runtime.RuntimeNameDocker, nil
+	return runtime.RuntimeNamePodman, nil
 }
 func (r *terminalRuntime) Capabilities(context.Context) (runtime.Capabilities, error) {
-	return runtime.Capabilities{RuntimeName: runtime.RuntimeNameDocker}, nil
+	return runtime.Capabilities{RuntimeName: runtime.RuntimeNamePodman}, nil
 }
 func (r *terminalRuntime) ListManaged(context.Context) ([]runtime.ObservedWorkspace, error) {
 	return nil, nil

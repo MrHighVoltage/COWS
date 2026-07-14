@@ -83,12 +83,13 @@ type workspaceFormData struct {
 }
 
 type quotaFormData struct {
-	UserID        string
-	MaxCPUMillis  string
-	MaxMemoryMiB  string
-	MaxStorageGiB string
-	MaxWorkspaces string
-	Error         string
+	UserID               string
+	MaxCPUMillis         string
+	MaxMemoryMiB         string
+	MaxStorageGiB        string
+	MaxWorkspaces        string
+	MaxRunningWorkspaces string
+	Error                string
 }
 
 type settingsFormData struct {
@@ -125,7 +126,6 @@ type templateFormData struct {
 	DefaultStorageGiB      string
 	InitialConnectionHours string
 	StoppedRetentionHours  string
-	DataRetentionDays      string
 	ConfigurationJSON      string
 	TerminalAccess         bool
 	DesktopAccess          bool
@@ -133,41 +133,56 @@ type templateFormData struct {
 	FilesAccess            bool
 	UserRole               bool
 	AdministratorRole      bool
+	GroupAccessMode        string
+	AllowedGroupIDs        []string
 	Enabled                bool
 	Error                  string
 }
 
 type pageData struct {
-	Title           string
-	User            *domain.User
-	Health          healthSnapshot
-	CSRFToken       string
-	Error           string
-	Users           []domain.User
-	Form            userFormData
-	Templates       []domain.WorkspaceTemplate
-	Template        templateFormData
-	Password        passwordFormData
-	Inspection      *runtime.Inspection
-	RuntimeError    string
-	Workspaces      []domain.Workspace
-	Workspace       workspaceFormData
-	Quotas          []quotaView
-	Quota           quotaFormData
-	Settings        *domain.HostSettings
-	SettingsForm    settingsFormData
-	Allocation      *allocationView
-	ActiveWorkspace *domain.Workspace
-	WorkspaceAccess map[string]workspaceAccess
-	FileListing     *files.Listing
-	FileMounts      []workspace.FileMount
-	FileError       string
+	Title             string
+	User              *domain.User
+	Health            healthSnapshot
+	CSRFToken         string
+	Error             string
+	Users             []domain.User
+	Form              userFormData
+	Templates         []domain.WorkspaceTemplate
+	Template          templateFormData
+	Password          passwordFormData
+	Inspection        *runtime.Inspection
+	RuntimeError      string
+	Workspaces        []domain.Workspace
+	Workspace         workspaceFormData
+	Quotas            []quotaView
+	Quota             quotaFormData
+	Settings          *domain.HostSettings
+	SettingsForm      settingsFormData
+	Allocation        *allocationView
+	ActiveWorkspace   *domain.Workspace
+	WorkspaceAccess   map[string]workspaceAccess
+	FileListing       *files.Listing
+	FileMounts        []workspace.FileMount
+	FileError         string
+	Groups            []domain.Group
+	UserGroupIDs      map[string][]string
+	RuntimeWorkspaces []runtimeWorkspaceView
 }
 
 type workspaceAccess struct {
 	Terminal bool
 	Desktop  bool
 	Files    bool
+}
+
+type runtimeWorkspaceView struct {
+	Observed    runtime.ObservedWorkspace
+	Owner       string
+	OwnerID     string
+	Template    string
+	WorkspaceID string
+	Access      workspaceAccess
+	Managed     bool
 }
 
 func New(db *sql.DB, authService *auth.Service, templateService *workspace.Service, quotaService *quota.Service, runtimeAdapter runtime.Runtime, options Options) (*Server, error) {
@@ -187,6 +202,14 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 		"timeoutText":      func(seconds int64) string { return formatTimeout(seconds) },
 		"operationText":    func(value string) string { return operationText(value) },
 		"fileSize":         formatFileSize,
+		"hasID": func(values []string, wanted string) bool {
+			for _, value := range values {
+				if value == wanted {
+					return true
+				}
+			}
+			return false
+		},
 		"fileURL": func(workspaceID, mountName, relativePath string) string {
 			values := url.Values{}
 			values.Set("mount", mountName)
@@ -252,6 +275,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/users/new", s.adminUsersNew)
 	mux.HandleFunc("POST /admin/users", s.adminUsersCreate)
 	mux.HandleFunc("POST /admin/users/{id}/disabled", s.adminUserDisabled)
+	mux.HandleFunc("POST /admin/users/{id}/groups", s.adminUserGroups)
+	mux.HandleFunc("GET /admin/groups", s.adminGroups)
+	mux.HandleFunc("POST /admin/groups", s.adminGroupsCreate)
 	mux.HandleFunc("GET /admin/quotas", s.adminQuotas)
 	mux.HandleFunc("POST /admin/quotas/{id}", s.adminQuotaUpdate)
 	mux.HandleFunc("GET /admin/settings", s.adminSettings)
@@ -979,11 +1005,23 @@ func (s *Server) adminUsers(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to load users", http.StatusInternalServerError)
 		return
 	}
+	groups := s.templateGroups(r.Context(), user.ID)
+	userGroupIDs := make(map[string][]string, len(users))
+	for _, value := range users {
+		ids, groupErr := s.auth.UserGroupIDs(r.Context(), user.ID, value.ID)
+		if groupErr != nil {
+			http.Error(w, "failed to load user groups", http.StatusInternalServerError)
+			return
+		}
+		userGroupIDs[value.ID] = ids
+	}
 	s.render(w, http.StatusOK, "admin-users-page", pageData{
-		Title:     "Users | COWS",
-		User:      &user,
-		Users:     users,
-		CSRFToken: s.ensureCSRF(w, r),
+		Title:        "Users | COWS",
+		User:         &user,
+		Users:        users,
+		Groups:       groups,
+		UserGroupIDs: userGroupIDs,
+		CSRFToken:    s.ensureCSRF(w, r),
 	})
 }
 
@@ -1060,6 +1098,66 @@ func (s *Server) adminUserDisabled(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
 }
 
+func (s *Server) adminUserGroups(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if !s.validCSRF(r) {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if err := s.auth.SetUserGroups(r.Context(), user.ID, r.PathValue("id"), r.Form["group_ids"]); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, repository.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		http.Error(w, userActionError(err), status)
+		return
+	}
+	http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
+}
+
+func (s *Server) adminGroups(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	groups, err := s.auth.ListGroups(r.Context(), user.ID)
+	if err != nil {
+		http.Error(w, "failed to load groups", http.StatusInternalServerError)
+		return
+	}
+	s.render(w, http.StatusOK, "admin-groups-page", pageData{Title: "Groups | COWS", User: &user, Groups: groups, CSRFToken: s.ensureCSRF(w, r)})
+}
+
+func (s *Server) adminGroupsCreate(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if !s.validCSRF(r) {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if _, err := s.auth.CreateGroup(r.Context(), user.ID, r.FormValue("name"), r.FormValue("description")); err != nil {
+		groups, _ := s.auth.ListGroups(r.Context(), user.ID)
+		s.render(w, http.StatusBadRequest, "admin-groups-page", pageData{Title: "Groups | COWS", User: &user, Groups: groups, CSRFToken: s.ensureCSRF(w, r), Error: "The group could not be created. Check the name and try again."})
+		return
+	}
+	http.Redirect(w, r, "/admin/groups", http.StatusSeeOther)
+}
+
 func (s *Server) adminQuotas(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAdministrator(w, r)
 	if !ok {
@@ -1087,7 +1185,7 @@ func (s *Server) adminQuotaUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	form := quotaFormData{UserID: r.PathValue("id"), MaxCPUMillis: r.FormValue("max_cpu_millis"), MaxMemoryMiB: r.FormValue("max_memory_mib"), MaxStorageGiB: r.FormValue("max_storage_gib"), MaxWorkspaces: r.FormValue("max_workspaces")}
+	form := quotaFormData{UserID: r.PathValue("id"), MaxCPUMillis: r.FormValue("max_cpu_millis"), MaxMemoryMiB: r.FormValue("max_memory_mib"), MaxStorageGiB: r.FormValue("max_storage_gib"), MaxWorkspaces: r.FormValue("max_workspaces"), MaxRunningWorkspaces: r.FormValue("max_running_workspaces")}
 	input, err := parseQuotaForm(form)
 	if err == nil {
 		_, err = s.quota.Set(r.Context(), user.ID, form.UserID, input)
@@ -1207,6 +1305,7 @@ func (s *Server) adminTemplatesNew(w http.ResponseWriter, r *http.Request) {
 		User:      &user,
 		CSRFToken: s.ensureCSRF(w, r),
 		Template:  defaultTemplateForm(),
+		Groups:    s.templateGroups(r.Context(), user.ID),
 	})
 }
 
@@ -1227,12 +1326,12 @@ func (s *Server) adminTemplatesCreate(w http.ResponseWriter, r *http.Request) {
 	form, input, err := s.parseTemplateForm(r)
 	if err != nil {
 		form.Error = templateFormError(err)
-		s.render(w, http.StatusBadRequest, "admin-template-form-page", pageData{Title: "Create template | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), Template: form})
+		s.render(w, http.StatusBadRequest, "admin-template-form-page", pageData{Title: "Create template | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), Template: form, Groups: s.templateGroups(r.Context(), user.ID)})
 		return
 	}
 	if _, err := s.workspace.CreateTemplate(r.Context(), user.ID, input); err != nil {
 		form.Error = templateFormError(err)
-		s.render(w, http.StatusBadRequest, "admin-template-form-page", pageData{Title: "Create template | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), Template: form})
+		s.render(w, http.StatusBadRequest, "admin-template-form-page", pageData{Title: "Create template | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), Template: form, Groups: s.templateGroups(r.Context(), user.ID)})
 		return
 	}
 	http.Redirect(w, r, "/admin/templates", http.StatusSeeOther)
@@ -1252,7 +1351,7 @@ func (s *Server) adminTemplatesEdit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to load workspace template", http.StatusInternalServerError)
 		return
 	}
-	s.render(w, http.StatusOK, "admin-template-form-page", pageData{Title: "Edit template | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), Template: templateFormFromDomain(template)})
+	s.render(w, http.StatusOK, "admin-template-form-page", pageData{Title: "Edit template | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), Template: templateFormFromDomain(template), Groups: s.templateGroups(r.Context(), user.ID)})
 }
 
 func (s *Server) adminTemplatesUpdate(w http.ResponseWriter, r *http.Request) {
@@ -1274,7 +1373,7 @@ func (s *Server) adminTemplatesUpdate(w http.ResponseWriter, r *http.Request) {
 	form.Editing = true
 	if err != nil {
 		form.Error = templateFormError(err)
-		s.render(w, http.StatusBadRequest, "admin-template-form-page", pageData{Title: "Edit template | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), Template: form})
+		s.render(w, http.StatusBadRequest, "admin-template-form-page", pageData{Title: "Edit template | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), Template: form, Groups: s.templateGroups(r.Context(), user.ID)})
 		return
 	}
 	if _, err := s.workspace.UpdateTemplate(r.Context(), user.ID, r.PathValue("id"), input); err != nil {
@@ -1283,10 +1382,18 @@ func (s *Server) adminTemplatesUpdate(w http.ResponseWriter, r *http.Request) {
 			status = http.StatusNotFound
 		}
 		form.Error = templateFormError(err)
-		s.render(w, status, "admin-template-form-page", pageData{Title: "Edit template | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), Template: form})
+		s.render(w, status, "admin-template-form-page", pageData{Title: "Edit template | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), Template: form, Groups: s.templateGroups(r.Context(), user.ID)})
 		return
 	}
 	http.Redirect(w, r, "/admin/templates", http.StatusSeeOther)
+}
+
+func (s *Server) templateGroups(ctx context.Context, actorID string) []domain.Group {
+	groups, err := s.auth.ListGroups(ctx, actorID)
+	if err != nil {
+		return nil
+	}
+	return groups
 }
 
 func (s *Server) adminTemplateEnabled(w http.ResponseWriter, r *http.Request) {
@@ -1332,8 +1439,68 @@ func (s *Server) adminRuntime(w http.ResponseWriter, r *http.Request) {
 		data.RuntimeError = "The configured container runtime is unavailable or returned invalid inspection data."
 	} else {
 		data.Inspection = &inspection
+		data.RuntimeWorkspaces = s.runtimeWorkspaceViews(r.Context(), user.ID, inspection.Workspaces)
 	}
 	s.render(w, status, "admin-runtime-page", data)
+}
+
+func (s *Server) runtimeWorkspaceViews(ctx context.Context, actorID string, observations []runtime.ObservedWorkspace) []runtimeWorkspaceView {
+	values, err := s.workspace.ListWorkspacesForRuntimeOverview(ctx, actorID)
+	if err != nil {
+		return nil
+	}
+	users, err := s.auth.ListUsers(ctx, actorID)
+	if err != nil {
+		return nil
+	}
+	templates, err := s.workspace.ListTemplates(ctx, actorID)
+	if err != nil {
+		return nil
+	}
+	workspaceByID := make(map[string]domain.Workspace, len(values))
+	for _, value := range values {
+		workspaceByID[value.ID] = value
+	}
+	userByID := make(map[string]domain.User, len(users))
+	for _, value := range users {
+		userByID[value.ID] = value
+	}
+	templateByID := make(map[string]domain.WorkspaceTemplate, len(templates))
+	for _, value := range templates {
+		templateByID[value.ID] = value
+	}
+	views := make([]runtimeWorkspaceView, 0, len(observations))
+	for _, observed := range observations {
+		view := runtimeWorkspaceView{Observed: observed, WorkspaceID: observed.WorkspaceID}
+		value, exists := workspaceByID[observed.WorkspaceID]
+		if !exists {
+			views = append(views, view)
+			continue
+		}
+		view.Managed = true
+		view.OwnerID = value.OwnerUserID
+		if owner, exists := userByID[value.OwnerUserID]; exists {
+			view.Owner = owner.Username
+		}
+		if template, exists := templateByID[value.TemplateID]; exists {
+			view.Template = template.Name
+		}
+		methods, accessErr := s.workspace.WorkspaceAccessMethods(ctx, actorID, value.ID)
+		if accessErr == nil {
+			for _, method := range methods {
+				switch method {
+				case domain.AccessTerminal:
+					view.Access.Terminal = true
+				case domain.AccessDesktop:
+					view.Access.Desktop = true
+				case domain.AccessFiles:
+					view.Access.Files = true
+				}
+			}
+		}
+		views = append(views, view)
+	}
+	return views
 }
 
 func (s *Server) parseTemplateForm(r *http.Request) (templateFormData, workspace.TemplateInput, error) {
@@ -1349,9 +1516,10 @@ func (s *Server) parseTemplateForm(r *http.Request) (templateFormData, workspace
 		DefaultStorageGiB:      r.FormValue("default_storage_gib"),
 		InitialConnectionHours: r.FormValue("initial_connection_hours"),
 		StoppedRetentionHours:  r.FormValue("stopped_retention_hours"),
-		DataRetentionDays:      r.FormValue("data_retention_days"),
 		ConfigurationJSON:      r.FormValue("configuration_json"),
 		Enabled:                r.FormValue("enabled") == "on",
+		GroupAccessMode:        r.FormValue("group_access_mode"),
+		AllowedGroupIDs:        append([]string(nil), r.Form["allowed_group_ids"]...),
 	}
 	for _, method := range r.Form["access_methods"] {
 		switch domain.AccessMethod(method) {
@@ -1382,10 +1550,6 @@ func (s *Server) parseTemplateForm(r *http.Request) (templateFormData, workspace
 		return form, workspace.TemplateInput{}, workspace.ErrInvalidTemplate
 	}
 	stoppedRetention, err := parseDurationInput(form.StoppedRetentionHours, time.Hour)
-	if err != nil {
-		return form, workspace.TemplateInput{}, workspace.ErrInvalidTemplate
-	}
-	dataRetention, err := parseDurationInput(form.DataRetentionDays, 24*time.Hour)
 	if err != nil {
 		return form, workspace.TemplateInput{}, workspace.ErrInvalidTemplate
 	}
@@ -1444,9 +1608,10 @@ func (s *Server) parseTemplateForm(r *http.Request) (templateFormData, workspace
 		Configuration:                   configuration,
 		InitialConnectionTimeoutSeconds: initialConnection,
 		StoppedRetentionSeconds:         stoppedRetention,
-		DataRetentionSeconds:            dataRetention,
 		AccessMethods:                   methods,
 		AllowedRoles:                    roles,
+		GroupAccessMode:                 form.GroupAccessMode,
+		AllowedGroupIDs:                 form.AllowedGroupIDs,
 		Enabled:                         form.Enabled,
 	}, nil
 }
@@ -1537,10 +1702,6 @@ func timeoutPhaseText(phase workspace.TimeoutPhase) string {
 		return "Awaiting first connection"
 	case workspace.TimeoutPhaseStoppedRetention:
 		return "Stopped container retention"
-	case workspace.TimeoutPhaseDataRetention:
-		return "Data retention"
-	case workspace.TimeoutPhaseArchiveEligible:
-		return "Archive eligible"
 	default:
 		return "No active timeout"
 	}
@@ -1580,7 +1741,11 @@ func parseQuotaForm(form quotaFormData) (quota.Input, error) {
 	if err != nil {
 		return quota.Input{}, quota.ErrInvalidQuota
 	}
-	return quota.Input{MaxCPUMillis: cpu, MaxMemoryBytes: memory, MaxStorageBytes: storage, MaxWorkspaces: workspaces}, nil
+	runningWorkspaces, err := parseNonNegativeInt(form.MaxRunningWorkspaces)
+	if err != nil {
+		return quota.Input{}, quota.ErrInvalidQuota
+	}
+	return quota.Input{MaxCPUMillis: cpu, MaxMemoryBytes: memory, MaxStorageBytes: storage, MaxWorkspaces: workspaces, MaxRunningWorkspaces: runningWorkspaces}, nil
 }
 
 func parseSettingsForm(form settingsFormData) (quota.HostSettingsInput, error) {
@@ -1629,7 +1794,7 @@ func settingsFormFromDomain(settings domain.HostSettings) settingsFormData {
 }
 
 func defaultTemplateForm() templateFormData {
-	return templateFormData{DefaultCPUMillis: "1000", MaxCPUMillis: "4000", DefaultMemoryMiB: "2048", MaxMemoryMiB: "8192", DefaultStorageGiB: "20", InitialConnectionHours: "24", StoppedRetentionHours: "24", DataRetentionDays: "30", ConfigurationJSON: "{}", TerminalAccess: true, UserRole: true, Enabled: true}
+	return templateFormData{DefaultCPUMillis: "1000", MaxCPUMillis: "4000", DefaultMemoryMiB: "2048", MaxMemoryMiB: "8192", DefaultStorageGiB: "20", InitialConnectionHours: "24", StoppedRetentionHours: "24", ConfigurationJSON: "{}", TerminalAccess: true, UserRole: true, GroupAccessMode: domain.GroupAccessExclude, Enabled: true}
 }
 
 func templateFormFromDomain(template domain.WorkspaceTemplate) templateFormData {
@@ -1637,7 +1802,7 @@ func templateFormFromDomain(template domain.WorkspaceTemplate) templateFormData 
 	if len(configurationJSON) == 0 {
 		configurationJSON = []byte("{}")
 	}
-	form := templateFormData{ID: template.ID, Editing: true, Name: template.Name, Description: template.Description, ImageReference: template.ImageReference, ImageDigest: template.ImageDigest, DefaultCPUMillis: strconv.FormatInt(template.DefaultCPUMillis, 10), MaxCPUMillis: strconv.FormatInt(template.MaxCPUMillis, 10), DefaultMemoryMiB: strconv.FormatInt(template.DefaultMemoryBytes/(1<<20), 10), MaxMemoryMiB: strconv.FormatInt(template.MaxMemoryBytes/(1<<20), 10), DefaultStorageGiB: strconv.FormatInt(template.DefaultStorageBytes/(1<<30), 10), InitialConnectionHours: strconv.FormatInt(template.InitialConnectionTimeoutSeconds/3600, 10), StoppedRetentionHours: strconv.FormatInt(template.StoppedRetentionSeconds/3600, 10), DataRetentionDays: strconv.FormatInt(template.DataRetentionSeconds/(24*3600), 10), ConfigurationJSON: string(configurationJSON), Enabled: template.Enabled}
+	form := templateFormData{ID: template.ID, Editing: true, Name: template.Name, Description: template.Description, ImageReference: template.ImageReference, ImageDigest: template.ImageDigest, DefaultCPUMillis: strconv.FormatInt(template.DefaultCPUMillis, 10), MaxCPUMillis: strconv.FormatInt(template.MaxCPUMillis, 10), DefaultMemoryMiB: strconv.FormatInt(template.DefaultMemoryBytes/(1<<20), 10), MaxMemoryMiB: strconv.FormatInt(template.MaxMemoryBytes/(1<<20), 10), DefaultStorageGiB: strconv.FormatInt(template.DefaultStorageBytes/(1<<30), 10), InitialConnectionHours: strconv.FormatInt(template.InitialConnectionTimeoutSeconds/3600, 10), StoppedRetentionHours: strconv.FormatInt(template.StoppedRetentionSeconds/3600, 10), GroupAccessMode: template.GroupAccessMode, AllowedGroupIDs: append([]string(nil), template.AllowedGroupIDs...), ConfigurationJSON: string(configurationJSON), Enabled: template.Enabled}
 	for _, method := range template.AccessMethods {
 		switch method {
 		case domain.AccessTerminal:
@@ -1869,11 +2034,11 @@ func workspaceFormError(err error) string {
 func workspaceActionError(action string, err error) string {
 	switch {
 	case errors.Is(err, workspace.ErrRuntimeUnavailable):
-		return "The Docker runtime is unavailable. Try again later."
+		return "The rootless Podman runtime is unavailable. Try again later."
 	case errors.Is(err, workspace.ErrWorkspaceStateConflict):
 		return "This workspace is not in a state where it can be " + workspaceActionVerb(action) + "."
 	case errors.Is(err, runtime.ErrNotSupported):
-		return "This Docker operation is not supported by the configured runtime."
+		return "This operation is not supported by the configured rootless Podman runtime."
 	default:
 		return "The workspace could not be " + workspaceActionVerb(action) + "."
 	}

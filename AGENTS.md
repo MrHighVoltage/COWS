@@ -9,6 +9,8 @@ before changing behavior. Workspace lifecycle and timeout work must follow
 `docs/decisions/0004-workspace-state-model.md` and
 `docs/decisions/0006-workspace-timeouts.md`. Template runtime configuration
 must follow `docs/decisions/0007-template-runtime-configuration.md`.
+Resource, storage, rootless-Podman, and group-access changes must follow
+`docs/decisions/0012-rootless-podman-resource-and-group-policy.md`.
 
 ## Technology constraints
 
@@ -32,7 +34,7 @@ socket behind the runtime interface, fail closed on missing authorization or
 capacity data, and do not log secrets or user content.
 
 Template runtime configuration is typed and server-resolved. Do not add raw
-Docker argument maps, unrestricted placeholders, arbitrary host paths, public
+runtime argument maps, unrestricted placeholders, arbitrary host paths, public
 port bindings, or browser-controlled environment values.
 
 Terminal access is implemented through the runtime shell capability and must
@@ -57,11 +59,10 @@ data. Directory ZIP downloads are streamed and bounded;
 do not add archive extraction without dedicated security tests.
 
 Workspace timeout policies are backend-enforced and must not depend on browser
-timers. Keep the initial no-connection stop, stopped-container deletion, and
-post-deletion data-archive eligibility timestamps distinct. Do not implement
-email delivery or archive actions until their dedicated milestones; preserve
-clear future notification hooks and audit semantics. Explicit deletion's
-managed-directory archive is separate from future automatic retention archival.
+timers. Keep the initial no-connection stop and stopped-container deletion
+timestamps. Automatic timeout cleanup must never delete or archive user data;
+explicit deletion's managed-directory archive is separate. Do not reintroduce
+the removed post-deletion data-retention configuration.
 
 ## Development commands
 
@@ -72,7 +73,7 @@ go vet ./...
 go build -o bin/cows ./cmd/cows
 ```
 
-If an optional analyzer is installed, run it too. Docker or Podman must not be
+If an optional analyzer is installed, run it too. Podman must not be
 required for the ordinary unit-test suite.
 
 ## Working practices

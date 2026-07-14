@@ -17,7 +17,7 @@ import (
 	"github.com/cows-project/cows/internal/fileagent"
 	"github.com/cows-project/cows/internal/quota"
 	"github.com/cows-project/cows/internal/repository/sqlite"
-	"github.com/cows-project/cows/internal/runtime/docker"
+	"github.com/cows-project/cows/internal/runtime/podman"
 	"github.com/cows-project/cows/internal/web"
 	"github.com/cows-project/cows/internal/workspace"
 )
@@ -70,17 +70,18 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 
-	dockerRuntime, err := docker.New(cfg.DockerSocket)
+	podmanRuntime, err := podman.New(cfg.PodmanSocket)
 	if err != nil {
-		return fmt.Errorf("initialize Docker runtime: %w", err)
+		return fmt.Errorf("initialize rootless Podman runtime: %w", err)
 	}
 	quotaService := quota.New(store)
 	if _, err := quotaService.EnsureHostSettings(ctx, quota.HostSettingsInput{HostStorageBytes: cfg.HostStorageBytes}); err != nil {
 		return fmt.Errorf("initialize host settings: %w", err)
 	}
-	scheduler := quota.NewScheduler(store, dockerRuntime)
-	templateService := workspace.NewWithRuntimeAndMountRoots(store, dockerRuntime, cfg.MountRoot, cfg.MountArchiveRoot, scheduler)
-	webServer, err := web.New(db, authService, templateService, quotaService, dockerRuntime, web.Options{CookieSecure: cfg.CookieSecure, SessionLifetime: cfg.SessionLifetime})
+	storageProvider := workspace.NewStorageUsageProvider(podmanRuntime, cfg.MountRoot)
+	scheduler := quota.NewScheduler(store, podmanRuntime, storageProvider)
+	templateService := workspace.NewWithRuntimeAndMountRoots(store, podmanRuntime, cfg.MountRoot, cfg.MountArchiveRoot, scheduler)
+	webServer, err := web.New(db, authService, templateService, quotaService, podmanRuntime, web.Options{CookieSecure: cfg.CookieSecure, SessionLifetime: cfg.SessionLifetime})
 	if err != nil {
 		return fmt.Errorf("initialize web server: %w", err)
 	}

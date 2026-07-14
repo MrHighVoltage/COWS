@@ -25,6 +25,14 @@ type User struct {
 	UpdatedAt          time.Time
 }
 
+type Group struct {
+	ID          string
+	Name        string
+	Description string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
 func (u User) IsAdministrator() bool {
 	return u.Role == RoleAdministrator && !u.Disabled
 }
@@ -77,10 +85,17 @@ type WorkspaceTemplate struct {
 	Configuration                   TemplateConfiguration
 	AccessMethods                   []AccessMethod
 	AllowedRoles                    []Role
+	GroupAccessMode                 string
+	AllowedGroupIDs                 []string
 	Enabled                         bool
 	CreatedAt                       time.Time
 	UpdatedAt                       time.Time
 }
+
+const (
+	GroupAccessInclude = "include"
+	GroupAccessExclude = "exclude"
+)
 
 type DesiredWorkspaceState string
 
@@ -108,6 +123,8 @@ type Workspace struct {
 	AllocatedCPUMillis              int64
 	AllocatedMemoryBytes            int64
 	AllocatedStorageBytes           int64
+	StorageUsageBytes               int64
+	StorageUsageKnown               bool
 	InitialConnectionTimeoutSeconds int64
 	StoppedRetentionSeconds         int64
 	DataRetentionSeconds            int64
@@ -127,13 +144,14 @@ type Workspace struct {
 }
 
 type UserQuota struct {
-	UserID          string
-	MaxCPUMillis    int64
-	MaxMemoryBytes  int64
-	MaxStorageBytes int64
-	MaxWorkspaces   int64
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	UserID               string
+	MaxCPUMillis         int64
+	MaxMemoryBytes       int64
+	MaxStorageBytes      int64
+	MaxWorkspaces        int64
+	MaxRunningWorkspaces int64
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 type HostSettings struct {
@@ -153,6 +171,7 @@ type ResourceRequest struct {
 }
 
 type AllocationSummary struct {
-	WorkspaceCount int64
-	Resources      ResourceRequest
+	WorkspaceCount        int64
+	RunningWorkspaceCount int64
+	Resources             ResourceRequest
 }

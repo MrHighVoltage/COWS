@@ -33,7 +33,7 @@ runtime capacity, policies, and audit information.
 - Enforce resource limits in the runtime as well as quotas in COWS.
 - Separate desired state from observed runtime state and reconcile them.
 - Start with a comprehensible modular monolith and SQLite.
-- Keep Docker and Podman behind practical runtime adapters.
+- Use rootless Podman as the initial and only supported runtime.
 - Use server-rendered HTML, HTMX, and small Alpine.js interactions without a
   frontend build process.
 
@@ -65,14 +65,15 @@ administrator without a quota assignment is unrestricted by COWS user quotas.
 Within an assigned quota, zero means unlimited for that resource; physical host
 capacity and reserved host capacity still apply to all accounts.
 
-Workspace lifecycle policies must support three administrator-defined durations:
+Workspace lifecycle policies must support two administrator-defined durations:
 
 - an initial connection timeout after which a workspace with no user connection
   is stopped but its container is retained;
 - a stopped-container retention timeout after which the stopped container may be
   deleted; and
-- a data-retention timeout after deletion after which remaining workspace data,
-  such as volumes, becomes eligible for archival.
+- explicit deletion archives managed directory data, while automatic timeout
+  cleanup never deletes or archives user data. There is no post-deletion data
+  retention setting.
 
 These policies are visible to users on workspace pages. COWS does not archive
 data or send email in the initial implementation, but policy evaluation must
@@ -84,7 +85,7 @@ observations remain authoritative for container existence and running state.
 ## Deployment assumptions
 
 - One Linux server and one active COWS control-plane process.
-- One local Docker or Podman runtime.
+- One local rootless Podman runtime and user service socket.
 - One SQLite database on local supported storage.
 - A reverse proxy may terminate HTTPS.
 - Frontend assets are embedded or served locally; no CDN is required.
@@ -107,5 +108,5 @@ observations remain authoritative for container existence and running state.
   may remain without an authenticated user connection before COWS stops it.
 - **Stopped retention**: The period a stopped container remains available
   before deletion becomes due.
-- **Data retention**: The period after container deletion before leftover data
-  becomes eligible for an archive action.
+- **Measured storage usage**: Runtime-reported container writable-layer usage
+  plus helper-measured managed mount and volume usage, excluding the image.

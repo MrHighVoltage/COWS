@@ -1,7 +1,5 @@
-// Package runtime defines the COWS-facing boundary for container runtimes.
-//
-// This package deliberately contains no Docker or Podman client. Adapters will
-// be added only after the lifecycle and reconciliation semantics are reviewed.
+// Package runtime defines the COWS-facing boundary for the rootless Podman
+// runtime. It deliberately contains no Podman client types.
 package runtime
 
 import (
@@ -22,7 +20,6 @@ var (
 const (
 	ManagedLabel      = "cows.managed"
 	WorkspaceIDLabel  = "cows.workspace-id"
-	RuntimeNameDocker = "docker"
 	RuntimeNamePodman = "podman"
 )
 
@@ -189,6 +186,7 @@ type FileEntry struct {
 type FileAccess interface {
 	io.Closer
 	List(ctx context.Context, relativePath string) ([]FileEntry, error)
+	Usage(ctx context.Context) (int64, error)
 	Stat(ctx context.Context, relativePath string) (fs.FileInfo, error)
 	OpenRead(ctx context.Context, relativePath string) (io.ReadCloser, fs.FileInfo, error)
 	OpenZip(ctx context.Context, relativePath string) (io.ReadCloser, error)
@@ -200,6 +198,15 @@ type FileAccess interface {
 
 type FileAccessRuntime interface {
 	OpenFileAccess(ctx context.Context, spec FileAccessSpec) (FileAccess, error)
+}
+
+type StorageUsageSpec struct {
+	RuntimeID string
+	Mounts    []FileAccessSpec
+}
+
+type StorageUsageRuntime interface {
+	WorkspaceStorageUsage(ctx context.Context, spec StorageUsageSpec) (int64, error)
 }
 
 type Runtime interface {
