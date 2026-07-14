@@ -154,6 +154,17 @@ type UserQuota struct {
 	UpdatedAt            time.Time
 }
 
+type GroupQuota struct {
+	GroupID              string
+	MaxCPUMillis         int64
+	MaxMemoryBytes       int64
+	MaxStorageBytes      int64
+	MaxWorkspaces        int64
+	MaxRunningWorkspaces int64
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+}
+
 type HostSettings struct {
 	ID                   int
 	HostStorageBytes     int64

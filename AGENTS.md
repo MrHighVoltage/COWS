@@ -11,6 +11,8 @@ before changing behavior. Workspace lifecycle and timeout work must follow
 must follow `docs/decisions/0007-template-runtime-configuration.md`.
 Resource, storage, rootless-Podman, and group-access changes must follow
 `docs/decisions/0012-rootless-podman-resource-and-group-policy.md`.
+Group quota and administrator-view changes must follow
+`docs/decisions/0013-group-quotas-and-administrator-views.md`.
 
 ## Technology constraints
 

@@ -84,6 +84,7 @@ type workspaceFormData struct {
 
 type quotaFormData struct {
 	UserID               string
+	GroupID              string
 	MaxCPUMillis         string
 	MaxMemoryMiB         string
 	MaxStorageGiB        string
@@ -103,6 +104,12 @@ type settingsFormData struct {
 type quotaView struct {
 	User     domain.User
 	Quota    domain.UserQuota
+	Assigned bool
+}
+
+type groupQuotaView struct {
+	Group    domain.Group
+	Quota    domain.GroupQuota
 	Assigned bool
 }
 
@@ -166,6 +173,10 @@ type pageData struct {
 	FileError         string
 	Groups            []domain.Group
 	UserGroupIDs      map[string][]string
+	UserGroups        map[string][]domain.Group
+	EditUser          *domain.User
+	EditUserGroups    []string
+	GroupQuotas       []groupQuotaView
 	RuntimeWorkspaces []runtimeWorkspaceView
 }
 
@@ -274,6 +285,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /workspaces/{id}/files/upload", s.workspaceFileUpload)
 	mux.HandleFunc("GET /admin/users", s.adminUsers)
 	mux.HandleFunc("GET /admin/users/new", s.adminUsersNew)
+	mux.HandleFunc("GET /admin/users/{id}/edit", s.adminUserEdit)
 	mux.HandleFunc("POST /admin/users", s.adminUsersCreate)
 	mux.HandleFunc("POST /admin/users/{id}/disabled", s.adminUserDisabled)
 	mux.HandleFunc("POST /admin/users/{id}/groups", s.adminUserGroups)
@@ -281,6 +293,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/groups", s.adminGroupsCreate)
 	mux.HandleFunc("GET /admin/quotas", s.adminQuotas)
 	mux.HandleFunc("POST /admin/quotas/{id}", s.adminQuotaUpdate)
+	mux.HandleFunc("POST /admin/quotas/groups/{id}", s.adminGroupQuotaUpdate)
 	mux.HandleFunc("GET /admin/settings", s.adminSettings)
 	mux.HandleFunc("POST /admin/settings", s.adminSettingsUpdate)
 	mux.HandleFunc("GET /admin/templates", s.adminTemplates)
@@ -1007,7 +1020,12 @@ func (s *Server) adminUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	groups := s.templateGroups(r.Context(), user.ID)
+	groupByID := make(map[string]domain.Group, len(groups))
+	for _, group := range groups {
+		groupByID[group.ID] = group
+	}
 	userGroupIDs := make(map[string][]string, len(users))
+	userGroups := make(map[string][]domain.Group, len(users))
 	for _, value := range users {
 		ids, groupErr := s.auth.UserGroupIDs(r.Context(), user.ID, value.ID)
 		if groupErr != nil {
@@ -1015,6 +1033,11 @@ func (s *Server) adminUsers(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		userGroupIDs[value.ID] = ids
+		for _, groupID := range ids {
+			if group, exists := groupByID[groupID]; exists {
+				userGroups[value.ID] = append(userGroups[value.ID], group)
+			}
+		}
 	}
 	s.render(w, http.StatusOK, "admin-users-page", pageData{
 		Title:        "Users | COWS",
@@ -1022,8 +1045,31 @@ func (s *Server) adminUsers(w http.ResponseWriter, r *http.Request) {
 		Users:        users,
 		Groups:       groups,
 		UserGroupIDs: userGroupIDs,
+		UserGroups:   userGroups,
 		CSRFToken:    s.ensureCSRF(w, r),
 	})
+}
+
+func (s *Server) adminUserEdit(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	target, err := s.auth.FindUserForAdmin(r.Context(), user.ID, r.PathValue("id"))
+	if errors.Is(err, repository.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to load user", http.StatusInternalServerError)
+		return
+	}
+	groupIDs, err := s.auth.UserGroupIDs(r.Context(), user.ID, target.ID)
+	if err != nil {
+		http.Error(w, "failed to load user groups", http.StatusInternalServerError)
+		return
+	}
+	s.render(w, http.StatusOK, "admin-user-edit-page", pageData{Title: "Edit user | COWS", User: &user, EditUser: &target, Groups: s.templateGroups(r.Context(), user.ID), EditUserGroups: groupIDs, CSRFToken: s.ensureCSRF(w, r)})
 }
 
 func (s *Server) adminUsersNew(w http.ResponseWriter, r *http.Request) {
@@ -1169,7 +1215,12 @@ func (s *Server) adminQuotas(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to load quotas", http.StatusInternalServerError)
 		return
 	}
-	s.render(w, http.StatusOK, "admin-quotas-page", pageData{Title: "Quotas | COWS", User: &user, Quotas: views, CSRFToken: s.ensureCSRF(w, r)})
+	groupViews, err := s.loadGroupQuotaViews(r.Context(), user.ID)
+	if err != nil {
+		http.Error(w, "failed to load group quotas", http.StatusInternalServerError)
+		return
+	}
+	s.render(w, http.StatusOK, "admin-quotas-page", pageData{Title: "Quotas | COWS", User: &user, Quotas: views, GroupQuotas: groupViews, CSRFToken: s.ensureCSRF(w, r)})
 }
 
 func (s *Server) adminQuotaUpdate(w http.ResponseWriter, r *http.Request) {
@@ -1194,7 +1245,37 @@ func (s *Server) adminQuotaUpdate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		form.Error = quotaFormError(err)
 		views, _ := s.loadQuotaViews(r.Context(), user.ID)
-		s.render(w, http.StatusBadRequest, "admin-quotas-page", pageData{Title: "Quotas | COWS", User: &user, Quotas: views, Quota: form, CSRFToken: s.ensureCSRF(w, r)})
+		groupViews, _ := s.loadGroupQuotaViews(r.Context(), user.ID)
+		s.render(w, http.StatusBadRequest, "admin-quotas-page", pageData{Title: "Quotas | COWS", User: &user, Quotas: views, GroupQuotas: groupViews, Quota: form, CSRFToken: s.ensureCSRF(w, r)})
+		return
+	}
+	http.Redirect(w, r, "/admin/quotas", http.StatusSeeOther)
+}
+
+func (s *Server) adminGroupQuotaUpdate(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if !s.validCSRF(r) {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	form := quotaFormData{GroupID: r.PathValue("id"), MaxCPUMillis: r.FormValue("max_cpu_millis"), MaxMemoryMiB: r.FormValue("max_memory_mib"), MaxStorageGiB: r.FormValue("max_storage_gib"), MaxWorkspaces: r.FormValue("max_workspaces"), MaxRunningWorkspaces: r.FormValue("max_running_workspaces")}
+	input, err := parseQuotaForm(form)
+	if err == nil {
+		_, err = s.quota.SetGroup(r.Context(), user.ID, form.GroupID, input)
+	}
+	if err != nil {
+		form.Error = quotaFormError(err)
+		views, _ := s.loadQuotaViews(r.Context(), user.ID)
+		groupViews, _ := s.loadGroupQuotaViews(r.Context(), user.ID)
+		s.render(w, http.StatusBadRequest, "admin-quotas-page", pageData{Title: "Quotas | COWS", User: &user, Quotas: views, GroupQuotas: groupViews, Quota: form, CSRFToken: s.ensureCSRF(w, r)})
 		return
 	}
 	http.Redirect(w, r, "/admin/quotas", http.StatusSeeOther)
@@ -1279,6 +1360,26 @@ func (s *Server) loadQuotaViews(ctx context.Context, actorID string) ([]quotaVie
 			return nil, err
 		}
 		views = append(views, quotaView{User: user, Quota: assigned, Assigned: true})
+	}
+	return views, nil
+}
+
+func (s *Server) loadGroupQuotaViews(ctx context.Context, actorID string) ([]groupQuotaView, error) {
+	groups, err := s.auth.ListGroups(ctx, actorID)
+	if err != nil {
+		return nil, err
+	}
+	views := make([]groupQuotaView, 0, len(groups))
+	for _, group := range groups {
+		assigned, err := s.quota.GetGroup(ctx, actorID, group.ID)
+		if errors.Is(err, repository.ErrNotFound) {
+			views = append(views, groupQuotaView{Group: group})
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		views = append(views, groupQuotaView{Group: group, Quota: assigned, Assigned: true})
 	}
 	return views, nil
 }

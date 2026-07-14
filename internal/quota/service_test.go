@@ -174,3 +174,47 @@ func TestHostSettingsAreSeededOnceAndAppliedDynamically(t *testing.T) {
 		t.Fatalf("dynamic reserved capacity result = %v, want capacity insufficient", err)
 	}
 }
+
+func TestGroupQuotasAggregateAndExplicitUserQuotaOverrides(t *testing.T) {
+	store, authService, adminID, studentID := quotaTestStore(t)
+	ctx := context.Background()
+	service := New(store)
+	first, err := authService.CreateGroup(ctx, adminID, "research", "Research users")
+	if err != nil {
+		t.Fatalf("create first group: %v", err)
+	}
+	second, err := authService.CreateGroup(ctx, adminID, "teaching", "Teaching users")
+	if err != nil {
+		t.Fatalf("create second group: %v", err)
+	}
+	if err := authService.SetUserGroups(ctx, adminID, studentID, []string{first.ID, second.ID}); err != nil {
+		t.Fatalf("assign groups: %v", err)
+	}
+	if _, err := service.SetGroup(ctx, adminID, first.ID, Input{MaxCPUMillis: 1000, MaxMemoryBytes: 2 << 30, MaxStorageBytes: 10 << 30, MaxWorkspaces: 1, MaxRunningWorkspaces: 1}); err != nil {
+		t.Fatalf("set first group quota: %v", err)
+	}
+	if _, err := service.SetGroup(ctx, adminID, second.ID, Input{MaxCPUMillis: 2000, MaxMemoryBytes: 3 << 30, MaxStorageBytes: 20 << 30, MaxWorkspaces: 2, MaxRunningWorkspaces: 2}); err != nil {
+		t.Fatalf("set second group quota: %v", err)
+	}
+	effective, err := service.GetForUser(ctx, studentID)
+	if err != nil {
+		t.Fatalf("load effective group quota: %v", err)
+	}
+	if effective.MaxCPUMillis != 3000 || effective.MaxMemoryBytes != 5<<30 || effective.MaxStorageBytes != 30<<30 || effective.MaxWorkspaces != 3 || effective.MaxRunningWorkspaces != 3 {
+		t.Fatalf("effective group quota = %+v", effective)
+	}
+	if _, err := service.SetGroup(ctx, adminID, second.ID, Input{MaxCPUMillis: 0, MaxMemoryBytes: 3 << 30, MaxStorageBytes: 0, MaxWorkspaces: 2, MaxRunningWorkspaces: 2}); err != nil {
+		t.Fatalf("set unlimited group quota: %v", err)
+	}
+	effective, err = service.GetForUser(ctx, studentID)
+	if err != nil || effective.MaxCPUMillis != 0 || effective.MaxStorageBytes != 0 {
+		t.Fatalf("unlimited group quota = %+v err=%v", effective, err)
+	}
+	if _, err := service.Set(ctx, adminID, studentID, Input{MaxCPUMillis: 4000, MaxMemoryBytes: 4 << 30, MaxStorageBytes: 40 << 30, MaxWorkspaces: 4, MaxRunningWorkspaces: 2}); err != nil {
+		t.Fatalf("set explicit user quota: %v", err)
+	}
+	effective, err = service.GetForUser(ctx, studentID)
+	if err != nil || effective.MaxCPUMillis != 4000 || effective.MaxStorageBytes != 40<<30 || effective.MaxWorkspaces != 4 {
+		t.Fatalf("explicit user quota did not override groups: %+v err=%v", effective, err)
+	}
+}

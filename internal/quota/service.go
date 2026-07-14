@@ -78,7 +78,84 @@ func (s *Service) GetForUser(ctx context.Context, userID string) (domain.UserQuo
 	if user.Disabled {
 		return domain.UserQuota{}, errors.New("user is disabled")
 	}
-	return s.store.FindUserQuota(ctx, userID)
+	return effectiveQuota(ctx, s.store, userID)
+}
+
+func (s *Service) GetGroup(ctx context.Context, actorID, groupID string) (domain.GroupQuota, error) {
+	if _, err := s.requireAdministrator(ctx, actorID); err != nil {
+		return domain.GroupQuota{}, err
+	}
+	return s.store.FindGroupQuota(ctx, groupID)
+}
+
+func (s *Service) SetGroup(ctx context.Context, actorID, groupID string, input Input) (domain.GroupQuota, error) {
+	if _, err := s.requireAdministrator(ctx, actorID); err != nil {
+		return domain.GroupQuota{}, err
+	}
+	if !validInput(input) {
+		return domain.GroupQuota{}, ErrInvalidQuota
+	}
+	if _, err := s.store.FindGroupByID(ctx, groupID); err != nil {
+		return domain.GroupQuota{}, err
+	}
+	existing, err := s.store.FindGroupQuota(ctx, groupID)
+	if errors.Is(err, repository.ErrNotFound) {
+		existing = domain.GroupQuota{GroupID: groupID, CreatedAt: s.now().UTC()}
+	} else if err != nil {
+		return domain.GroupQuota{}, err
+	}
+	existing.MaxCPUMillis = input.MaxCPUMillis
+	existing.MaxMemoryBytes = input.MaxMemoryBytes
+	existing.MaxStorageBytes = input.MaxStorageBytes
+	existing.MaxWorkspaces = input.MaxWorkspaces
+	existing.MaxRunningWorkspaces = input.MaxRunningWorkspaces
+	existing.UpdatedAt = s.now().UTC()
+	if err := s.store.UpsertGroupQuota(ctx, existing); err != nil {
+		return domain.GroupQuota{}, err
+	}
+	_ = s.store.RecordAuditEvent(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "quota.group_updated", TargetType: "group", TargetID: groupID})
+	return existing, nil
+}
+
+func effectiveQuota(ctx context.Context, store repository.Store, userID string) (domain.UserQuota, error) {
+	if quota, err := store.FindUserQuota(ctx, userID); err == nil {
+		return quota, nil
+	} else if !errors.Is(err, repository.ErrNotFound) {
+		return domain.UserQuota{}, err
+	}
+	groupQuotas, err := store.ListGroupQuotasForUser(ctx, userID)
+	if err != nil {
+		return domain.UserQuota{}, err
+	}
+	if len(groupQuotas) == 0 {
+		return domain.UserQuota{}, repository.ErrNotFound
+	}
+	now := time.Now().UTC()
+	return domain.UserQuota{
+		UserID:               userID,
+		MaxCPUMillis:         aggregateLimit(groupQuotas, func(value domain.GroupQuota) int64 { return value.MaxCPUMillis }, 1_000_000),
+		MaxMemoryBytes:       aggregateLimit(groupQuotas, func(value domain.GroupQuota) int64 { return value.MaxMemoryBytes }, 1<<50),
+		MaxStorageBytes:      aggregateLimit(groupQuotas, func(value domain.GroupQuota) int64 { return value.MaxStorageBytes }, 1<<60),
+		MaxWorkspaces:        aggregateLimit(groupQuotas, func(value domain.GroupQuota) int64 { return value.MaxWorkspaces }, 1_000_000),
+		MaxRunningWorkspaces: aggregateLimit(groupQuotas, func(value domain.GroupQuota) int64 { return value.MaxRunningWorkspaces }, 1_000_000),
+		CreatedAt:            now,
+		UpdatedAt:            now,
+	}, nil
+}
+
+func aggregateLimit(values []domain.GroupQuota, field func(domain.GroupQuota) int64, maximum int64) int64 {
+	var total int64
+	for _, value := range values {
+		limit := field(value)
+		if limit == 0 {
+			return 0
+		}
+		if total > maximum-limit {
+			return maximum
+		}
+		total += limit
+	}
+	return total
 }
 
 func (s *Service) Set(ctx context.Context, actorID, userID string, input Input) (domain.UserQuota, error) {
@@ -205,7 +282,7 @@ func (s *Scheduler) CheckCreate(ctx context.Context, userID string, request doma
 	if err != nil {
 		return fmt.Errorf("load quota user: %w", err)
 	}
-	userQuota, err := s.store.FindUserQuota(ctx, userID)
+	userQuota, err := effectiveQuota(ctx, s.store, userID)
 	quotaAssigned := true
 	if errors.Is(err, repository.ErrNotFound) {
 		quotaAssigned = false
@@ -276,7 +353,7 @@ func (s *Scheduler) CheckStart(ctx context.Context, userID string, request domai
 	if err != nil {
 		return fmt.Errorf("load quota user: %w", err)
 	}
-	userQuota, err := s.store.FindUserQuota(ctx, userID)
+	userQuota, err := effectiveQuota(ctx, s.store, userID)
 	quotaAssigned := true
 	if errors.Is(err, repository.ErrNotFound) {
 		quotaAssigned = false
