@@ -158,9 +158,16 @@ type pageData struct {
 	SettingsForm    settingsFormData
 	Allocation      *allocationView
 	ActiveWorkspace *domain.Workspace
+	WorkspaceAccess map[string]workspaceAccess
 	FileListing     *files.Listing
 	FileMounts      []workspace.FileMount
 	FileError       string
+}
+
+type workspaceAccess struct {
+	Terminal bool
+	Desktop  bool
+	Files    bool
 }
 
 func New(db *sql.DB, authService *auth.Service, templateService *workspace.Service, quotaService *quota.Service, runtimeAdapter runtime.Runtime, options Options) (*Server, error) {
@@ -420,7 +427,25 @@ func (s *Server) workspacePageData(ctx context.Context, user *domain.User) (page
 	if err != nil {
 		return pageData{}, err
 	}
-	data := pageData{Workspaces: workspaces, Allocation: &allocationView{Summary: allocation}}
+	data := pageData{Workspaces: workspaces, Allocation: &allocationView{Summary: allocation}, WorkspaceAccess: make(map[string]workspaceAccess, len(workspaces))}
+	for _, value := range workspaces {
+		methods, err := s.workspace.WorkspaceAccessMethods(ctx, user.ID, value.ID)
+		if err != nil {
+			return pageData{}, err
+		}
+		access := workspaceAccess{}
+		for _, method := range methods {
+			switch method {
+			case domain.AccessTerminal:
+				access.Terminal = true
+			case domain.AccessDesktop:
+				access.Desktop = true
+			case domain.AccessFiles:
+				access.Files = true
+			}
+		}
+		data.WorkspaceAccess[value.ID] = access
+	}
 	if s.quota != nil {
 		assigned, quotaErr := s.quota.GetForUser(ctx, user.ID)
 		if quotaErr == nil {
