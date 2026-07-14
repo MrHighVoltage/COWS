@@ -143,6 +143,10 @@ func TestWorkspaceCreationOwnershipAndDesiredObservedState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
+	accessMethods, err := service.WorkspaceAccessMethods(ctx, student.ID, created.ID)
+	if err != nil || len(accessMethods) != 2 || accessMethods[0] != domain.AccessTerminal || accessMethods[1] != domain.AccessDesktop {
+		t.Fatalf("workspace access methods: %v, %v", accessMethods, err)
+	}
 	if created.OwnerUserID != student.ID || created.DesiredState != domain.DesiredWorkspaceStopped || created.ObservedState != "unknown" || created.AllocatedCPUMillis != template.DefaultCPUMillis || created.InitialConnectionTimeoutSeconds != template.InitialConnectionTimeoutSeconds || created.StoppedRetentionSeconds != template.StoppedRetentionSeconds || created.DataRetentionSeconds != template.DataRetentionSeconds {
 		t.Fatalf("unexpected workspace: %+v", created)
 	}

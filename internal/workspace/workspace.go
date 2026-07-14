@@ -159,6 +159,20 @@ func (s *Service) GetWorkspace(ctx context.Context, actorID, workspaceID string)
 	return workspace, nil
 }
 
+// WorkspaceAccessMethods returns the current template access policy after
+// applying the same workspace ownership checks used by workspace operations.
+func (s *Service) WorkspaceAccessMethods(ctx context.Context, actorID, workspaceID string) ([]domain.AccessMethod, error) {
+	value, err := s.GetWorkspace(ctx, actorID, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	template, err := s.store.FindTemplateByID(ctx, value.TemplateID)
+	if err != nil {
+		return nil, err
+	}
+	return append([]domain.AccessMethod(nil), template.AccessMethods...), nil
+}
+
 func (s *Service) SetDesiredState(ctx context.Context, actorID, workspaceID string, state domain.DesiredWorkspaceState) error {
 	workspace, err := s.GetWorkspace(ctx, actorID, workspaceID)
 	if err != nil {
