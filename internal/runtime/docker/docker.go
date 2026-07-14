@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -171,12 +172,20 @@ func (a *Adapter) CreateWorkspace(ctx context.Context, spec runtime.WorkspaceSpe
 		ReadOnly bool   `json:"ReadOnly"`
 	}, 0, len(spec.Mounts))
 	for _, value := range spec.Mounts {
+		source := value.Source
+		if source == "" {
+			source = "cows-" + spec.WorkspaceID + "-" + value.Name
+		}
+		mountType := value.Type
+		if mountType == "" {
+			mountType = "volume"
+		}
 		mounts = append(mounts, struct {
 			Type     string `json:"Type"`
 			Source   string `json:"Source"`
 			Target   string `json:"Target"`
 			ReadOnly bool   `json:"ReadOnly"`
-		}{Type: "volume", Source: "cows-" + spec.WorkspaceID + "-" + value.Name, Target: value.ContainerPath, ReadOnly: value.ReadOnly})
+		}{Type: mountType, Source: source, Target: value.ContainerPath, ReadOnly: value.ReadOnly})
 	}
 	portBindings := make(map[string][]struct {
 		HostIP   string `json:"HostIp"`
@@ -279,7 +288,15 @@ func (a *Adapter) createPodmanWorkspace(ctx context.Context, spec runtime.Worksp
 	body.ResourceLimits.Memory.Limit = spec.Limits.MemoryBytes
 	body.ResourceLimits.PIDs.Limit = 512
 	for _, value := range spec.Mounts {
-		body.Mounts = append(body.Mounts, podmanMount{Type: "volume", Source: "cows-" + spec.WorkspaceID + "-" + value.Name, Destination: value.ContainerPath, Options: readOnlyOptions(value.ReadOnly)})
+		source := value.Source
+		if source == "" {
+			source = "cows-" + spec.WorkspaceID + "-" + value.Name
+		}
+		mountType := value.Type
+		if mountType == "" {
+			mountType = "volume"
+		}
+		body.Mounts = append(body.Mounts, podmanMount{Type: mountType, Source: source, Destination: value.ContainerPath, Options: readOnlyOptions(value.ReadOnly)})
 	}
 	for _, value := range spec.Ports {
 		body.PortMappings = append(body.PortMappings, portMapping{ContainerPort: value.ContainerPort, HostPort: value.HostPort, HostIP: value.HostIP, Protocol: value.Protocol})
@@ -317,7 +334,17 @@ func validRuntimeConfiguration(spec runtime.WorkspaceSpec) bool {
 	}
 	seenMounts := make(map[string]struct{}, len(spec.Mounts))
 	for _, value := range spec.Mounts {
-		if !validWorkspaceID(value.Name) || value.ContainerPath == "" || value.ContainerPath[0] != '/' || strings.Contains(value.ContainerPath, "..") || strings.ContainsAny(value.ContainerPath, "\x00\r\n") {
+		mountType := value.Type
+		if mountType == "" {
+			mountType = "volume"
+		}
+		if !validWorkspaceID(value.Name) || (mountType != "volume" && mountType != "bind") || value.ContainerPath == "" || value.ContainerPath[0] != '/' || strings.Contains(value.ContainerPath, "..") || strings.ContainsAny(value.ContainerPath, "\x00\r\n") || (mountType == "bind" && value.Source == "") || strings.ContainsAny(value.Source, "\x00\r\n") {
+			return false
+		}
+		if mountType == "bind" && !filepath.IsAbs(value.Source) {
+			return false
+		}
+		if mountType == "volume" && (filepath.IsAbs(value.Source) || strings.ContainsAny(value.Source, " \t")) {
 			return false
 		}
 		if _, ok := seenMounts[value.Name]; ok {

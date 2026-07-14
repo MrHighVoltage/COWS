@@ -51,6 +51,7 @@ type Service struct {
 	store     repository.Store
 	scheduler *quota.Scheduler
 	runtime   runtime.Runtime
+	mountRoot string
 	now       func() time.Time
 }
 
@@ -60,6 +61,12 @@ func New(store repository.Store, schedulers ...*quota.Scheduler) *Service {
 
 func NewWithRuntime(store repository.Store, runtimeAdapter runtime.Runtime, schedulers ...*quota.Scheduler) *Service {
 	return newService(store, runtimeAdapter, schedulers...)
+}
+
+func NewWithRuntimeAndMountRoot(store repository.Store, runtimeAdapter runtime.Runtime, mountRoot string, schedulers ...*quota.Scheduler) *Service {
+	service := newService(store, runtimeAdapter, schedulers...)
+	service.mountRoot = mountRoot
+	return service
 }
 
 func newService(store repository.Store, runtimeAdapter runtime.Runtime, schedulers ...*quota.Scheduler) *Service {
@@ -243,6 +250,18 @@ func validateTemplate(input TemplateInput) error {
 	}
 	for _, method := range input.AccessMethods {
 		if !method.Valid() {
+			return ErrInvalidTemplate
+		}
+	}
+	if hasAccessMethod(input.AccessMethods, domain.AccessFiles) {
+		fileMount := false
+		for _, mount := range input.Configuration.Mounts {
+			if mount.FileManager {
+				fileMount = true
+				break
+			}
+		}
+		if !fileMount {
 			return ErrInvalidTemplate
 		}
 	}

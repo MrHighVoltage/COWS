@@ -17,13 +17,14 @@ import (
 )
 
 var (
-	ErrInvalidWorkspace       = errors.New("invalid workspace")
-	ErrTemplateNotAvailable   = errors.New("workspace template is not available")
-	ErrWorkspaceNotAuthorized = errors.New("workspace access is not authorized")
-	ErrRuntimeUnavailable     = errors.New("workspace runtime unavailable")
-	ErrWorkspaceStateConflict = errors.New("workspace state conflict")
-	ErrTerminalNotAvailable   = errors.New("workspace terminal is not available")
-	ErrDesktopNotAvailable    = errors.New("workspace desktop is not available")
+	ErrInvalidWorkspace        = errors.New("invalid workspace")
+	ErrTemplateNotAvailable    = errors.New("workspace template is not available")
+	ErrWorkspaceNotAuthorized  = errors.New("workspace access is not authorized")
+	ErrRuntimeUnavailable      = errors.New("workspace runtime unavailable")
+	ErrWorkspaceStateConflict  = errors.New("workspace state conflict")
+	ErrTerminalNotAvailable    = errors.New("workspace terminal is not available")
+	ErrDesktopNotAvailable     = errors.New("workspace desktop is not available")
+	ErrFileManagerNotAvailable = errors.New("workspace file manager is not available")
 )
 
 type CreateWorkspaceInput struct {
@@ -86,6 +87,9 @@ func (s *Service) CreateWorkspace(ctx context.Context, actorID string, input Cre
 	if err != nil {
 		return domain.Workspace{}, fmt.Errorf("create workspace ID: %w", err)
 	}
+	if err := ensureMountDirectories(s.mountRoot, id, template.Configuration.Mounts); err != nil {
+		return domain.Workspace{}, err
+	}
 	now := s.now().UTC()
 	workspace := domain.Workspace{
 		ID:                              id,
@@ -109,10 +113,12 @@ func (s *Service) CreateWorkspace(ctx context.Context, actorID string, input Cre
 		UpdatedAt:                       now,
 	}
 	if err := s.store.CreateWorkspace(ctx, workspace); err != nil {
+		_ = removeMountDirectories(s.mountRoot, id, template.Configuration.Mounts)
 		return domain.Workspace{}, err
 	}
 	if err := s.reserveWorkspacePorts(ctx, id, template.Configuration.Services); err != nil {
 		_ = s.store.DeleteWorkspace(ctx, id)
+		_ = removeMountDirectories(s.mountRoot, id, template.Configuration.Mounts)
 		return domain.Workspace{}, err
 	}
 	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: user.ID, EventType: "workspace.created", TargetType: "workspace", TargetID: id, Metadata: map[string]string{"template_id": template.ID}})
@@ -192,6 +198,9 @@ func (s *Service) StartWorkspace(ctx context.Context, actorID, workspaceID strin
 			return err
 		}
 		if err := s.ensureWorkspacePorts(ctx, value.ID, configuration); err != nil {
+			return err
+		}
+		if err := ensureMountDirectories(s.mountRoot, value.ID, configuration.Mounts); err != nil {
 			return err
 		}
 		spec, err := s.runtimeSpec(ctx, value)
@@ -283,6 +292,13 @@ func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID stri
 		return err
 	}
 	if value.RuntimeID == "" {
+		configuration, err := s.effectiveConfiguration(ctx, value)
+		if err != nil {
+			return err
+		}
+		if err := removeMountDirectories(s.mountRoot, value.ID, configuration.Mounts); err != nil {
+			return err
+		}
 		if err := s.store.DeleteWorkspace(ctx, value.ID); err != nil {
 			return err
 		}
@@ -301,6 +317,15 @@ func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID stri
 			_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
 			return err
 		}
+	}
+	configuration, err := s.effectiveConfiguration(ctx, value)
+	if err != nil {
+		_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
+		return err
+	}
+	if err := removeMountDirectories(s.mountRoot, value.ID, configuration.Mounts); err != nil {
+		_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
+		return err
 	}
 	// Keep the record when this database delete fails so an administrator can
 	// retry without losing the audit and reconciliation context.
@@ -633,11 +658,19 @@ func (s *Service) runtimeSpec(ctx context.Context, value domain.Workspace) (runt
 	if len(resolved.Ports) > 0 {
 		networkMode = "bridge"
 	}
+	mounts := make([]runtime.Mount, 0, len(configuration.Mounts))
+	for _, definition := range configuration.Mounts {
+		mount, err := materializeMount(s.mountRoot, value.ID, definition)
+		if err != nil {
+			return runtime.WorkspaceSpec{}, err
+		}
+		mounts = append(mounts, mount)
+	}
 	image := runtime.Image{Reference: value.TemplateImageReference, Digest: value.TemplateImageDigest}
 	if image.Reference == "" {
 		image = runtime.Image{Reference: template.ImageReference, Digest: template.ImageDigest}
 	}
-	return runtime.WorkspaceSpec{WorkspaceID: value.ID, Image: image, Limits: runtime.ResourceLimits{CPUMillis: value.AllocatedCPUMillis, MemoryBytes: value.AllocatedMemoryBytes, StorageBytes: value.AllocatedStorageBytes}, Labels: runtime.ManagedLabels(value.ID), Command: resolved.Command, Environment: resolved.Environment, Mounts: resolved.Mounts, Ports: resolved.Ports, NetworkMode: networkMode, User: resolved.User}, nil
+	return runtime.WorkspaceSpec{WorkspaceID: value.ID, Image: image, Limits: runtime.ResourceLimits{CPUMillis: value.AllocatedCPUMillis, MemoryBytes: value.AllocatedMemoryBytes, StorageBytes: value.AllocatedStorageBytes}, Labels: runtime.ManagedLabels(value.ID), Command: resolved.Command, Environment: resolved.Environment, Mounts: mounts, Ports: resolved.Ports, NetworkMode: networkMode, User: resolved.User}, nil
 }
 
 func (s *Service) effectiveConfiguration(ctx context.Context, value domain.Workspace) (domain.TemplateConfiguration, error) {

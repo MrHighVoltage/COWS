@@ -15,6 +15,7 @@ import (
 type Config struct {
 	ListenAddr             string
 	DatabasePath           string
+	MountRoot              string
 	DockerSocket           string
 	HostStorageBytes       int64
 	LogLevel               slog.Level
@@ -32,6 +33,7 @@ func Load(args []string) (Config, error) {
 func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	listenAddr := envOr(lookup, "COWS_LISTEN_ADDR", "127.0.0.1:8080")
 	databasePath := envOr(lookup, "COWS_DATABASE_PATH", "./data/cows.db")
+	mountRoot := envOr(lookup, "COWS_MOUNT_ROOT", "./data/cows-mounts")
 	dockerSocket := envOr(lookup, "COWS_DOCKER_SOCKET", "/var/run/docker.sock")
 	hostStorageValue := envOr(lookup, "COWS_HOST_STORAGE_BYTES", "0")
 	logLevel := envOr(lookup, "COWS_LOG_LEVEL", "info")
@@ -49,6 +51,7 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	flags.SetOutput(io.Discard)
 	flags.StringVar(&listenAddr, "listen-addr", listenAddr, "HTTP listen address")
 	flags.StringVar(&databasePath, "database-path", databasePath, "SQLite database path")
+	flags.StringVar(&mountRoot, "mount-root", mountRoot, "root directory for COWS-managed directory mounts")
 	flags.StringVar(&dockerSocket, "docker-socket", dockerSocket, "Docker Engine Unix socket path")
 	flags.StringVar(&hostStorageValue, "host-storage-bytes", hostStorageValue, "configured allocatable host storage in bytes; zero means unknown")
 	flags.StringVar(&logLevel, "log-level", logLevel, "log level: debug, info, warn, or error")
@@ -66,6 +69,9 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	}
 	if strings.TrimSpace(databasePath) == "" {
 		return Config{}, errors.New("database path must not be empty")
+	}
+	if strings.TrimSpace(mountRoot) == "" {
+		return Config{}, errors.New("mount root must not be empty")
 	}
 	if strings.TrimSpace(dockerSocket) == "" {
 		return Config{}, errors.New("Docker socket path must not be empty")
@@ -94,6 +100,7 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	return Config{
 		ListenAddr:             listenAddr,
 		DatabasePath:           databasePath,
+		MountRoot:              mountRoot,
 		DockerSocket:           dockerSocket,
 		HostStorageBytes:       hostStorageBytes,
 		LogLevel:               level,

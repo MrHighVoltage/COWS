@@ -28,9 +28,18 @@ type TemplateSecret struct {
 
 type TemplateMount struct {
 	Name          string `json:"name"`
+	Type          string `json:"type,omitempty"`
 	ContainerPath string `json:"container_path"`
 	ReadOnly      bool   `json:"read_only,omitempty"`
+	FileManager   bool   `json:"file_manager,omitempty"`
+	NamePrefix    string `json:"name_prefix,omitempty"`
+	NameSuffix    string `json:"name_suffix,omitempty"`
 }
+
+const (
+	TemplateMountVolume    = "volume"
+	TemplateMountDirectory = "directory"
+)
 
 type TemplateService struct {
 	Name           string `json:"name"`

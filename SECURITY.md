@@ -60,8 +60,11 @@ partial operations, and compromised or misconfigured images.
 - Runtime objects without a matching COWS workspace are treated as orphaned
   observations and are not automatically removed by reconciliation.
 - Template placeholders cannot access host environment variables, host paths,
-  secrets, or arbitrary runtime objects. Port bindings are loopback-only and
-  managed mounts are named volumes; host bind mounts are not supported.
+  secrets, or arbitrary runtime objects. Port bindings are loopback-only.
+  Managed volume and directory mounts use engine-generated names derived from
+  the workspace ID and administrator-controlled prefix/suffix values; users
+  cannot choose or edit them. Only directory mounts explicitly marked for the
+  file manager are exposed through rooted file operations.
 - The optional template `container_user` block is administrator-controlled. It
   is resolved from the server-side COWS username and validated UID/GID, home,
   shell, and display-name fields. Docker must reject a template requiring the
@@ -117,13 +120,19 @@ The current scheduler reserves allocations for stopped workspaces and requires
 an explicit host-storage capacity. It does not support overcommit, GPU
 capacity, or multiple active schedulers.
 
-## Future file-manager risks
+## File-manager risks
 
-File access is not implemented. Before it is added, the backend needs approved
-roots, canonical path handling, symlink and race protection, filename policy,
-upload and temporary-storage limits, safe archive inspection, ZIP-slip and
-ZIP-bomb defenses, and tests proving that a user cannot reach another
-workspace, a runtime socket, a host path, or container secrets.
+The initial file manager is intentionally narrow. It exposes only
+administrator-approved directory mounts marked `file_manager`, never named
+volumes, arbitrary container paths, runtime sockets, or host paths. The backend
+uses server-side workspace authorization, relative-path validation, `os.Root`,
+safe filenames, read-only checks, bounded uploads, temporary files, and
+server-side mount selection. These controls reduce but do not eliminate risk
+from a malicious workspace process, filesystem races, or host misconfiguration.
+Archive creation, extraction, bulk operations, and stronger quota accounting
+are not implemented. Before those features are added, include explicit
+ZIP-slip, ZIP-bomb, symlink replacement, file-count, temporary-storage, and
+generated-download-size tests.
 
 ## Known limitations of the current milestone
 
@@ -131,7 +140,10 @@ Local username/password authentication, mandatory first-login password change,
 stored email fields, server-side opaque sessions, CSRF protected forms,
 administrator checks, login rate limiting, and basic audit persistence now
 exist. The implementation has no password recovery, account deletion workflow,
-generic application proxy, file manager, or production HTTPS configuration.
+generic application proxy, or production HTTPS configuration. The initial file
+manager supports approved directory listing, bounded upload, download, folder
+creation, rename, and deletion; it does not support archives or named-volume
+access.
 Terminal access uses a fixed shell and desktop access uses a template-approved
 VNC service through the Docker-compatible runtime adapter; desktop sessions
 automatically authenticate using the template-selected VNC secret when one is

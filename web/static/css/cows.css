@@ -101,6 +101,15 @@ code { color: #465866; font-size: .82rem; }
 .desktop-display { width: 100%; height: min(72vh, 50rem); min-height: 32rem; overflow: hidden; border: 1px solid #263746; border-radius: .35rem; background: #101820; }
 .desktop-display canvas { display: block; max-width: 100%; height: auto; margin: 0 auto; }
 .desktop-panel .alert { margin-bottom: 0; }
+.file-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; margin-bottom: 1rem; }
+.file-toolbar label { color: #52616f; font-size: .9rem; font-weight: 700; }
+.file-toolbar select { min-height: 2.4rem; padding: .45rem .6rem; border: 1px solid #9fb0bd; border-radius: .3rem; font: inherit; }
+.file-breadcrumbs { display: flex; flex-wrap: wrap; gap: .45rem; align-items: center; margin-bottom: 1rem; color: #647482; font-size: .9rem; }
+.file-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-bottom: 1rem; }
+.file-actions form, .file-entry-actions form { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; margin: 0; }
+.file-actions input[type="text"], .file-entry-actions input[type="text"] { min-height: 2.25rem; min-width: 10rem; padding: .35rem .5rem; border: 1px solid #9fb0bd; border-radius: .3rem; font: inherit; }
+.file-entry-actions { display: flex; flex-wrap: wrap; gap: .4rem; }
+.file-panel th, .file-panel td { vertical-align: middle; }
 .terminal-panel:fullscreen, .desktop-panel:fullscreen { display: flex; flex-direction: column; width: 100vw; height: 100vh; padding: 1rem; border: 0; border-radius: 0; }
 .terminal-panel:fullscreen .terminal, .desktop-panel:fullscreen .desktop-display { flex: 1; height: auto; min-height: 0; }
 .quota-form { display: grid; grid-template-columns: repeat(4, minmax(4rem, 1fr)) auto; gap: .35rem; align-items: center; min-width: 28rem; }
@@ -128,4 +137,6 @@ code { color: #465866; font-size: .82rem; }
   .runtime-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .resource-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .quota-form { min-width: 24rem; }
+  .file-actions, .file-actions form { align-items: stretch; flex-direction: column; }
+  .file-actions form > * { width: 100%; }
 }

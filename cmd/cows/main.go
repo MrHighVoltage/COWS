@@ -71,7 +71,7 @@ func run(ctx context.Context, args []string) error {
 		return fmt.Errorf("initialize host settings: %w", err)
 	}
 	scheduler := quota.NewScheduler(store, dockerRuntime)
-	templateService := workspace.NewWithRuntime(store, dockerRuntime, scheduler)
+	templateService := workspace.NewWithRuntimeAndMountRoot(store, dockerRuntime, cfg.MountRoot, scheduler)
 	webServer, err := web.New(db, authService, templateService, quotaService, dockerRuntime, web.Options{CookieSecure: cfg.CookieSecure, SessionLifetime: cfg.SessionLifetime})
 	if err != nil {
 		return fmt.Errorf("initialize web server: %w", err)
