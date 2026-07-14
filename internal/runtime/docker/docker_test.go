@@ -289,14 +289,17 @@ func TestCreateWorkspaceUsesPodmanLibpodForPasswdEntry(t *testing.T) {
 			var body struct {
 				User        string `json:"user"`
 				PasswdEntry string `json:"passwd_entry"`
-				NetNS       struct {
+				UserNS      struct {
+					Mode string `json:"nsmode"`
+				} `json:"userns"`
+				NetNS struct {
 					Mode string `json:"nsmode"`
 				} `json:"netns"`
 			}
 			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 				t.Fatalf("decode Podman create request: %v", err)
 			}
-			if body.User != "1000:1001" || body.PasswdEntry != "alice:x:1000:1001:Alice:/home/alice:/bin/bash" || body.NetNS.Mode != "none" {
+			if body.User != "1000:1001" || body.PasswdEntry != "alice:x:1000:1001:Alice:/home/alice:/bin/bash" || body.UserNS.Mode != "keep-id:uid=1000,gid=1001" || body.NetNS.Mode != "none" {
 				t.Fatalf("unexpected Podman identity configuration: %+v", body)
 			}
 			return dockerResponse(http.StatusCreated, `{"Id":"abcdef0123456789"}`), nil

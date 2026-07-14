@@ -47,11 +47,19 @@ authorized directory mounts explicitly marked `file_manager`; keep named
 volumes out of browser routes and use rooted, server-selected paths for all
 file operations.
 
+Rootless Podman directory mounts with a configured container user must retain
+the server-selected `keep-id:uid=...,gid=...` mapping so COWS-created and
+container-created files remain usable by both sides. Explicit workspace
+deletion archives managed directory mounts; timeout cleanup must not silently
+delete or archive user data. Directory ZIP downloads are streamed and bounded;
+do not add archive extraction without dedicated security tests.
+
 Workspace timeout policies are backend-enforced and must not depend on browser
 timers. Keep the initial no-connection stop, stopped-container deletion, and
 post-deletion data-archive eligibility timestamps distinct. Do not implement
 email delivery or archive actions until their dedicated milestones; preserve
-clear future notification hooks and audit semantics.
+clear future notification hooks and audit semantics. Explicit deletion's
+managed-directory archive is separate from future automatic retention archival.
 
 ## Development commands
 

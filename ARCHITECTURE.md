@@ -64,8 +64,11 @@ application username as the default container username and resolves the
 administrator-controlled UID, GID, display name, home, and shell into a
 passwd entry. Users cannot change these values when creating a workspace.
 Docker receives a controlled UID:GID selection. Rootless Podman uses the
-Libpod create API for the additional passwd entry; the Docker-compatible API
-does not claim to support that Podman-specific operation.
+Libpod create API for the additional passwd entry and sets
+`keep-id:uid=<uid>,gid=<gid>` so the COWS host account maps to the configured
+container identity. This keeps read-write directory mounts usable by both the
+container process and the COWS file manager. The Docker-compatible API does
+not claim to support that Podman-specific operation.
 
 Terminal, desktop, and proxy sessions are authenticated COWS sessions whose
 targets are selected from server-side workspace records and template policy.
@@ -108,7 +111,8 @@ path; it cannot supply a host path, volume name, runtime ID, or container
 address. Listings, downloads, directory creation, rename, deletion, and
 uploads operate through `os.Root` beneath the approved mount directory. Named
 volumes and directory mounts without `file_manager` remain inaccessible to
-this UI. Archive creation, extraction, and file previews are deferred.
+this UI. Directory downloads can be streamed as bounded ZIP archives without
+temporary files; uploads, archive extraction, and file previews are deferred.
 
 ## Request and state flow
 
@@ -160,10 +164,11 @@ and any due or upcoming deadline. The policy model leaves room for future
 warning events and email delivery without making email a lifecycle dependency.
 
 Explicit user or administrator deletion is separate from timeout cleanup. Once
-the runtime container is confirmed removed, explicit deletion also removes the
-COWS workspace record and releases its allocated quota. Timeout deletion keeps
-the record so its lifecycle result, archive eligibility, and reconciliation
-context remain visible.
+the runtime container is confirmed removed, explicit deletion moves each
+COWS-managed directory mount to `<mount-root>/archive/<managed-name>`, then
+removes the COWS workspace record and releases its allocated quota. Timeout
+deletion keeps the record and leaves data in place so its lifecycle result,
+archive eligibility, and reconciliation context remain visible.
 
 ## Packages and ownership
 

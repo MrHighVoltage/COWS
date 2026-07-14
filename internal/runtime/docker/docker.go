@@ -257,13 +257,16 @@ func (a *Adapter) createPodmanWorkspace(ctx context.Context, spec runtime.Worksp
 		Protocol      string `json:"protocol"`
 	}
 	body := struct {
-		Name           string            `json:"name,omitempty"`
-		Image          string            `json:"image"`
-		Command        []string          `json:"command,omitempty"`
-		Env            map[string]string `json:"env,omitempty"`
-		Labels         map[string]string `json:"labels,omitempty"`
-		User           string            `json:"user,omitempty"`
-		PasswdEntry    string            `json:"passwd_entry,omitempty"`
+		Name        string            `json:"name,omitempty"`
+		Image       string            `json:"image"`
+		Command     []string          `json:"command,omitempty"`
+		Env         map[string]string `json:"env,omitempty"`
+		Labels      map[string]string `json:"labels,omitempty"`
+		User        string            `json:"user,omitempty"`
+		PasswdEntry string            `json:"passwd_entry,omitempty"`
+		UserNS      struct {
+			Mode string `json:"nsmode"`
+		} `json:"userns,omitempty"`
 		NetNS          map[string]string `json:"netns,omitempty"`
 		Mounts         []podmanMount     `json:"mounts,omitempty"`
 		PortMappings   []portMapping     `json:"portmappings,omitempty"`
@@ -282,6 +285,7 @@ func (a *Adapter) createPodmanWorkspace(ctx context.Context, spec runtime.Worksp
 	}{Image: imageReference, Command: append([]string(nil), spec.Command...), Env: environment, Labels: copyLabels(spec.Labels), PasswdEntry: spec.User.PasswdEntry}
 	body.Name = "cows-" + spec.WorkspaceID
 	body.User = strconv.FormatInt(spec.User.UID, 10) + ":" + strconv.FormatInt(spec.User.GID, 10)
+	body.UserNS.Mode = "keep-id:uid=" + strconv.FormatInt(spec.User.UID, 10) + ",gid=" + strconv.FormatInt(spec.User.GID, 10)
 	body.NetNS = map[string]string{"nsmode": networkMode}
 	body.ResourceLimits.CPU.Quota = spec.Limits.CPUMillis * 100
 	body.ResourceLimits.CPU.Period = 100000

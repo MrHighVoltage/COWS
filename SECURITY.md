@@ -67,8 +67,11 @@ partial operations, and compromised or misconfigured images.
   file manager are exposed through rooted file operations.
 - The optional template `container_user` block is administrator-controlled. It
   is resolved from the server-side COWS username and validated UID/GID, home,
-  shell, and display-name fields. Docker must reject a template requiring the
-  Podman-only passwd-entry extension instead of silently dropping it.
+  shell, and display-name fields. Rootless Podman uses a server-selected
+  `keep-id` mapping so the host COWS account and configured container identity
+  share ownership for read-write directory mounts. Docker must reject a
+  template requiring the Podman-only passwd-entry extension instead of
+  silently dropping it.
 
 ## Access gateway risks
 
@@ -129,10 +132,12 @@ uses server-side workspace authorization, relative-path validation, `os.Root`,
 safe filenames, read-only checks, bounded uploads, temporary files, and
 server-side mount selection. These controls reduce but do not eliminate risk
 from a malicious workspace process, filesystem races, or host misconfiguration.
-Archive creation, extraction, bulk operations, and stronger quota accounting
-are not implemented. Before those features are added, include explicit
-ZIP-slip, ZIP-bomb, symlink replacement, file-count, temporary-storage, and
-generated-download-size tests.
+Directory downloads are streamed as ZIP archives with a 4 GiB uncompressed
+and 100,000-entry bound. Symlinks and non-regular special files are not
+included, and no temporary archive is created. Archive extraction, bulk
+operations, and stronger quota accounting are not implemented. Before those
+features are added, include explicit ZIP-slip, ZIP-bomb, symlink replacement,
+file-count, temporary-storage, and generated-download-size tests.
 
 ## Known limitations of the current milestone
 
@@ -141,9 +146,9 @@ stored email fields, server-side opaque sessions, CSRF protected forms,
 administrator checks, login rate limiting, and basic audit persistence now
 exist. The implementation has no password recovery, account deletion workflow,
 generic application proxy, or production HTTPS configuration. The initial file
-manager supports approved directory listing, bounded upload, download, folder
-creation, rename, and deletion; it does not support archives or named-volume
-access.
+manager supports approved directory listing, bounded upload, individual file
+download, streamed directory ZIP download, folder creation, rename, and
+deletion; it does not support archive extraction or named-volume access.
 Terminal access uses a fixed shell and desktop access uses a template-approved
 VNC service through the Docker-compatible runtime adapter; desktop sessions
 automatically authenticate using the template-selected VNC secret when one is

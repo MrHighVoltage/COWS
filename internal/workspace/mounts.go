@@ -120,7 +120,55 @@ func ensureMountDirectories(root, workspaceID string, mounts []domain.TemplateMo
 		if normalizedMountType(mount.Type) != domain.TemplateMountDirectory {
 			continue
 		}
-		if err := rootHandle.MkdirAll(mountRootName(workspaceID, mount), 0o700); err != nil {
+		mode := os.FileMode(0o500)
+		if !mount.ReadOnly {
+			mode = 0o700
+		}
+		name := mountRootName(workspaceID, mount)
+		if err := rootHandle.MkdirAll(name, mode); err != nil {
+			return ErrMountUnavailable
+		}
+		if err := rootHandle.Chmod(name, mode); err != nil {
+			return ErrMountUnavailable
+		}
+	}
+	return nil
+}
+
+func archiveMountDirectories(root, workspaceID string, mounts []domain.TemplateMount) error {
+	needsDirectory := false
+	for _, mount := range mounts {
+		if normalizedMountType(mount.Type) == domain.TemplateMountDirectory {
+			needsDirectory = true
+			break
+		}
+	}
+	if root == "" || !needsDirectory {
+		return nil
+	}
+	rootHandle, err := os.OpenRoot(root)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return ErrMountUnavailable
+	}
+	defer rootHandle.Close()
+	if err := rootHandle.MkdirAll("archive", 0o700); err != nil {
+		return ErrMountUnavailable
+	}
+	for _, mount := range mounts {
+		if normalizedMountType(mount.Type) != domain.TemplateMountDirectory {
+			continue
+		}
+		name := mountRootName(workspaceID, mount)
+		if _, err := rootHandle.Lstat(name); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return ErrMountUnavailable
+		}
+		if err := rootHandle.Rename(name, filepath.Join("archive", name)); err != nil {
 			return ErrMountUnavailable
 		}
 	}
@@ -150,7 +198,7 @@ func removeMountDirectories(root, workspaceID string, mounts []domain.TemplateMo
 		if normalizedMountType(mount.Type) != domain.TemplateMountDirectory {
 			continue
 		}
-		if err := rootHandle.RemoveAll(mountRootName(workspaceID, mount)); err != nil {
+		if err := rootHandle.RemoveAll(mountRootName(workspaceID, mount)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return ErrMountUnavailable
 		}
 	}

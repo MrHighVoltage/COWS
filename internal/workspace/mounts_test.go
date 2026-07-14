@@ -51,6 +51,28 @@ func TestEnsureMountDirectoriesCreatesOnlyDirectoryMounts(t *testing.T) {
 	}
 }
 
+func TestArchiveMountDirectoriesPreservesManagedNames(t *testing.T) {
+	root := t.TempDir()
+	mount := domain.TemplateMount{Name: "designs", Type: domain.TemplateMountDirectory, ContainerPath: "/designs", ReadOnly: false}
+	if err := ensureMountDirectories(root, "workspace-123", []domain.TemplateMount{mount}); err != nil {
+		t.Fatalf("ensure mount directory: %v", err)
+	}
+	managedName := mountRootName("workspace-123", mount)
+	if err := os.WriteFile(filepath.Join(root, managedName, "saved.txt"), []byte("saved"), 0o600); err != nil {
+		t.Fatalf("write managed data: %v", err)
+	}
+	if err := archiveMountDirectories(root, "workspace-123", []domain.TemplateMount{mount}); err != nil {
+		t.Fatalf("archive mount directory: %v", err)
+	}
+	archived := filepath.Join(root, "archive", managedName, "saved.txt")
+	if value, err := os.ReadFile(archived); err != nil || string(value) != "saved" {
+		t.Fatalf("archived data = %q, error = %v", value, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, managedName)); !os.IsNotExist(err) {
+		t.Fatalf("managed directory still exists: %v", err)
+	}
+}
+
 func TestRemoveMountDirectoriesIgnoresMissingVolumeOnlyRoot(t *testing.T) {
 	if err := removeMountDirectories(filepath.Join(t.TempDir(), "missing"), "workspace-123", []domain.TemplateMount{{Name: "data", Type: domain.TemplateMountVolume, ContainerPath: "/data"}}); err != nil {
 		t.Fatalf("remove volume-only mounts: %v", err)
