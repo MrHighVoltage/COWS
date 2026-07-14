@@ -43,6 +43,16 @@ func TestTemplateConfigurationRequiresContainerIDs(t *testing.T) {
 	}
 }
 
+func TestTemplateConfigurationAcceptsSeparatorMountSuffix(t *testing.T) {
+	err := validateTemplateConfiguration(domain.TemplateConfiguration{Mounts: []domain.TemplateMount{{
+		Name: "designs", Type: domain.TemplateMountDirectory, ContainerPath: "/foss/designs",
+		NamePrefix: "workspace-", NameSuffix: "-data", FileManager: true,
+	}}})
+	if err != nil {
+		t.Fatalf("separator mount suffix error = %v", err)
+	}
+}
+
 func TestResolveConfigurationWithoutContainerUserLeavesRuntimeUserUnset(t *testing.T) {
 	resolved, err := resolveConfiguration(domain.TemplateConfiguration{}, domain.User{Username: "alice"}, "workspace-1", "Desktop", nil, nil)
 	if err != nil {
