@@ -19,7 +19,7 @@ var (
 	configurationNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 	environmentNamePattern   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
 	containerUsernamePattern = regexp.MustCompile(`^[a-z][a-z0-9._-]{2,63}$`)
-	mountNamePartPattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
+	mountNamePartPattern     = regexp.MustCompile(`^[a-z0-9_-]{1,32}$`)
 	placeholderPattern       = regexp.MustCompile(`\{\{([a-z][a-z0-9_.-]*)\}\}`)
 	ErrPortPoolUnavailable   = errors.New("workspace port pool is unavailable")
 )
