@@ -130,6 +130,61 @@ func TestLifecycleTimeoutStopsAndDeletesWorkspace(t *testing.T) {
 	}
 }
 
+func TestSuccessfulRestartRequiresANewConnection(t *testing.T) {
+	base := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
+	service, authService, adminID, store := testService(t)
+	input := validTemplateInput()
+	input.InitialConnectionTimeoutSeconds = 60
+	template, err := service.CreateTemplate(context.Background(), adminID, input)
+	if err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+	if _, err := authService.CreateUser(context.Background(), adminID, auth.CreateUserInput{Username: "restart-user", Password: "another correct password", Role: domain.RoleUser}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	user, _, err := authService.Authenticate(context.Background(), "restart-user", "another correct password")
+	if err != nil {
+		t.Fatalf("authenticate user: %v", err)
+	}
+	if err := authService.ChangePassword(context.Background(), user.ID, "another correct password", "changed restart password"); err != nil {
+		t.Fatalf("change password: %v", err)
+	}
+	value, err := service.CreateWorkspace(context.Background(), user.ID, CreateWorkspaceInput{Name: "Restart workspace", TemplateID: template.ID})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	fake := &lifecycleRuntime{}
+	service = NewWithRuntime(store, fake)
+	service.now = func() time.Time { return base }
+	if err := service.StartWorkspace(context.Background(), user.ID, value.ID); err != nil {
+		t.Fatalf("start workspace: %v", err)
+	}
+	service.now = func() time.Time { return base.Add(10 * time.Second) }
+	if err := service.RecordWorkspaceConnection(context.Background(), user.ID, value.ID); err != nil {
+		t.Fatalf("record connection: %v", err)
+	}
+	if err := service.StopWorkspace(context.Background(), user.ID, value.ID); err != nil {
+		t.Fatalf("stop workspace: %v", err)
+	}
+	service.now = func() time.Time { return base.Add(20 * time.Second) }
+	if err := service.StartWorkspace(context.Background(), user.ID, value.ID); err != nil {
+		t.Fatalf("restart workspace: %v", err)
+	}
+
+	restarted, err := store.FindWorkspaceByID(context.Background(), value.ID)
+	if err != nil {
+		t.Fatalf("load restarted workspace: %v", err)
+	}
+	if !restarted.LastConnectedAt.IsZero() {
+		t.Fatalf("last connection = %v, want cleared after restart", restarted.LastConnectedAt)
+	}
+	status := EvaluateTimeouts(restarted, base.Add(81*time.Second))
+	if status.Action != TimeoutActionStop || !status.Due {
+		t.Fatalf("restart timeout = %+v, want due stop", status)
+	}
+}
+
 func TestManualDeleteRemovesWorkspaceRecordAfterContainer(t *testing.T) {
 	service, authService, adminID, store := testService(t)
 	mountRoot := t.TempDir()
