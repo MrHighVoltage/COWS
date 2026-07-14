@@ -30,8 +30,13 @@ arguments. The per-container parent remains owned by COWS; rootless Podman
 prepares inner bind directories for the explicit subordinate UID/GID mapping.
 Explicit workspace deletion moves the complete per-container directory to the
 sibling archive root. Both roots must be on the same filesystem for the
-atomic move. Named volumes remain owned and removed by the runtime lifecycle.
-Timeout cleanup currently keeps data for later retention handling.
+atomic move. Named volumes cannot be moved into that filesystem archive without
+an unbounded copy. COWS therefore leaves them in Podman and transactionally
+records a retained-volume tombstone containing the former workspace, owner,
+template, mount, and engine-managed volume name before deleting the workspace
+record. Volume names and storage paths are not exposed to users. Timeout cleanup
+keeps both directory and named-volume data attached to the retained workspace
+record.
 
 Templates may set `file_manager: true` on directory or volume mounts. They
 must also include the `files` access method. The browser file manager resolves
@@ -58,7 +63,9 @@ future privileged host agent and for stronger file auditing and archive policy.
 Directory mounts require writable local COWS mount and archive roots and
 inherit host filesystem availability. Explicit workspace deletion moves the
 per-container directory before deleting the workspace record. The stable
-container directory name and all inner mount names are preserved. Timeout
-deletion does not archive data; it only marks later retention eligibility. The
+container directory name and all inner mount names are preserved. Retained
+named-volume tombstones are control-plane metadata, not a cleanup instruction;
+automatic volume deletion remains prohibited until a separately reviewed
+administrator workflow exists. Timeout deletion does not archive data. The
 initial file manager does not provide archive extraction, bulk operations, or
 file previews. Those features require additional limits and security tests.

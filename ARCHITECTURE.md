@@ -115,7 +115,8 @@ enters the server-selected source directory, drops to the mapped container
 UID/GID, and then operates through rooted filesystem calls. Named volumes are
 resolved through the runtime adapter, never by browser-visible storage paths.
 Directory downloads can be streamed as bounded ZIP archives without
-temporary files; uploads, archive extraction, and file previews are deferred.
+temporary files; bounded uploads are implemented, while archive extraction and
+file previews are deferred.
 
 ## Request and state flow
 
@@ -148,7 +149,7 @@ allows it.
 Timeouts are administrator-controlled template policy, stored as durations in
 the workspace record when the workspace is created. This makes the effective
 policy visible and stable even if an administrator later changes a template.
-The initial lifecycle policy has three independent phases:
+The initial lifecycle policy has two independent phases:
 
 1. If a running workspace has never recorded an authenticated user connection
    and its initial connection deadline expires, COWS stops the container and
@@ -156,10 +157,10 @@ The initial lifecycle policy has three independent phases:
 2. Once a container is stopped, its stopped deadline determines when COWS may
    delete the container. The workspace control-plane record remains so the
    result is observable and reconciliation can finish safely.
-3. After container deletion, the data-retention deadline determines when
-   leftover data, such as named volumes, becomes archive-eligible. The current
-   milestone only records that eligibility; it performs no archive or deletion
-   action on user data.
+
+Each successful start begins a new initial-connection period and clears the
+connection timestamp from the previous run. There is no automatic user-data
+retention deadline or cleanup action.
 
 The lifecycle worker evaluates these deadlines on the server. A browser timer
 is never authoritative. User pages show the effective durations, current phase,
@@ -170,11 +171,11 @@ Explicit user or administrator deletion is separate from timeout cleanup. Once
 the runtime container is confirmed removed, explicit deletion moves the
 complete per-container directory from `COWS_MOUNT_ROOT` to the sibling
 `COWS_MOUNT_ARCHIVE_ROOT`, preserving the stable COWS container directory name,
-then removes the COWS workspace record and releases its allocated quota. The
-move is atomic and therefore requires both roots to be on the same filesystem.
-Timeout
-deletion keeps the record and leaves data in place so its lifecycle result,
-archive eligibility, and reconciliation context remain visible.
+records tombstones for retained named volumes, then removes the COWS workspace
+record and releases its allocated quota. The directory move is atomic and
+therefore requires both roots to be on the same filesystem. Timeout deletion
+keeps the record and leaves data in place so its lifecycle result and
+reconciliation context remain visible.
 
 ## Packages and ownership
 
@@ -208,6 +209,9 @@ contain users, roles, templates, template access rules, workspaces, desired and
 observed state, effective timeout policy and lifecycle timestamps, quota
 assignments, runtime identifiers, access sessions, policy configuration, hosts,
 and structured audit events.
+Retained named-volume tombstones preserve former workspace ownership and mount
+metadata after explicit workspace deletion without making the volume available
+through user-facing routes.
 
 Repository methods should represent domain operations rather than expose SQL
 details. PostgreSQL is a future option when multiple active control-plane

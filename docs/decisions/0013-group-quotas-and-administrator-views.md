@@ -13,6 +13,10 @@ limits add together; a zero limit makes that resource unlimited in the
 combined result. A user with no explicit quota and no assigned group quota is
 unassigned and cannot create workspaces. Administrators without either type
 of quota remain unrestricted, preserving the existing administrator policy.
+Administrators can remove an explicit user quota to return that user to group
+inheritance. Removing a group quota makes that group contribute no quota; it is
+distinct from a zero-valued quota, which grants unlimited quota for each zero
+resource.
 
 The administrator Users page shows group badges and links to a dedicated user
 edit page. Group membership editing is not embedded in every user table row.

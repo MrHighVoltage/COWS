@@ -23,6 +23,10 @@ phase in the initial implementation. The effective values are copied into each
 workspace so changing a template does not unexpectedly alter existing user
 environments.
 
+Each transition into a new running period clears the previous connection
+timestamp. A connection from an earlier run must not disable the initial
+connection timeout after a later start or restart.
+
 ## User visibility and notifications
 
 Workspace pages show the effective timeout durations, current lifecycle phase,
