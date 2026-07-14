@@ -10,9 +10,9 @@ import (
 
 type contractRuntime struct{}
 
-func (contractRuntime) Name(context.Context) (string, error) { return RuntimeNameDocker, nil }
+func (contractRuntime) Name(context.Context) (string, error) { return RuntimeNamePodman, nil }
 func (contractRuntime) Capabilities(context.Context) (Capabilities, error) {
-	return Capabilities{RuntimeName: RuntimeNameDocker, SupportsManagedLabels: true}, nil
+	return Capabilities{RuntimeName: RuntimeNamePodman, SupportsManagedLabels: true}, nil
 }
 func (contractRuntime) ListManaged(context.Context) ([]ObservedWorkspace, error) { return nil, nil }
 func (contractRuntime) CreateWorkspace(context.Context, WorkspaceSpec) (WorkspaceHandle, error) {

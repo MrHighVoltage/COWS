@@ -61,6 +61,8 @@ func (f *fakeFileAccess) List(context.Context, string) ([]runtime.FileEntry, err
 	return f.entries, nil
 }
 
+func (f *fakeFileAccess) Usage(context.Context) (int64, error) { return int64(len(f.content)), nil }
+
 func (f *fakeFileAccess) Stat(context.Context, string) (fs.FileInfo, error) {
 	return fakeRuntimeInfo{name: "hello.txt", size: int64(len(f.content))}, nil
 }

@@ -1,4 +1,4 @@
-package docker
+package podman
 
 import (
 	"bytes"
@@ -103,6 +103,24 @@ func (a *fileAccess) List(ctx context.Context, relativePath string) ([]runtime.F
 		return nil, fmt.Errorf("%w: invalid file-helper listing", runtime.ErrInvalidObservation)
 	}
 	return entries, nil
+}
+
+func (a *fileAccess) Usage(ctx context.Context) (int64, error) {
+	command, err := a.adapter.fileCommand(ctx, a, "usage", ".")
+	if err != nil {
+		return 0, err
+	}
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	output, err := command.Output()
+	if err != nil {
+		return 0, helperErrorText(stderr.String(), err)
+	}
+	value, err := strconv.ParseInt(strings.TrimSpace(string(output)), 10, 64)
+	if err != nil || value < 0 {
+		return 0, fmt.Errorf("%w: invalid file-helper usage", runtime.ErrInvalidObservation)
+	}
+	return value, nil
 }
 
 func (a *fileAccess) Stat(ctx context.Context, relativePath string) (fs.FileInfo, error) {

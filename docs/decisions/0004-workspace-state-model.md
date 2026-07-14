@@ -14,7 +14,7 @@ state is the most recent runtime report and may be `unknown` until
 reconciliation. Runtime IDs and observed errors are server-side fields and are
 never accepted from browser requests. Lifecycle operations may persist the
 immediate runtime result, while periodic reconciliation remains authoritative
-for changes made directly through Docker or Podman.
+for changes made directly through the rootless Podman service.
 
 The reconciler normalizes runtime `exited` to COWS `stopped`. If a previously
 managed runtime object is absent, it records `missing` and preserves the

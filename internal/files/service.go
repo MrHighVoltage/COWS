@@ -572,7 +572,7 @@ func (s *Service) openBackend(ctx context.Context, mount workspace.FileMount) (*
 		if err == nil {
 			return &fileBackend{access: access}, nil
 		}
-		// Rootful Docker directory mounts can still use the server-owned
+		// Directory mounts use the server-owned
 		// rooted path. Named volumes have no safe host fallback.
 		if mount.Root == "" || !errors.Is(err, ErrFileManagerAccess) {
 			return nil, err

@@ -38,12 +38,12 @@ COWS ever runs multiple active instances.
 Validated administrator templates, role access rules, typed command/environment/
 mount/service configuration, workspace configuration snapshots, persisted port
 allocations, resource policy fields, the COWS-facing runtime interface, an
-inspection coordinator, and a Docker Engine adapter are now present. Remaining work is stronger runtime connectivity
+inspection coordinator, and a rootless Podman adapter are now present. Remaining work is stronger runtime connectivity
 reporting, orphan/partial-operation reconciliation, fake-runtime contract
-coverage, and runtime-enforced storage policy. The Docker-compatible adapter
-now detects rootless Podman capabilities and refuses unsafe creates when
-required CPU, memory, or process limits are unavailable. A practical native
-second adapter for Podman remains deliberately deferred. A dedicated secret
+coverage, and runtime-enforced storage policy. The adapter detects rootless
+Podman capabilities and refuses unsafe creates when required CPU, memory, or
+process limits are unavailable. Docker support is intentionally out of scope.
+A dedicated secret
 store, graphical gateway routing, and separate reusable administrator port-pool
 management remain future work.
 
@@ -53,8 +53,8 @@ Workspace persistence, owner/template foreign keys, desired/observed state,
 user creation/listing, quota assignment, and deterministic quota/host-capacity
 admission checks are now present, including persistent administrator-managed
 host capacity and reserved-resource settings. Administrator-defined initial
-connection, stopped-container retention, and post-deletion data-retention
-timeouts, user-visible policy details, Docker lifecycle operations, and a
+connection and stopped-container retention timeouts, user-visible policy
+details, rootless Podman lifecycle operations, and a
 reconciler-driven timeout worker are now present. Warning-event hooks exist in
 the lifecycle model, but email and automatic retention archival remain
 disabled. Remaining
@@ -68,10 +68,9 @@ status, and automatically refreshed state.
 
 Completed initial implementation: local xterm.js 5.3.0 assets, an authenticated
 WebSocket, approved `/bin/sh -l` execution, resize handling, idle and maximum
-session expiry, cleanup, audit events, and Docker exec stream adapter tests.
+session expiry, cleanup, audit events, and Podman exec stream adapter tests.
 Exit criteria for this checkpoint are met. Browser accessibility review and
-runtime integration tests against supported Docker and Podman configurations
-remain hardening work.
+rootless Podman integration tests remain hardening work.
 
 ## Milestone 5: Graphical desktop access
 
@@ -81,8 +80,8 @@ loopback port verification, session cleanup, and tests proving that non-loopback
 VNC mappings are rejected. Templates can define static or generated secrets,
 bind one to the desktop service, and use it through `{{cows.secret.name}}` in
 environment values; COWS supplies the selected value automatically to noVNC
-after authorization. Browser accessibility review and runtime integration
-tests against VNC-enabled Docker and Podman images remain hardening work.
+after authorization. Browser accessibility review and rootless Podman
+integration tests against VNC-enabled images remain hardening work.
 
 ## Milestone 6: Workspace web applications
 
@@ -109,8 +108,8 @@ bounded uploads, downloads, folder creation, rename, deletion, and streamed
 bounded ZIP downloads. Rootless Podman operations use the runtime-backed file
 access helper in ADR 0011, preserving the mapped container identity. Explicit
 workspace deletion archives managed directory mounts while timeout cleanup
-leaves data in place. Remaining exit work is automatic retention archival only
-if justified, stronger temporary storage and file-count policy, symlink-race
+leaves data in place. Remaining exit work is stronger temporary storage and
+file-count policy, symlink-race
 hardening, audit events for every file mutation, and broader browser
 accessibility review.
 

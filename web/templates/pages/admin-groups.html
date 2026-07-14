@@ -1,0 +1,28 @@
+{{ define "admin-groups-page" }}
+{{ template "base-start" . }}
+<section class="intro" aria-labelledby="groups-title">
+  <p class="eyebrow">Administration</p>
+  <div class="title-row">
+    <div><h1 id="groups-title">Groups</h1><p class="lede">Organize users for template access policies.</p></div>
+  </div>
+</section>
+
+{{ if .Error }}<p class="alert alert-error" role="alert">{{ .Error }}</p>{{ end }}
+<section class="panel" aria-labelledby="new-group-title">
+  <h2 id="new-group-title">Create group</h2>
+  <form class="form-grid-inline" method="post" action="/admin/groups">
+    <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
+    <label>Name <input name="name" type="text" maxlength="100" required></label>
+    <label>Description <input name="description" type="text" maxlength="2000"></label>
+    <button class="primary-button" type="submit">Create group</button>
+  </form>
+</section>
+
+<section class="panel table-panel" aria-labelledby="group-list-title">
+  <h2 id="group-list-title">Existing groups</h2>
+  <div class="table-scroll"><table><thead><tr><th>Name</th><th>Description</th></tr></thead><tbody>
+  {{ range .Groups }}<tr><td><strong>{{ .Name }}</strong></td><td>{{ if .Description }}{{ .Description }}{{ else }}<span class="muted">No description</span>{{ end }}</td></tr>{{ else }}<tr><td colspan="2" class="muted">No groups have been created.</td></tr>{{ end }}
+  </tbody></table></div>
+</section>
+{{ template "base-end" . }}
+{{ end }}

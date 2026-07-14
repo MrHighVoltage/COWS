@@ -19,8 +19,7 @@ flowchart LR
     Access --> Services
     Services --> Repo[Focused SQLite repositories]
     Services --> Runtime[Runtime interface]
-    Runtime --> Docker[Docker adapter]
-    Runtime --> Podman[Podman adapter]
+    Runtime --> Podman[Rootless Podman adapter]
     Runtime --> Container[Private managed containers]
     Reconcile[Reconciliation worker] --> Runtime
     Reconcile --> Repo
@@ -35,7 +34,7 @@ calling a domain service. Domain services repeat ownership and policy checks
 so a future handler cannot accidentally create a bypass.
 
 The runtime adapter is the only application boundary allowed to communicate
-with Docker or Podman. The runtime socket should be available only to the COWS
+with rootless Podman. The user service socket should be available only to the COWS
 process, or later to a narrowly privileged host agent. Containers use private
 networking where practical; no workspace port is a public routing mechanism.
 
@@ -45,12 +44,12 @@ Templates contain a validated, administrator-controlled configuration document
 for command, environment, managed mounts, and internal services. The backend
 snapshots this document into each workspace and resolves a small allowlist of
 COWS placeholders only after authorizing the request and allocating resources.
-Users submit neither Docker arguments nor rendered values. Service host ports
+Users submit neither runtime arguments nor rendered values. Service host ports
 are reserved in SQLite with uniqueness constraints from administrator-defined ranges and are bound to
-loopback by the Docker-compatible adapter. This prepares future terminal,
+loopback by the Podman adapter. This prepares future terminal,
 desktop, and application gateways without exposing container ports directly.
 
-The configuration is intentionally not a generic Docker `HostConfig` map. The
+The configuration is intentionally not a generic runtime argument map. The
 resolver rejects unknown placeholders, duplicate names, invalid paths, unsafe
 environment names, and dangerous runtime configuration. Managed mounts become
 named volumes or bind mounts derived from the COWS workspace ID. Directory
@@ -64,13 +63,13 @@ Templates may opt into a typed `container_user` block. COWS uses the existing
 application username as the default container username and resolves the
 administrator-controlled UID, GID, display name, home, and shell into a
 passwd entry. Users cannot change these values when creating a workspace.
-Docker receives a controlled UID:GID selection. Rootless Podman uses the
+Rootless Podman receives a controlled UID:GID selection. It uses the
 Libpod create API for the additional passwd entry and sends explicit UID/GID
 mappings derived from Podman's subordinate-ID map. The mapping deliberately
 leaves the COWS host account outside the container and maps container
 identities into subordinate IDs. Writable bind mounts ask Podman to prepare
-ownership for the selected container identity. The Docker-compatible API does
-not claim to support that Podman-specific operation.
+ownership for the selected container identity. The Podman adapter owns that
+runtime-specific operation.
 
 Terminal, desktop, and proxy sessions are authenticated COWS sessions whose
 targets are selected from server-side workspace records and template policy.
@@ -82,7 +81,7 @@ state, and the template's terminal access method, it asks the runtime adapter
 for a fixed `/bin/sh -l` session. The browser receives only terminal input and
 output over a COWS WebSocket; it never supplies a runtime ID or command.
 Terminal sessions have a 15-minute idle timeout, a one-hour maximum lifetime,
-resize forwarding, and start/end audit events. The Docker-compatible adapter
+resize forwarding, and start/end audit events. The Podman adapter
 uses the runtime exec API's upgraded stream and keeps the runtime-specific
 transport details inside the adapter. The browser uses the locally vendored
 xterm.js fit addon to adapt rows and columns to the available panel or full
@@ -90,7 +89,7 @@ screen size, then forwards each resize through the authenticated WebSocket.
 
 The desktop gateway uses the same access boundary but only for a service named
 `desktop` in the workspace's snapshotted template configuration. The service's
-persisted host-port allocation is loopback-only. Before dialing, the Docker
+persisted host-port allocation is loopback-only. Before dialing, the Podman
 adapter verifies that the managed container is running and that its inspected
 TCP mapping matches the expected container and host ports. COWS then bridges
 the raw VNC stream to a local noVNC core client over an authenticated WebSocket.
@@ -124,7 +123,7 @@ temporary files; uploads, archive extraction, and file previews are deferred.
 sequenceDiagram
     participant U as Browser
     participant C as COWS
-    participant D as Docker/Podman
+    participant D as Rootless Podman
     participant DB as SQLite
     U->>C: Authenticated lifecycle request
     C->>DB: Load workspace, owner, policy, desired state
@@ -189,15 +188,15 @@ internal/web/          handlers, templates, and static asset serving
 internal/domain/       stable COWS concepts and error categories
 internal/auth/         password authentication and session use cases
 internal/repository/   focused persistence interfaces and SQLite implementation
-internal/runtime/      Docker and Podman domain adapter boundary
-internal/runtime/docker/ Docker Engine API adapter
+    internal/runtime/      Rootless Podman domain adapter boundary
+internal/runtime/podman/ Podman compatibility API adapter
 migrations/            ordered SQL migrations
 web/                   templates and local browser assets
 docs/decisions/        short architecture decisions
 ```
 
 Packages should be created when they contain meaningful code. Avoid a broad
-generic database wrapper and avoid leaking Docker-specific types into domain or
+generic database wrapper and avoid leaking Podman-specific types into domain or
 HTTP packages.
 
 ## Database direction
@@ -219,21 +218,22 @@ surface contains an image reference and optional immutable digest, CPU/memory/
 storage defaults and maxima, supported access-method names, allowed roles,
 enabled state, and initial-connection, stopped-retention, and data-retention
 durations. Typed JSON configuration may also define command, environment,
-managed mounts, loopback service ports, secrets, and an optional container
-identity. JSON columns store the small access-method and role lists for the
+managed mounts, loopback service ports, secrets, group access, and an optional
+container identity. JSON columns store the small access-method, role, and group
+lists for the
 initial SQLite deployment; browser input is converted to typed values and
 validated before persistence. Runtime arguments, mounts, capabilities, devices,
 host networking, and arbitrary environment values are intentionally absent.
 
 Workspaces reference an owner and template through foreign keys. Creation
 stores the template's default allocations and desired state `stopped`; it does
-not contact Docker. Observed state, runtime ID, and reconciliation errors are
+not contact Podman. Observed state, runtime ID, and reconciliation errors are
 stored separately and may only be updated by authorized runtime lifecycle or
 reconciliation code. Ordinary users can list and access their own records;
 administrators can inspect all records through service-layer authorization.
 
 The reconciliation worker periodically performs a validated runtime inspection
-and persists observed state. Docker/Podman `exited` is normalized to COWS
+and persists observed state. Podman `exited` is normalized to COWS
 `stopped`; a managed object that is absent is recorded as `missing` without
 being treated as deleted. Timeout actions run only after a successful
 reconciliation pass. Managed runtime objects without a matching workspace are
@@ -246,14 +246,15 @@ authoritative state in the browser. Resource summaries show allocations across
 all workspace records, including stopped workspaces, alongside the applicable
 quota or explicit unassigned/unlimited status.
 
-Quota checks use recorded allocations for all existing workspaces, including
-stopped records. A request must fit the user's CPU, memory, storage, and
-workspace-count quota and the remaining host capacity after reserved capacity.
+Quota checks use measured storage for all existing workspaces, including
+stopped records. CPU and memory are counted only for running workspaces. A
+request must fit total and running workspace-count quotas and the remaining host
+capacity after reserved capacity.
 Missing quotas block ordinary users but do not restrict administrators. A zero
 value in an assigned quota means unlimited for that dimension; host capacity
 checks still apply to administrators.
-The scheduler does not overcommit by default. Docker reports CPU and memory;
-allocatable storage is an explicit host setting because Docker's host info
+The scheduler does not overcommit by default. Rootless Podman reports CPU and memory;
+allocatable storage is an explicit host setting because the runtime host-info
 response does not provide a portable allocatable-storage contract. The
 `COWS_HOST_STORAGE_BYTES` configuration value seeds that setting on first
 startup, but the persisted row is the source of truth afterward. Administrators
@@ -279,7 +280,7 @@ not become an unreviewed runtime dependency.
 ## Future host-agent boundary
 
 The runtime interface is intentionally internal and domain-oriented. It keeps
-Docker-specific objects inside the adapter. The Docker adapter supports
+Podman-specific objects inside the adapter. The Podman adapter supports
 server-selected create, start, stop, remove, version, host-capacity,
 managed-list, and inspect requests. The timeout worker performs stop/remove
 only after the workspace service verifies state and deadlines. A future host

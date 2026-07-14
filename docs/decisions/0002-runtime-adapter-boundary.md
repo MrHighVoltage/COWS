@@ -4,14 +4,15 @@ Status: accepted as an interface-only preparation
 
 ## Decision
 
-COWS will communicate with Docker and Podman through `internal/runtime.Runtime`.
+COWS communicates with the local rootless Podman service through
+`internal/runtime.Runtime`.
 The interface uses COWS concepts such as workspace IDs, validated image
-references, resource limits, capabilities, and observed lifecycle state. Docker
-or Podman SDK types must not cross this boundary.
+references, resource limits, capabilities, and observed lifecycle state. Podman
+API or client types must not cross this boundary.
 
 The initial interface covers capability reporting, managed-workspace listing,
 create/start/stop/remove lifecycle operations, and inspection. The selected
-Docker adapter currently implements only capability reporting, host capacity,
+Podman adapter implements capability reporting, host capacity,
 managed-workspace listing, and inspection; mutation returns `ErrNotSupported`.
 Terminal attach, logs, and resource sampling remain separate design work; they
 are not forced into this base interface. A separate optional
@@ -37,7 +38,7 @@ targets; those values remain service-side data.
 
 ## Deliberately deferred
 
-- Docker or Podman SDK dependencies.
+- Podman SDK dependencies.
 - Container creation, start/stop, or deletion.
 - Runtime-specific resource-limit translation.
 - Terminal, generic graphical desktop, proxy, and log-stream interfaces.
@@ -47,4 +48,6 @@ The interface-only inspection coordinator now exercises the read-only portion
 of this contract: it requests capabilities and managed workspaces, validates
 identity uniqueness, and returns deterministic ordering without mutating the
 runtime or database. The first adapter should be selected only after fake-runtime
-service tests define the required operation semantics and error handling.
+service tests define the required operation semantics and error handling. The
+adapter uses Podman's local compatibility API and Docker support is out of
+scope.

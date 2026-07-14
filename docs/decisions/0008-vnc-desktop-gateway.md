@@ -14,7 +14,7 @@ workspace service resolves the persisted port allocation, authorizes the user,
 requires a running workspace and desktop access permission, and asks the runtime
 adapter to verify the exact loopback mapping before opening the connection.
 
-The initial Docker-compatible adapter binds approved service ports to loopback
+The initial Podman adapter binds approved service ports to loopback
 only. COWS bridges the resulting raw VNC stream to noVNC. It does not expose a
 public VNC port and does not implement a generic application proxy in this
 milestone.

@@ -18,7 +18,7 @@ type Config struct {
 	DatabasePath           string
 	MountRoot              string
 	MountArchiveRoot       string
-	DockerSocket           string
+	PodmanSocket           string
 	HostStorageBytes       int64
 	LogLevel               slog.Level
 	ShutdownTimeout        time.Duration
@@ -37,7 +37,8 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	databasePath := envOr(lookup, "COWS_DATABASE_PATH", "./data/cows.db")
 	mountRoot := envOr(lookup, "COWS_MOUNT_ROOT", "./data/cows-mounts")
 	mountArchiveRoot := envOr(lookup, "COWS_MOUNT_ARCHIVE_ROOT", "./data/cows-mounts-archive")
-	dockerSocket := envOr(lookup, "COWS_DOCKER_SOCKET", "/var/run/docker.sock")
+	defaultPodmanSocket := filepath.Join("/run/user", strconv.Itoa(os.Getuid()), "podman", "podman.sock")
+	podmanSocket := envOr(lookup, "COWS_PODMAN_SOCKET", defaultPodmanSocket)
 	hostStorageValue := envOr(lookup, "COWS_HOST_STORAGE_BYTES", "0")
 	logLevel := envOr(lookup, "COWS_LOG_LEVEL", "info")
 	shutdownTimeout := envOr(lookup, "COWS_SHUTDOWN_TIMEOUT", "10s")
@@ -56,7 +57,7 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	flags.StringVar(&databasePath, "database-path", databasePath, "SQLite database path")
 	flags.StringVar(&mountRoot, "mount-root", mountRoot, "root directory for COWS-managed directory mounts")
 	flags.StringVar(&mountArchiveRoot, "mount-archive-root", mountArchiveRoot, "root directory for archived COWS-managed workspace data")
-	flags.StringVar(&dockerSocket, "docker-socket", dockerSocket, "Docker Engine Unix socket path")
+	flags.StringVar(&podmanSocket, "podman-socket", podmanSocket, "rootless Podman Unix socket path")
 	flags.StringVar(&hostStorageValue, "host-storage-bytes", hostStorageValue, "configured allocatable host storage in bytes; zero means unknown")
 	flags.StringVar(&logLevel, "log-level", logLevel, "log level: debug, info, warn, or error")
 	flags.StringVar(&shutdownTimeout, "shutdown-timeout", shutdownTimeout, "graceful shutdown timeout")
@@ -94,8 +95,8 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	if pathContains(mountRootAbsolute, mountArchiveRootAbsolute) || pathContains(mountArchiveRootAbsolute, mountRootAbsolute) {
 		return Config{}, errors.New("mount root and mount archive root must not contain one another")
 	}
-	if strings.TrimSpace(dockerSocket) == "" {
-		return Config{}, errors.New("Docker socket path must not be empty")
+	if strings.TrimSpace(podmanSocket) == "" {
+		return Config{}, errors.New("Podman socket path must not be empty")
 	}
 	hostStorageBytes, err := strconv.ParseInt(hostStorageValue, 10, 64)
 	if err != nil || hostStorageBytes < 0 {
@@ -123,7 +124,7 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 		DatabasePath:           databasePath,
 		MountRoot:              mountRoot,
 		MountArchiveRoot:       mountArchiveRoot,
-		DockerSocket:           dockerSocket,
+		PodmanSocket:           podmanSocket,
 		HostStorageBytes:       hostStorageBytes,
 		LogLevel:               level,
 		ShutdownTimeout:        timeout,

@@ -9,10 +9,9 @@ import (
 type TimeoutAction string
 
 const (
-	TimeoutActionNone            TimeoutAction = "none"
-	TimeoutActionStop            TimeoutAction = "stop"
-	TimeoutActionDelete          TimeoutAction = "delete"
-	TimeoutActionArchiveEligible TimeoutAction = "archive_eligible"
+	TimeoutActionNone   TimeoutAction = "none"
+	TimeoutActionStop   TimeoutAction = "stop"
+	TimeoutActionDelete TimeoutAction = "delete"
 )
 
 type TimeoutPhase string
@@ -21,8 +20,6 @@ const (
 	TimeoutPhaseNone               TimeoutPhase = "none"
 	TimeoutPhaseAwaitingConnection TimeoutPhase = "awaiting_connection"
 	TimeoutPhaseStoppedRetention   TimeoutPhase = "stopped_retention"
-	TimeoutPhaseDataRetention      TimeoutPhase = "data_retention"
-	TimeoutPhaseArchiveEligible    TimeoutPhase = "archive_eligible"
 )
 
 type TimeoutStatus struct {
@@ -34,22 +31,6 @@ type TimeoutStatus struct {
 
 func EvaluateTimeouts(value domain.Workspace, now time.Time) TimeoutStatus {
 	now = now.UTC()
-	if !value.ContainerDeletedAt.IsZero() {
-		if value.DataRetentionSeconds <= 0 {
-			return TimeoutStatus{Phase: TimeoutPhaseDataRetention, Action: TimeoutActionNone}
-		}
-		deadline := value.DataArchiveEligibleAt
-		if deadline.IsZero() {
-			deadline = value.ContainerDeletedAt.Add(time.Duration(value.DataRetentionSeconds) * time.Second)
-		}
-		status := TimeoutStatus{Phase: TimeoutPhaseDataRetention, Action: TimeoutActionNone, Deadline: deadline}
-		if !now.Before(deadline) {
-			status.Phase = TimeoutPhaseArchiveEligible
-			status.Action = TimeoutActionArchiveEligible
-			status.Due = true
-		}
-		return status
-	}
 	if !value.StoppedAt.IsZero() && value.RuntimeID != "" && value.StoppedRetentionSeconds > 0 {
 		deadline := value.StoppedAt.Add(time.Duration(value.StoppedRetentionSeconds) * time.Second)
 		status := TimeoutStatus{Phase: TimeoutPhaseStoppedRetention, Action: TimeoutActionNone, Deadline: deadline}

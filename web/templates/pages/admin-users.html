@@ -15,7 +15,7 @@
   <h2 id="user-list-title">Local accounts</h2>
   <div class="table-scroll">
     <table>
-      <thead><tr><th>Username</th><th>Email</th><th>Display name</th><th>Role</th><th>Status</th><th>Action</th></tr></thead>
+      <thead><tr><th>Username</th><th>Email</th><th>Display name</th><th>Role</th><th>Groups</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody>
       {{ range .Users }}
         <tr>
@@ -23,6 +23,15 @@
           <td>{{ if .Email }}{{ .Email }}{{ else }}<span class="muted">Not set</span>{{ end }}</td>
           <td>{{ .DisplayName }}</td>
           <td><span class="badge">{{ .Role }}</span></td>
+          <td>
+            <form method="post" action="/admin/users/{{ .ID }}/groups">
+              <input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}">
+              <div class="check-list compact-check-list">
+              {{ range $.Groups }}<label class="check-row"><input type="checkbox" name="group_ids" value="{{ .ID }}"{{ if hasID (index $.UserGroupIDs $.ID) .ID }} checked{{ end }}> {{ .Name }}</label>{{ else }}<span class="muted">No groups</span>{{ end }}
+              </div>
+              {{ if $.Groups }}<button class="table-action" type="submit">Save groups</button>{{ end }}
+            </form>
+          </td>
           <td>{{ if .Disabled }}<span class="status-value status-disabled">Disabled</span>{{ else }}<span class="status-value status-ok">Active</span>{{ end }}</td>
           <td>
             {{ if ne .ID $.User.ID }}
@@ -35,7 +44,7 @@
           </td>
         </tr>
       {{ else }}
-        <tr><td colspan="6" class="muted">No users found.</td></tr>
+        <tr><td colspan="7" class="muted">No users found.</td></tr>
       {{ end }}
       </tbody>
     </table>

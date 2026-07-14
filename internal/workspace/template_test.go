@@ -53,7 +53,6 @@ func validTemplateInput() TemplateInput {
 		DefaultStorageBytes:             20 << 30,
 		InitialConnectionTimeoutSeconds: 2 * 60 * 60,
 		StoppedRetentionSeconds:         24 * 60 * 60,
-		DataRetentionSeconds:            30 * 24 * 60 * 60,
 		AccessMethods:                   []domain.AccessMethod{domain.AccessTerminal, domain.AccessDesktop},
 		AllowedRoles:                    []domain.Role{domain.RoleUser},
 		Enabled:                         true,

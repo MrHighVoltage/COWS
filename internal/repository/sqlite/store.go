@@ -121,6 +121,92 @@ func (s *Store) SetUserDisabled(ctx context.Context, id string, disabled bool) e
 	return nil
 }
 
+func (s *Store) ListUserGroupIDs(ctx context.Context, userID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT group_id FROM user_groups WHERE user_id = ? ORDER BY group_id", userID)
+	if err != nil {
+		return nil, fmt.Errorf("list user groups: %w", err)
+	}
+	defer rows.Close()
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan user group: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate user groups: %w", err)
+	}
+	return ids, nil
+}
+
+func (s *Store) SetUserGroups(ctx context.Context, userID string, groupIDs []string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin user groups update: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, "DELETE FROM user_groups WHERE user_id = ?", userID); err != nil {
+		return fmt.Errorf("clear user groups: %w", err)
+	}
+	for _, groupID := range groupIDs {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO user_groups (user_id, group_id, created_at) VALUES (?, ?, ?)", userID, groupID, time.Now().UTC().Unix()); err != nil {
+			return fmt.Errorf("assign user group: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit user groups update: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ListGroups(ctx context.Context) ([]domain.Group, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT id, name, description, created_at, updated_at FROM groups ORDER BY name")
+	if err != nil {
+		return nil, fmt.Errorf("list groups: %w", err)
+	}
+	defer rows.Close()
+	groups := make([]domain.Group, 0)
+	for rows.Next() {
+		var group domain.Group
+		var created, updated int64
+		if err := rows.Scan(&group.ID, &group.Name, &group.Description, &created, &updated); err != nil {
+			return nil, fmt.Errorf("scan group: %w", err)
+		}
+		group.CreatedAt = time.Unix(created, 0).UTC()
+		group.UpdatedAt = time.Unix(updated, 0).UTC()
+		groups = append(groups, group)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate groups: %w", err)
+	}
+	return groups, nil
+}
+
+func (s *Store) FindGroupByID(ctx context.Context, id string) (domain.Group, error) {
+	var group domain.Group
+	var created, updated int64
+	err := s.db.QueryRowContext(ctx, "SELECT id, name, description, created_at, updated_at FROM groups WHERE id = ?", id).Scan(&group.ID, &group.Name, &group.Description, &created, &updated)
+	if err == sql.ErrNoRows {
+		return domain.Group{}, repository.ErrNotFound
+	}
+	if err != nil {
+		return domain.Group{}, fmt.Errorf("find group: %w", err)
+	}
+	group.CreatedAt = time.Unix(created, 0).UTC()
+	group.UpdatedAt = time.Unix(updated, 0).UTC()
+	return group, nil
+}
+
+func (s *Store) CreateGroup(ctx context.Context, group domain.Group) error {
+	_, err := s.db.ExecContext(ctx, "INSERT INTO groups (id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)", group.ID, group.Name, group.Description, group.CreatedAt.Unix(), group.UpdatedAt.Unix())
+	if err != nil {
+		return fmt.Errorf("create group: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) CreateSession(ctx context.Context, session domain.Session) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO sessions
 		(token_hash, user_id, created_at, expires_at, last_seen_at) VALUES (?, ?, ?, ?, ?)`,
@@ -207,18 +293,18 @@ func (s *Store) FindTemplateByName(ctx context.Context, name string) (domain.Wor
 }
 
 func (s *Store) CreateTemplate(ctx context.Context, template domain.WorkspaceTemplate) error {
-	accessMethods, roles, configuration, err := marshalTemplateLists(template)
+	accessMethods, roles, groupIDs, configuration, err := marshalTemplateLists(template)
 	if err != nil {
 		return err
 	}
 	_, err = s.db.ExecContext(ctx, `INSERT INTO workspace_templates
 		(id, name, description, image_reference, image_digest, default_cpu_millis, max_cpu_millis,
 		 default_memory_bytes, max_memory_bytes, default_storage_bytes, initial_connection_timeout_seconds,
-		 stopped_retention_seconds, data_retention_seconds, revision, configuration_json, access_methods_json, allowed_roles_json, enabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, template.ID, template.Name, template.Description,
+		 stopped_retention_seconds, data_retention_seconds, revision, configuration_json, access_methods_json, allowed_roles_json, group_access_mode, allowed_group_ids_json, enabled, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, template.ID, template.Name, template.Description,
 		template.ImageReference, template.ImageDigest, template.DefaultCPUMillis, template.MaxCPUMillis,
 		template.DefaultMemoryBytes, template.MaxMemoryBytes, template.DefaultStorageBytes, template.InitialConnectionTimeoutSeconds,
-		template.StoppedRetentionSeconds, template.DataRetentionSeconds, template.Revision, configuration, accessMethods, roles, boolInt(template.Enabled), template.CreatedAt.Unix(), template.UpdatedAt.Unix())
+		template.StoppedRetentionSeconds, template.DataRetentionSeconds, template.Revision, configuration, accessMethods, roles, template.GroupAccessMode, groupIDs, boolInt(template.Enabled), template.CreatedAt.Unix(), template.UpdatedAt.Unix())
 	if err != nil {
 		return fmt.Errorf("create template: %w", err)
 	}
@@ -226,17 +312,17 @@ func (s *Store) CreateTemplate(ctx context.Context, template domain.WorkspaceTem
 }
 
 func (s *Store) UpdateTemplate(ctx context.Context, template domain.WorkspaceTemplate) error {
-	accessMethods, roles, configuration, err := marshalTemplateLists(template)
+	accessMethods, roles, groupIDs, configuration, err := marshalTemplateLists(template)
 	if err != nil {
 		return err
 	}
 	result, err := s.db.ExecContext(ctx, `UPDATE workspace_templates SET
 		name = ?, description = ?, image_reference = ?, image_digest = ?, default_cpu_millis = ?, max_cpu_millis = ?,
 		default_memory_bytes = ?, max_memory_bytes = ?, default_storage_bytes = ?, initial_connection_timeout_seconds = ?,
-		stopped_retention_seconds = ?, data_retention_seconds = ?, revision = ?, configuration_json = ?, access_methods_json = ?, allowed_roles_json = ?, enabled = ?, updated_at = ? WHERE id = ?`, template.Name, template.Description,
+		stopped_retention_seconds = ?, data_retention_seconds = ?, revision = ?, configuration_json = ?, access_methods_json = ?, allowed_roles_json = ?, group_access_mode = ?, allowed_group_ids_json = ?, enabled = ?, updated_at = ? WHERE id = ?`, template.Name, template.Description,
 		template.ImageReference, template.ImageDigest, template.DefaultCPUMillis, template.MaxCPUMillis,
 		template.DefaultMemoryBytes, template.MaxMemoryBytes, template.DefaultStorageBytes, template.InitialConnectionTimeoutSeconds,
-		template.StoppedRetentionSeconds, template.DataRetentionSeconds, template.Revision, configuration, accessMethods, roles, boolInt(template.Enabled), template.UpdatedAt.Unix(), template.ID)
+		template.StoppedRetentionSeconds, template.DataRetentionSeconds, template.Revision, configuration, accessMethods, roles, template.GroupAccessMode, groupIDs, boolInt(template.Enabled), template.UpdatedAt.Unix(), template.ID)
 	if err != nil {
 		return fmt.Errorf("update template: %w", err)
 	}
@@ -309,22 +395,26 @@ func (s *Store) ReleaseWorkspacePorts(ctx context.Context, workspaceID string) e
 
 const templateSelect = `SELECT id, name, description, image_reference, image_digest, default_cpu_millis,
 	max_cpu_millis, default_memory_bytes, max_memory_bytes, default_storage_bytes, initial_connection_timeout_seconds,
-	stopped_retention_seconds, data_retention_seconds, revision, configuration_json, access_methods_json, allowed_roles_json, enabled, created_at, updated_at FROM workspace_templates`
+	stopped_retention_seconds, data_retention_seconds, revision, configuration_json, access_methods_json, allowed_roles_json, group_access_mode, allowed_group_ids_json, enabled, created_at, updated_at FROM workspace_templates`
 
-func marshalTemplateLists(template domain.WorkspaceTemplate) (string, string, string, error) {
+func marshalTemplateLists(template domain.WorkspaceTemplate) (string, string, string, string, error) {
 	accessMethods, err := json.Marshal(template.AccessMethods)
 	if err != nil {
-		return "", "", "", fmt.Errorf("encode template access methods: %w", err)
+		return "", "", "", "", fmt.Errorf("encode template access methods: %w", err)
 	}
 	roles, err := json.Marshal(template.AllowedRoles)
 	if err != nil {
-		return "", "", "", fmt.Errorf("encode template roles: %w", err)
+		return "", "", "", "", fmt.Errorf("encode template roles: %w", err)
+	}
+	groupIDs, err := json.Marshal(template.AllowedGroupIDs)
+	if err != nil {
+		return "", "", "", "", fmt.Errorf("encode template groups: %w", err)
 	}
 	configuration, err := json.Marshal(template.Configuration)
 	if err != nil {
-		return "", "", "", fmt.Errorf("encode template configuration: %w", err)
+		return "", "", "", "", fmt.Errorf("encode template configuration: %w", err)
 	}
-	return string(accessMethods), string(roles), string(configuration), nil
+	return string(accessMethods), string(roles), string(groupIDs), string(configuration), nil
 }
 
 func scanTemplate(row scanner) (domain.WorkspaceTemplate, error) {
@@ -332,7 +422,9 @@ func scanTemplate(row scanner) (domain.WorkspaceTemplate, error) {
 		template      domain.WorkspaceTemplate
 		accessMethods string
 		roles         string
+		groupIDs      string
 		configuration string
+		groupMode     string
 		enabled       int
 		createdUnix   int64
 		updatedUnix   int64
@@ -340,7 +432,7 @@ func scanTemplate(row scanner) (domain.WorkspaceTemplate, error) {
 	if err := row.Scan(&template.ID, &template.Name, &template.Description, &template.ImageReference, &template.ImageDigest,
 		&template.DefaultCPUMillis, &template.MaxCPUMillis, &template.DefaultMemoryBytes, &template.MaxMemoryBytes,
 		&template.DefaultStorageBytes, &template.InitialConnectionTimeoutSeconds, &template.StoppedRetentionSeconds,
-		&template.DataRetentionSeconds, &template.Revision, &configuration, &accessMethods, &roles, &enabled, &createdUnix, &updatedUnix); err != nil {
+		&template.DataRetentionSeconds, &template.Revision, &configuration, &accessMethods, &roles, &groupMode, &groupIDs, &enabled, &createdUnix, &updatedUnix); err != nil {
 		if err == sql.ErrNoRows {
 			return domain.WorkspaceTemplate{}, repository.ErrNotFound
 		}
@@ -351,6 +443,15 @@ func scanTemplate(row scanner) (domain.WorkspaceTemplate, error) {
 	}
 	if err := json.Unmarshal([]byte(roles), &template.AllowedRoles); err != nil {
 		return domain.WorkspaceTemplate{}, fmt.Errorf("decode template roles: %w", err)
+	}
+	if groupIDs != "" {
+		if err := json.Unmarshal([]byte(groupIDs), &template.AllowedGroupIDs); err != nil {
+			return domain.WorkspaceTemplate{}, fmt.Errorf("decode template groups: %w", err)
+		}
+	}
+	template.GroupAccessMode = groupMode
+	if template.GroupAccessMode == "" {
+		template.GroupAccessMode = "exclude"
 	}
 	if configuration != "" && configuration != "{}" {
 		if err := json.Unmarshal([]byte(configuration), &template.Configuration); err != nil {
@@ -489,9 +590,10 @@ func (s *Store) AllWorkspaceAllocations(ctx context.Context) (domain.AllocationS
 
 func (s *Store) workspaceAllocations(ctx context.Context, condition string, args ...any) (domain.AllocationSummary, error) {
 	var summary domain.AllocationSummary
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(allocated_cpu_millis), 0),
-		COALESCE(SUM(allocated_memory_bytes), 0), COALESCE(SUM(allocated_storage_bytes), 0)
-		FROM workspaces`+condition, args...).Scan(&summary.WorkspaceCount, &summary.Resources.CPUMillis,
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(CASE WHEN observed_state = 'running' THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN observed_state = 'running' THEN allocated_cpu_millis ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN observed_state = 'running' THEN allocated_memory_bytes ELSE 0 END), 0), 0
+		FROM workspaces`+condition, args...).Scan(&summary.WorkspaceCount, &summary.RunningWorkspaceCount, &summary.Resources.CPUMillis,
 		&summary.Resources.MemoryBytes, &summary.Resources.StorageBytes)
 	if err != nil {
 		return domain.AllocationSummary{}, fmt.Errorf("sum workspace allocations: %w", err)
@@ -501,12 +603,12 @@ func (s *Store) workspaceAllocations(ctx context.Context, condition string, args
 
 func (s *Store) FindUserQuota(ctx context.Context, userID string) (domain.UserQuota, error) {
 	return scanUserQuota(s.db.QueryRowContext(ctx, `SELECT user_id, max_cpu_millis, max_memory_bytes,
-		max_storage_bytes, max_workspaces, created_at, updated_at FROM user_quotas WHERE user_id = ?`, userID))
+		max_storage_bytes, max_workspaces, max_running_workspaces, created_at, updated_at FROM user_quotas WHERE user_id = ?`, userID))
 }
 
 func (s *Store) ListUserQuotas(ctx context.Context) ([]domain.UserQuota, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT user_id, max_cpu_millis, max_memory_bytes,
-		max_storage_bytes, max_workspaces, created_at, updated_at FROM user_quotas ORDER BY user_id`)
+		max_storage_bytes, max_workspaces, max_running_workspaces, created_at, updated_at FROM user_quotas ORDER BY user_id`)
 	if err != nil {
 		return nil, fmt.Errorf("list user quotas: %w", err)
 	}
@@ -527,12 +629,12 @@ func (s *Store) ListUserQuotas(ctx context.Context) ([]domain.UserQuota, error) 
 
 func (s *Store) UpsertUserQuota(ctx context.Context, quota domain.UserQuota) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO user_quotas
-		(user_id, max_cpu_millis, max_memory_bytes, max_storage_bytes, max_workspaces, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		(user_id, max_cpu_millis, max_memory_bytes, max_storage_bytes, max_workspaces, max_running_workspaces, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(user_id) DO UPDATE SET max_cpu_millis = excluded.max_cpu_millis,
 		max_memory_bytes = excluded.max_memory_bytes, max_storage_bytes = excluded.max_storage_bytes,
-		max_workspaces = excluded.max_workspaces, updated_at = excluded.updated_at`, quota.UserID,
-		quota.MaxCPUMillis, quota.MaxMemoryBytes, quota.MaxStorageBytes, quota.MaxWorkspaces,
+		max_workspaces = excluded.max_workspaces, max_running_workspaces = excluded.max_running_workspaces, updated_at = excluded.updated_at`, quota.UserID,
+		quota.MaxCPUMillis, quota.MaxMemoryBytes, quota.MaxStorageBytes, quota.MaxWorkspaces, quota.MaxRunningWorkspaces,
 		unixOrZero(quota.CreatedAt), unixOrZero(quota.UpdatedAt))
 	if err != nil {
 		return fmt.Errorf("upsert user quota: %w", err)
@@ -660,7 +762,7 @@ func scanUserQuota(row scanner) (domain.UserQuota, error) {
 		createdUnix, updatedUnix int64
 	)
 	if err := row.Scan(&quota.UserID, &quota.MaxCPUMillis, &quota.MaxMemoryBytes, &quota.MaxStorageBytes,
-		&quota.MaxWorkspaces, &createdUnix, &updatedUnix); err != nil {
+		&quota.MaxWorkspaces, &quota.MaxRunningWorkspaces, &createdUnix, &updatedUnix); err != nil {
 		if err == sql.ErrNoRows {
 			return domain.UserQuota{}, repository.ErrNotFound
 		}

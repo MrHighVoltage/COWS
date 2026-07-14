@@ -38,9 +38,9 @@ func TestEvaluateTimeouts(t *testing.T) {
 			now:   base.Add(time.Hour), phase: TimeoutPhaseStoppedRetention, action: TimeoutActionDelete, due: true,
 		},
 		{
-			name:  "data archive eligibility",
-			value: domain.Workspace{ContainerDeletedAt: base, DataRetentionSeconds: 3600},
-			now:   base.Add(time.Hour), phase: TimeoutPhaseArchiveEligible, action: TimeoutActionArchiveEligible, due: true,
+			name:  "deleted workspace has no automatic data action",
+			value: domain.Workspace{ContainerDeletedAt: base},
+			now:   base.Add(time.Hour), phase: TimeoutPhaseNone, action: TimeoutActionNone,
 		},
 	}
 	for _, test := range tests {

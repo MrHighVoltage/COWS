@@ -24,6 +24,7 @@ var (
 	ErrPasswordChangeRequired = errors.New("password change required")
 	ErrLastAdministrator      = errors.New("cannot disable the last active administrator")
 	ErrSelfDisable            = errors.New("administrator cannot disable their own account")
+	ErrInvalidGroup           = errors.New("invalid group")
 )
 
 const (
@@ -137,6 +138,77 @@ func (s *Service) ListUsers(ctx context.Context, actorID string) ([]domain.User,
 		return nil, err
 	}
 	return s.store.ListUsers(ctx)
+}
+
+func (s *Service) ListGroups(ctx context.Context, actorID string) ([]domain.Group, error) {
+	if _, err := s.requireAdministrator(ctx, actorID); err != nil {
+		return nil, err
+	}
+	return s.store.ListGroups(ctx)
+}
+
+func (s *Service) CreateGroup(ctx context.Context, actorID, name, description string) (domain.Group, error) {
+	if _, err := s.requireAdministrator(ctx, actorID); err != nil {
+		return domain.Group{}, err
+	}
+	name = strings.TrimSpace(name)
+	description = strings.TrimSpace(description)
+	if utf8.RuneCountInString(name) < 1 || utf8.RuneCountInString(name) > 100 || utf8.RuneCountInString(description) > 2000 {
+		return domain.Group{}, ErrInvalidGroup
+	}
+	for _, value := range name {
+		if value < 0x20 || value == 0x7f {
+			return domain.Group{}, ErrInvalidGroup
+		}
+	}
+	id, err := randomToken()
+	if err != nil {
+		return domain.Group{}, err
+	}
+	now := s.now().UTC()
+	group := domain.Group{ID: id, Name: name, Description: description, CreatedAt: now, UpdatedAt: now}
+	if err := s.store.CreateGroup(ctx, group); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+			return domain.Group{}, repository.ErrConflict
+		}
+		return domain.Group{}, err
+	}
+	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "group.created", TargetType: "group", TargetID: id})
+	return group, nil
+}
+
+func (s *Service) UserGroupIDs(ctx context.Context, actorID, userID string) ([]string, error) {
+	if _, err := s.requireAdministrator(ctx, actorID); err != nil {
+		return nil, err
+	}
+	if _, err := s.store.FindUserByID(ctx, userID); err != nil {
+		return nil, err
+	}
+	return s.store.ListUserGroupIDs(ctx, userID)
+}
+
+func (s *Service) SetUserGroups(ctx context.Context, actorID, userID string, groupIDs []string) error {
+	if _, err := s.requireAdministrator(ctx, actorID); err != nil {
+		return err
+	}
+	if _, err := s.store.FindUserByID(ctx, userID); err != nil {
+		return err
+	}
+	seen := make(map[string]struct{}, len(groupIDs))
+	for _, groupID := range groupIDs {
+		if _, ok := seen[groupID]; ok {
+			return ErrInvalidGroup
+		}
+		seen[groupID] = struct{}{}
+		if _, err := s.store.FindGroupByID(ctx, groupID); err != nil {
+			return err
+		}
+	}
+	if err := s.store.SetUserGroups(ctx, userID, groupIDs); err != nil {
+		return err
+	}
+	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "user.groups_updated", TargetType: "user", TargetID: userID})
+	return nil
 }
 
 func (s *Service) CreateUser(ctx context.Context, actorID string, input CreateUserInput) (domain.User, error) {
