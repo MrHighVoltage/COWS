@@ -36,6 +36,8 @@ ordinary page rendering, URLs, logs, and audit events.
 - The upstream image must honor the `VNC_PW` environment variable. COWS does
   not require an image rebuild; the administrator chooses whether the template
   uses a static password or a generated password and its length.
+- noVNC uses viewport scaling and `resizeSession`; the desktop adapts to its
+  available panel size and supports browser full screen mode.
 - The runtime adapter remains the only component that knows the local service
   forwarding details.
 - A future host agent can replace local loopback dialing without changing the

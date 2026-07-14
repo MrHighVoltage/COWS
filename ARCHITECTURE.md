@@ -68,7 +68,9 @@ output over a COWS WebSocket; it never supplies a runtime ID or command.
 Terminal sessions have a 15-minute idle timeout, a one-hour maximum lifetime,
 resize forwarding, and start/end audit events. The Docker-compatible adapter
 uses the runtime exec API's upgraded stream and keeps the runtime-specific
-transport details inside the adapter.
+transport details inside the adapter. The browser uses the locally vendored
+xterm.js fit addon to adapt rows and columns to the available panel or full
+screen size, then forwards each resize through the authenticated WebSocket.
 
 The desktop gateway uses the same access boundary but only for a service named
 `desktop` in the workspace's snapshotted template configuration. The service's
