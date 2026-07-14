@@ -6,21 +6,21 @@
   <p class="lede">Set allocation limits used before workspace creation. A zero value means unlimited for that resource. Users still need an assigned quota row; administrators are unrestricted when no quota is assigned.</p>
 </section>
 {{ if .Quota.Error }}<p class="alert alert-error" role="alert">{{ .Quota.Error }}</p>{{ end }}
-<section class="panel table-panel" aria-labelledby="quota-list-title">
+<section class="panel table-panel quota-panel" aria-labelledby="quota-list-title">
   <h2 id="quota-list-title">Assigned limits</h2>
-  <div class="table-scroll"><table><thead><tr><th>User</th><th>Current quota</th><th>Update</th></tr></thead><tbody>
+  <div class="table-scroll"><table class="quota-table"><thead><tr><th>User</th><th>Current quota</th><th>Edit quota</th></tr></thead><tbody>
   {{ range .Quotas }}
   <tr>
     <td><strong>{{ .User.DisplayName }}</strong><span class="table-subtext">{{ .User.Username }}{{ if .User.Email }} · {{ .User.Email }}{{ end }}</span></td>
-    <td>{{ if .Assigned }}<span class="table-subtext">CPU {{ if eq .Quota.MaxCPUMillis 0 }}unlimited{{ else }}{{ .Quota.MaxCPUMillis }} mCPU{{ end }}</span><span class="table-subtext">Memory {{ if eq .Quota.MaxMemoryBytes 0 }}unlimited{{ else }}{{ mib .Quota.MaxMemoryBytes }} MiB{{ end }}</span><span class="table-subtext">Storage {{ if eq .Quota.MaxStorageBytes 0 }}unlimited{{ else }}{{ gib .Quota.MaxStorageBytes }} GiB{{ end }}</span><span class="table-subtext">Workspaces {{ if eq .Quota.MaxWorkspaces 0 }}unlimited{{ else }}{{ .Quota.MaxWorkspaces }}{{ end }}</span>{{ else }}<span class="muted">Not assigned{{ if .User.IsAdministrator }} (unlimited){{ end }}</span>{{ end }}</td>
+    <td>{{ if .Assigned }}<div class="quota-summary"><div><span>CPU</span><strong>{{ if eq .Quota.MaxCPUMillis 0 }}Unlimited{{ else }}{{ .Quota.MaxCPUMillis }} mCPU{{ end }}</strong></div><div><span>Memory</span><strong>{{ if eq .Quota.MaxMemoryBytes 0 }}Unlimited{{ else }}{{ mib .Quota.MaxMemoryBytes }} MiB{{ end }}</strong></div><div><span>Storage</span><strong>{{ if eq .Quota.MaxStorageBytes 0 }}Unlimited{{ else }}{{ gib .Quota.MaxStorageBytes }} GiB{{ end }}</strong></div><div><span>Workspaces</span><strong>{{ if eq .Quota.MaxWorkspaces 0 }}Unlimited{{ else }}{{ .Quota.MaxWorkspaces }}{{ end }}</strong></div></div>{{ else }}<div class="quota-unassigned"><span class="badge">Unassigned</span><span>{{ if .User.IsAdministrator }}Administrators are unlimited without an assigned row.{{ else }}This user cannot create workspaces until a quota is assigned.{{ end }}</span></div>{{ end }}</td>
     <td>
       <form class="quota-form" method="post" action="/admin/quotas/{{ .User.ID }}">
         <input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}">
-        <input name="max_cpu_millis" type="number" min="0" max="1000000" placeholder="{{ if .Assigned }}0 = unlimited{{ else }}Unassigned{{ end }}" value="{{ if .Assigned }}{{ .Quota.MaxCPUMillis }}{{ end }}" required aria-label="Maximum CPU in millicores, zero for unlimited">
-        <input name="max_memory_mib" type="number" min="0" placeholder="{{ if .Assigned }}0 = unlimited{{ else }}Unassigned{{ end }}" value="{{ if .Assigned }}{{ mib .Quota.MaxMemoryBytes }}{{ end }}" required aria-label="Maximum memory in MiB, zero for unlimited">
-        <input name="max_storage_gib" type="number" min="0" placeholder="{{ if .Assigned }}0 = unlimited{{ else }}Unassigned{{ end }}" value="{{ if .Assigned }}{{ gib .Quota.MaxStorageBytes }}{{ end }}" required aria-label="Maximum storage in GiB, zero for unlimited">
-        <input name="max_workspaces" type="number" min="0" max="1000000" placeholder="{{ if .Assigned }}0 = unlimited{{ else }}Unassigned{{ end }}" value="{{ if .Assigned }}{{ .Quota.MaxWorkspaces }}{{ end }}" required aria-label="Maximum workspaces, zero for unlimited">
-        <button class="table-action" type="submit">Save</button>
+        <div class="quota-field"><label for="quota-cpu-{{ .User.ID }}">CPU</label><input id="quota-cpu-{{ .User.ID }}" name="max_cpu_millis" type="number" min="0" max="1000000" placeholder="Enter mCPU" value="{{ if .Assigned }}{{ .Quota.MaxCPUMillis }}{{ end }}" required><span>mCPU; 0 = unlimited</span></div>
+        <div class="quota-field"><label for="quota-memory-{{ .User.ID }}">Memory</label><input id="quota-memory-{{ .User.ID }}" name="max_memory_mib" type="number" min="0" placeholder="Enter MiB" value="{{ if .Assigned }}{{ mib .Quota.MaxMemoryBytes }}{{ end }}" required><span>MiB; 0 = unlimited</span></div>
+        <div class="quota-field"><label for="quota-storage-{{ .User.ID }}">Storage</label><input id="quota-storage-{{ .User.ID }}" name="max_storage_gib" type="number" min="0" placeholder="Enter GiB" value="{{ if .Assigned }}{{ gib .Quota.MaxStorageBytes }}{{ end }}" required><span>GiB; 0 = unlimited</span></div>
+        <div class="quota-field"><label for="quota-workspaces-{{ .User.ID }}">Workspaces</label><input id="quota-workspaces-{{ .User.ID }}" name="max_workspaces" type="number" min="0" max="1000000" placeholder="Enter count" value="{{ if .Assigned }}{{ .Quota.MaxWorkspaces }}{{ end }}" required><span>Count; 0 = unlimited</span></div>
+        <div class="quota-form-actions"><button class="table-action" type="submit">Save quota</button></div>
       </form>
     </td>
   </tr>
