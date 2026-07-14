@@ -63,8 +63,9 @@ images, server-side resource limits, and isolated networking. It does not
 expose container ports publicly. Terminal sessions use an approved `/bin/sh -l`
 and desktop sessions use a template-approved internal VNC service through
 authenticated COWS WebSockets; neither is a generic user-selected proxy.
-Desktop-enabled workspaces receive a random per-workspace VNC password which
-COWS supplies automatically to noVNC; users do not enter a second password.
+Desktop-enabled workspaces can use an administrator-defined static or generated
+VNC password through secret placeholders; COWS supplies it automatically to
+noVNC after authorization, so users do not enter a second password.
 Rootless Podman can be used through its Docker-compatible API socket, for
 example `/run/user/1000/podman/podman.sock`; COWS checks runtime-reported
 capabilities and refuses workspace creation when required limits cannot be

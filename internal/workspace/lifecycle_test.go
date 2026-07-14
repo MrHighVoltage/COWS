@@ -178,7 +178,10 @@ func TestManualDeleteRemovesWorkspaceRecordAfterContainer(t *testing.T) {
 func TestOpenDesktopUsesApprovedAllocatedService(t *testing.T) {
 	service, authService, adminID, store := testService(t)
 	input := validTemplateInput()
-	input.Configuration = domain.TemplateConfiguration{Services: []domain.TemplateService{{Name: "desktop", Protocol: "tcp", ContainerPort: 5900, PortPool: "desktop", HostPortStart: 10000, HostPortEnd: 10000}}}
+	input.Configuration = domain.TemplateConfiguration{
+		Secrets:  []domain.TemplateSecret{{Name: "vnc_password", Generate: true, Length: 8}},
+		Services: []domain.TemplateService{{Name: "desktop", Protocol: "tcp", ContainerPort: 5900, PortPool: "desktop", HostPortStart: 10000, HostPortEnd: 10000, PasswordSecret: "vnc_password"}},
+	}
 	template, err := service.CreateTemplate(context.Background(), adminID, input)
 	if err != nil {
 		t.Fatalf("create desktop template: %v", err)
@@ -197,8 +200,8 @@ func TestOpenDesktopUsesApprovedAllocatedService(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
-	if len(value.VNCPassword) != 8 {
-		t.Fatalf("VNC password length = %d, want 8", len(value.VNCPassword))
+	if len(value.TemplateSecrets["vnc_password"]) != 8 {
+		t.Fatalf("VNC password length = %d, want 8", len(value.TemplateSecrets["vnc_password"]))
 	}
 	fake := &lifecycleRuntime{}
 	service = NewWithRuntime(store, fake)
@@ -216,7 +219,7 @@ func TestOpenDesktopUsesApprovedAllocatedService(t *testing.T) {
 		t.Fatalf("desktop target = %q:%d -> %d", fake.internalServiceRuntimeID, fake.internalServiceContainerPort, fake.internalServiceHostPort)
 	}
 	credentials, err := service.GetDesktopCredentials(context.Background(), user.ID, value.ID)
-	if err != nil || credentials != value.VNCPassword {
+	if err != nil || credentials != value.TemplateSecrets["vnc_password"] {
 		t.Fatalf("desktop credentials = %q, %v; want generated password", credentials, err)
 	}
 }

@@ -261,6 +261,7 @@ func cloneTemplateConfiguration(value domain.TemplateConfiguration) domain.Templ
 	return domain.TemplateConfiguration{
 		Command:     append([]string(nil), value.Command...),
 		Environment: append([]domain.TemplateEnvironment(nil), value.Environment...),
+		Secrets:     append([]domain.TemplateSecret(nil), value.Secrets...),
 		Mounts:      append([]domain.TemplateMount(nil), value.Mounts...),
 		Services:    append([]domain.TemplateService(nil), value.Services...),
 	}

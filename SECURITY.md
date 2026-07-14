@@ -72,9 +72,11 @@ port; the browser cannot submit a container ID, address, or port. The desktop
 gateway accepts only the template's `desktop` TCP service, verifies its
 loopback-only runtime mapping, and bridges raw VNC traffic through COWS. noVNC
 must never expose a workspace VNC port. COWS keeps VNC authentication enabled,
-generates a per-workspace password, and returns it only to an already
-authorized desktop session with `Cache-Control: no-store`. The password is
-not rendered in ordinary pages, URLs, logs, or audit events. The current
+uses the template-selected per-workspace password, and returns it only to an
+already authorized desktop session with `Cache-Control: no-store`. Generated
+secrets are resolved separately for each workspace; static template secrets
+are an administrator responsibility. Secrets are not rendered in ordinary
+pages, URLs, logs, or audit events. The current
 control-plane database stores this runtime secret and therefore requires the
 existing restrictive database-file permissions.
 
@@ -128,8 +130,8 @@ exist. The implementation has no password recovery, account deletion workflow,
 generic application proxy, file manager, or production HTTPS configuration.
 Terminal access uses a fixed shell and desktop access uses a template-approved
 VNC service through the Docker-compatible runtime adapter; desktop sessions
-automatically authenticate using a COWS-generated per-workspace VNC password.
-Both require runtime support for the selected container. Docker lifecycle
+automatically authenticate using the template-selected VNC secret when one is
+configured. Both require runtime support for the selected container. Docker lifecycle
 operations are limited to approved images,
 labels, resource limits, and isolated network policy; runtime-specific
 integration and audit failure handling still need further review. Operational
