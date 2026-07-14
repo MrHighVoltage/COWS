@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ type Config struct {
 	ListenAddr             string
 	DatabasePath           string
 	MountRoot              string
+	MountArchiveRoot       string
 	DockerSocket           string
 	HostStorageBytes       int64
 	LogLevel               slog.Level
@@ -34,6 +36,7 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	listenAddr := envOr(lookup, "COWS_LISTEN_ADDR", "127.0.0.1:8080")
 	databasePath := envOr(lookup, "COWS_DATABASE_PATH", "./data/cows.db")
 	mountRoot := envOr(lookup, "COWS_MOUNT_ROOT", "./data/cows-mounts")
+	mountArchiveRoot := envOr(lookup, "COWS_MOUNT_ARCHIVE_ROOT", "./data/cows-mounts-archive")
 	dockerSocket := envOr(lookup, "COWS_DOCKER_SOCKET", "/var/run/docker.sock")
 	hostStorageValue := envOr(lookup, "COWS_HOST_STORAGE_BYTES", "0")
 	logLevel := envOr(lookup, "COWS_LOG_LEVEL", "info")
@@ -52,6 +55,7 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	flags.StringVar(&listenAddr, "listen-addr", listenAddr, "HTTP listen address")
 	flags.StringVar(&databasePath, "database-path", databasePath, "SQLite database path")
 	flags.StringVar(&mountRoot, "mount-root", mountRoot, "root directory for COWS-managed directory mounts")
+	flags.StringVar(&mountArchiveRoot, "mount-archive-root", mountArchiveRoot, "root directory for archived COWS-managed workspace data")
 	flags.StringVar(&dockerSocket, "docker-socket", dockerSocket, "Docker Engine Unix socket path")
 	flags.StringVar(&hostStorageValue, "host-storage-bytes", hostStorageValue, "configured allocatable host storage in bytes; zero means unknown")
 	flags.StringVar(&logLevel, "log-level", logLevel, "log level: debug, info, warn, or error")
@@ -72,6 +76,23 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	}
 	if strings.TrimSpace(mountRoot) == "" {
 		return Config{}, errors.New("mount root must not be empty")
+	}
+	if strings.TrimSpace(mountArchiveRoot) == "" {
+		return Config{}, errors.New("mount archive root must not be empty")
+	}
+	mountRootAbsolute, err := filepath.Abs(mountRoot)
+	if err != nil {
+		return Config{}, fmt.Errorf("resolve mount root: %w", err)
+	}
+	mountArchiveRootAbsolute, err := filepath.Abs(mountArchiveRoot)
+	if err != nil {
+		return Config{}, fmt.Errorf("resolve mount archive root: %w", err)
+	}
+	if mountRootAbsolute == mountArchiveRootAbsolute {
+		return Config{}, errors.New("mount root and mount archive root must be different directories")
+	}
+	if pathContains(mountRootAbsolute, mountArchiveRootAbsolute) || pathContains(mountArchiveRootAbsolute, mountRootAbsolute) {
+		return Config{}, errors.New("mount root and mount archive root must not contain one another")
 	}
 	if strings.TrimSpace(dockerSocket) == "" {
 		return Config{}, errors.New("Docker socket path must not be empty")
@@ -101,6 +122,7 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 		ListenAddr:             listenAddr,
 		DatabasePath:           databasePath,
 		MountRoot:              mountRoot,
+		MountArchiveRoot:       mountArchiveRoot,
 		DockerSocket:           dockerSocket,
 		HostStorageBytes:       hostStorageBytes,
 		LogLevel:               level,
@@ -110,6 +132,14 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 		BootstrapAdminUsername: bootstrapUsername,
 		BootstrapAdminPassword: bootstrapPassword,
 	}, nil
+}
+
+func pathContains(parent, child string) bool {
+	relative, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
 }
 
 func envOr(lookup func(string) (string, bool), key, fallback string) string {

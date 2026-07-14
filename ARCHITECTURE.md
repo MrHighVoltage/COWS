@@ -64,10 +64,11 @@ application username as the default container username and resolves the
 administrator-controlled UID, GID, display name, home, and shell into a
 passwd entry. Users cannot change these values when creating a workspace.
 Docker receives a controlled UID:GID selection. Rootless Podman uses the
-Libpod create API for the additional passwd entry and sets
-`keep-id:uid=<uid>,gid=<gid>` so the COWS host account maps to the configured
-container identity. This keeps read-write directory mounts usable by both the
-container process and the COWS file manager. The Docker-compatible API does
+Libpod create API for the additional passwd entry and sends explicit UID/GID
+mappings derived from Podman's subordinate-ID map. The mapping deliberately
+leaves the COWS host account outside the container and maps container
+identities into subordinate IDs. Writable bind mounts ask Podman to prepare
+ownership for the selected container identity. The Docker-compatible API does
 not claim to support that Podman-specific operation.
 
 Terminal, desktop, and proxy sessions are authenticated COWS sessions whose
@@ -108,10 +109,13 @@ administrator permission, requires a running workspace and the template's
 `files` access method, and selects a marked directory mount from the stored
 workspace configuration. The browser supplies only a mount name and relative
 path; it cannot supply a host path, volume name, runtime ID, or container
-address. Listings, downloads, directory creation, rename, deletion, and
-uploads operate through `os.Root` beneath the approved mount directory. Named
-volumes and directory mounts without `file_manager` remain inaccessible to
-this UI. Directory downloads can be streamed as bounded ZIP archives without
+address. The current rooted `os.Root` implementation is suitable for mounts
+whose host ownership is directly accessible to COWS. Rootless Podman mounts
+prepared with subordinate-ID ownership require a future runtime-namespace
+file-operation adapter before this UI can safely expose their contents; COWS
+must not weaken the mapping to make host access appear to work. Named volumes
+and directory mounts without `file_manager` remain inaccessible to this UI.
+Directory downloads can be streamed as bounded ZIP archives without
 temporary files; uploads, archive extraction, and file previews are deferred.
 
 ## Request and state flow
@@ -164,9 +168,12 @@ and any due or upcoming deadline. The policy model leaves room for future
 warning events and email delivery without making email a lifecycle dependency.
 
 Explicit user or administrator deletion is separate from timeout cleanup. Once
-the runtime container is confirmed removed, explicit deletion moves each
-COWS-managed directory mount to `<mount-root>/archive/<managed-name>`, then
-removes the COWS workspace record and releases its allocated quota. Timeout
+the runtime container is confirmed removed, explicit deletion moves the
+complete per-container directory from `COWS_MOUNT_ROOT` to the sibling
+`COWS_MOUNT_ARCHIVE_ROOT`, preserving the stable COWS container directory name,
+then removes the COWS workspace record and releases its allocated quota. The
+move is atomic and therefore requires both roots to be on the same filesystem.
+Timeout
 deletion keeps the record and leaves data in place so its lifecycle result,
 archive eligibility, and reconciliation context remain visible.
 
