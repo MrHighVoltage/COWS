@@ -516,6 +516,64 @@ func (s *Store) DeleteWorkspace(ctx context.Context, id string) error {
 	return nil
 }
 
+func (s *Store) DeleteWorkspaceRetainingVolumes(ctx context.Context, id string, volumes []domain.RetainedWorkspaceVolume) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin retained volume transaction: %w", err)
+	}
+	defer tx.Rollback()
+	for _, volume := range volumes {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO retained_workspace_volumes
+			(volume_name, workspace_id, owner_user_id, template_id, mount_name, container_path, read_only, retained_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, volume.VolumeName, volume.WorkspaceID, volume.OwnerUserID,
+			volume.TemplateID, volume.MountName, volume.ContainerPath, boolInt(volume.ReadOnly), unixOrZero(volume.RetainedAt)); err != nil {
+			return fmt.Errorf("retain workspace volume metadata: %w", err)
+		}
+	}
+	result, err := tx.ExecContext(ctx, "DELETE FROM workspaces WHERE id = ?", id)
+	if err != nil {
+		return fmt.Errorf("delete workspace with retained volumes: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check workspace deletion with retained volumes: %w", err)
+	}
+	if count == 0 {
+		return repository.ErrNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit retained volume transaction: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ListRetainedWorkspaceVolumes(ctx context.Context, workspaceID string) ([]domain.RetainedWorkspaceVolume, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT volume_name, workspace_id, owner_user_id, template_id,
+		mount_name, container_path, read_only, retained_at
+		FROM retained_workspace_volumes WHERE workspace_id = ? ORDER BY mount_name`, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("list retained workspace volumes: %w", err)
+	}
+	defer rows.Close()
+	volumes := make([]domain.RetainedWorkspaceVolume, 0)
+	for rows.Next() {
+		var volume domain.RetainedWorkspaceVolume
+		var readOnly int
+		var retainedUnix int64
+		if err := rows.Scan(&volume.VolumeName, &volume.WorkspaceID, &volume.OwnerUserID, &volume.TemplateID,
+			&volume.MountName, &volume.ContainerPath, &readOnly, &retainedUnix); err != nil {
+			return nil, fmt.Errorf("scan retained workspace volume: %w", err)
+		}
+		volume.ReadOnly = readOnly != 0
+		volume.RetainedAt = time.Unix(retainedUnix, 0).UTC()
+		volumes = append(volumes, volume)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate retained workspace volumes: %w", err)
+	}
+	return volumes, nil
+}
+
 func (s *Store) SetWorkspaceDesiredState(ctx context.Context, id string, state domain.DesiredWorkspaceState, updatedAt time.Time) error {
 	result, err := s.db.ExecContext(ctx, "UPDATE workspaces SET desired_state = ?, updated_at = ? WHERE id = ?", state, updatedAt.Unix(), id)
 	if err != nil {

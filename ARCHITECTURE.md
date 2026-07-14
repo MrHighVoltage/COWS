@@ -208,7 +208,7 @@ proves the migration mechanism. The later control-plane schema is expected to
 contain users, roles, templates, template access rules, workspaces, desired and
 observed state, effective timeout policy and lifecycle timestamps, quota
 assignments, runtime identifiers, access sessions, policy configuration, hosts,
-and structured audit events.
+retained-volume tombstones, and structured audit events.
 Retained named-volume tombstones preserve former workspace ownership and mount
 metadata after explicit workspace deletion without making the volume available
 through user-facing routes.
@@ -220,8 +220,8 @@ instances or higher availability requirements justify it.
 Workspace templates are administrator-controlled records. Their current policy
 surface contains an image reference and optional immutable digest, CPU/memory/
 storage defaults and maxima, supported access-method names, allowed roles,
-enabled state, and initial-connection, stopped-retention, and data-retention
-durations. Typed JSON configuration may also define command, environment,
+enabled state, and initial-connection and stopped-retention durations. Typed
+JSON configuration may also define command, environment,
 managed mounts, loopback service ports, secrets, group access, and an optional
 container identity. JSON columns store the small access-method, role, and group
 lists for the

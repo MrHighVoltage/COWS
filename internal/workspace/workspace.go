@@ -365,11 +365,11 @@ func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID stri
 	if err != nil {
 		return err
 	}
+	configuration, err := s.effectiveConfiguration(ctx, value)
+	if err != nil {
+		return err
+	}
 	if value.RuntimeID == "" {
-		configuration, err := s.effectiveConfiguration(ctx, value)
-		if err != nil {
-			return err
-		}
 		if err := archiveMountDirectories(s.mountRoot, s.mountArchiveRoot, value.ID, configuration.Mounts); err != nil {
 			return err
 		}
@@ -392,23 +392,39 @@ func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID stri
 			return err
 		}
 	}
-	configuration, err := s.effectiveConfiguration(ctx, value)
-	if err != nil {
-		_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
-		return err
-	}
 	if err := archiveMountDirectories(s.mountRoot, s.mountArchiveRoot, value.ID, configuration.Mounts); err != nil {
 		_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
 		return err
 	}
 	// Keep the record when this database delete fails so an administrator can
 	// retry without losing the audit and reconciliation context.
-	if err := s.store.DeleteWorkspace(ctx, value.ID); err != nil {
+	retainedVolumes := retainedWorkspaceVolumes(value, configuration.Mounts, s.now().UTC())
+	if err := s.store.DeleteWorkspaceRetainingVolumes(ctx, value.ID, retainedVolumes); err != nil {
 		_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
 		return err
 	}
-	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "workspace.deleted", TargetType: "workspace", TargetID: value.ID})
+	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "workspace.deleted", TargetType: "workspace", TargetID: value.ID, Metadata: map[string]string{"retained_volume_count": fmt.Sprintf("%d", len(retainedVolumes))}})
 	return nil
+}
+
+func retainedWorkspaceVolumes(value domain.Workspace, mounts []domain.TemplateMount, retainedAt time.Time) []domain.RetainedWorkspaceVolume {
+	volumes := make([]domain.RetainedWorkspaceVolume, 0)
+	for _, mount := range mounts {
+		if normalizedMountType(mount.Type) != domain.TemplateMountVolume {
+			continue
+		}
+		volumes = append(volumes, domain.RetainedWorkspaceVolume{
+			VolumeName:    managedVolumeName(value.ID, mount),
+			WorkspaceID:   value.ID,
+			OwnerUserID:   value.OwnerUserID,
+			TemplateID:    value.TemplateID,
+			MountName:     mount.Name,
+			ContainerPath: mount.ContainerPath,
+			ReadOnly:      mount.ReadOnly,
+			RetainedAt:    retainedAt,
+		})
+	}
+	return volumes
 }
 
 // RecordWorkspaceConnection is the hook used by future terminal, desktop, and
