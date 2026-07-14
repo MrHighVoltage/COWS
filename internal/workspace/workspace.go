@@ -137,13 +137,6 @@ func (s *Service) ListWorkspaces(ctx context.Context, actorID string) ([]domain.
 	if err != nil {
 		return nil, err
 	}
-	if user.IsAdministrator() {
-		values, err := s.store.ListAllWorkspaces(ctx)
-		if err != nil {
-			return nil, err
-		}
-		return s.withStorageUsage(ctx, values)
-	}
 	values, err := s.store.ListWorkspacesForUser(ctx, user.ID)
 	if err != nil {
 		return nil, err

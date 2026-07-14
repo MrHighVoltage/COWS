@@ -3,7 +3,7 @@
 <section class="intro" aria-labelledby="quotas-title">
   <p class="eyebrow">Administration</p>
   <h1 id="quotas-title">User quotas</h1>
-  <p class="lede">Set allocation limits used before workspace creation. A zero value means unlimited for that resource. Users still need an assigned quota row; administrators are unrestricted when no quota is assigned.</p>
+  <p class="lede">Set allocation limits used before workspace creation. A zero value means unlimited for that resource. Explicit user quotas override group quotas; otherwise finite group quotas add together.</p>
 </section>
 {{ if .Quota.Error }}<p class="alert alert-error" role="alert">{{ .Quota.Error }}</p>{{ end }}
 <section class="panel table-panel quota-panel" aria-labelledby="quota-list-title">
@@ -26,6 +26,29 @@
     </td>
   </tr>
   {{ else }}<tr><td colspan="3" class="muted">No users found.</td></tr>{{ end }}
+  </tbody></table></div>
+</section>
+<section class="panel table-panel quota-panel" aria-labelledby="group-quota-list-title">
+  <h2 id="group-quota-list-title">Group quotas</h2>
+  <p class="muted">When no explicit user quota exists, a user's group quotas are added together. A zero value in any group quota makes that resource unlimited for the resulting user quota.</p>
+  <div class="table-scroll"><table class="quota-table"><thead><tr><th>Group</th><th>Current quota</th><th>Edit quota</th></tr></thead><tbody>
+  {{ range .GroupQuotas }}
+  <tr>
+    <td><strong>{{ .Group.Name }}</strong><span class="table-subtext">{{ .Group.Description }}</span></td>
+    <td>{{ if .Assigned }}<div class="quota-summary"><div><span>CPU</span><strong>{{ if eq .Quota.MaxCPUMillis 0 }}Unlimited{{ else }}{{ .Quota.MaxCPUMillis }} mCPU{{ end }}</strong></div><div><span>Memory</span><strong>{{ if eq .Quota.MaxMemoryBytes 0 }}Unlimited{{ else }}{{ mib .Quota.MaxMemoryBytes }} MiB{{ end }}</strong></div><div><span>Storage</span><strong>{{ if eq .Quota.MaxStorageBytes 0 }}Unlimited{{ else }}{{ gib .Quota.MaxStorageBytes }} GiB{{ end }}</strong></div><div><span>Total workspaces</span><strong>{{ if eq .Quota.MaxWorkspaces 0 }}Unlimited{{ else }}{{ .Quota.MaxWorkspaces }}{{ end }}</strong></div><div><span>Running workspaces</span><strong>{{ if eq .Quota.MaxRunningWorkspaces 0 }}Unlimited{{ else }}{{ .Quota.MaxRunningWorkspaces }}{{ end }}</strong></div></div>{{ else }}<span class="badge">Unassigned</span>{{ end }}</td>
+    <td>
+      <form class="quota-form" method="post" action="/admin/quotas/groups/{{ .Group.ID }}">
+        <input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}">
+        <div class="quota-field"><label for="group-quota-cpu-{{ .Group.ID }}">CPU</label><input id="group-quota-cpu-{{ .Group.ID }}" name="max_cpu_millis" type="number" min="0" max="1000000" value="{{ if .Assigned }}{{ .Quota.MaxCPUMillis }}{{ end }}" required><span>mCPU; 0 = unlimited</span></div>
+        <div class="quota-field"><label for="group-quota-memory-{{ .Group.ID }}">Memory</label><input id="group-quota-memory-{{ .Group.ID }}" name="max_memory_mib" type="number" min="0" value="{{ if .Assigned }}{{ mib .Quota.MaxMemoryBytes }}{{ end }}" required><span>MiB; 0 = unlimited</span></div>
+        <div class="quota-field"><label for="group-quota-storage-{{ .Group.ID }}">Storage</label><input id="group-quota-storage-{{ .Group.ID }}" name="max_storage_gib" type="number" min="0" value="{{ if .Assigned }}{{ gib .Quota.MaxStorageBytes }}{{ end }}" required><span>GiB; 0 = unlimited</span></div>
+        <div class="quota-field"><label for="group-quota-total-{{ .Group.ID }}">Workspaces</label><input id="group-quota-total-{{ .Group.ID }}" name="max_workspaces" type="number" min="0" max="1000000" value="{{ if .Assigned }}{{ .Quota.MaxWorkspaces }}{{ end }}" required><span>Total; 0 = unlimited</span></div>
+        <div class="quota-field"><label for="group-quota-running-{{ .Group.ID }}">Running workspaces</label><input id="group-quota-running-{{ .Group.ID }}" name="max_running_workspaces" type="number" min="0" max="1000000" value="{{ if .Assigned }}{{ .Quota.MaxRunningWorkspaces }}{{ end }}" required><span>Running; 0 = unlimited</span></div>
+        <div class="quota-form-actions"><button class="table-action" type="submit">Save group quota</button></div>
+      </form>
+    </td>
+  </tr>
+  {{ else }}<tr><td colspan="3" class="muted">No groups found.</td></tr>{{ end }}
   </tbody></table></div>
 </section>
 {{ template "base-end" . }}

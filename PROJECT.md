@@ -60,10 +60,12 @@ The scheduler initially performs deterministic quota and host-capacity checks,
 with no unsafe overcommit by default. Accounting policy must state whether
 stopped workspaces continue to reserve resources.
 
-An ordinary user must have an assigned quota before creating a workspace. An
-administrator without a quota assignment is unrestricted by COWS user quotas.
-Within an assigned quota, zero means unlimited for that resource; physical host
-capacity and reserved host capacity still apply to all accounts.
+An ordinary user must have either an explicit quota or an effective quota from
+one or more groups before creating a workspace. An explicit user quota
+overrides group quotas. Group limits add together, while zero makes that
+resource unlimited. An administrator without either quota type is unrestricted
+by COWS user quotas. Physical host capacity and reserved host capacity still
+apply to all accounts.
 
 Workspace lifecycle policies must support two administrator-defined durations:
 
@@ -97,7 +99,8 @@ observations remain authoritative for container existence and running state.
 - **Template**: An administrator-approved, validated workspace definition.
 - **Desired state**: The lifecycle state COWS is asking the runtime to provide.
 - **Observed state**: The state most recently reported by the runtime.
-- **Quota**: A COWS policy limiting a user's or group’s allocations.
+- **Quota**: A COWS policy limiting a user's or group's allocations; explicit
+  user quotas override inherited group quotas.
 - **Allocated resources**: Resources reserved for workspaces under the policy.
 - **Consumed resources**: Resources currently reported as in use by the runtime.
 - **Access gateway**: Authenticated COWS routing for terminal, desktop, or web

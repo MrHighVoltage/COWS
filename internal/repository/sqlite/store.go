@@ -642,6 +642,71 @@ func (s *Store) UpsertUserQuota(ctx context.Context, quota domain.UserQuota) err
 	return nil
 }
 
+func (s *Store) FindGroupQuota(ctx context.Context, groupID string) (domain.GroupQuota, error) {
+	return scanGroupQuota(s.db.QueryRowContext(ctx, `SELECT group_id, max_cpu_millis, max_memory_bytes,
+		max_storage_bytes, max_workspaces, max_running_workspaces, created_at, updated_at FROM group_quotas WHERE group_id = ?`, groupID))
+}
+
+func (s *Store) ListGroupQuotas(ctx context.Context) ([]domain.GroupQuota, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT group_id, max_cpu_millis, max_memory_bytes,
+		max_storage_bytes, max_workspaces, max_running_workspaces, created_at, updated_at FROM group_quotas ORDER BY group_id`)
+	if err != nil {
+		return nil, fmt.Errorf("list group quotas: %w", err)
+	}
+	defer rows.Close()
+	quotas := make([]domain.GroupQuota, 0)
+	for rows.Next() {
+		quota, err := scanGroupQuota(rows)
+		if err != nil {
+			return nil, err
+		}
+		quotas = append(quotas, quota)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate group quotas: %w", err)
+	}
+	return quotas, nil
+}
+
+func (s *Store) ListGroupQuotasForUser(ctx context.Context, userID string) ([]domain.GroupQuota, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT q.group_id, q.max_cpu_millis, q.max_memory_bytes,
+		q.max_storage_bytes, q.max_workspaces, q.max_running_workspaces, q.created_at, q.updated_at
+		FROM group_quotas AS q JOIN user_groups AS ug ON ug.group_id = q.group_id
+		WHERE ug.user_id = ? ORDER BY q.group_id`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list user group quotas: %w", err)
+	}
+	defer rows.Close()
+	quotas := make([]domain.GroupQuota, 0)
+	for rows.Next() {
+		quota, err := scanGroupQuota(rows)
+		if err != nil {
+			return nil, err
+		}
+		quotas = append(quotas, quota)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate user group quotas: %w", err)
+	}
+	return quotas, nil
+}
+
+func (s *Store) UpsertGroupQuota(ctx context.Context, quota domain.GroupQuota) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO group_quotas
+		(group_id, max_cpu_millis, max_memory_bytes, max_storage_bytes, max_workspaces, max_running_workspaces, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(group_id) DO UPDATE SET max_cpu_millis = excluded.max_cpu_millis,
+		max_memory_bytes = excluded.max_memory_bytes, max_storage_bytes = excluded.max_storage_bytes,
+		max_workspaces = excluded.max_workspaces, max_running_workspaces = excluded.max_running_workspaces,
+		updated_at = excluded.updated_at`, quota.GroupID, quota.MaxCPUMillis, quota.MaxMemoryBytes,
+		quota.MaxStorageBytes, quota.MaxWorkspaces, quota.MaxRunningWorkspaces,
+		unixOrZero(quota.CreatedAt), unixOrZero(quota.UpdatedAt))
+	if err != nil {
+		return fmt.Errorf("upsert group quota: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) FindHostSettings(ctx context.Context) (domain.HostSettings, error) {
 	var settings domain.HostSettings
 	var createdUnix, updatedUnix int64
@@ -767,6 +832,21 @@ func scanUserQuota(row scanner) (domain.UserQuota, error) {
 			return domain.UserQuota{}, repository.ErrNotFound
 		}
 		return domain.UserQuota{}, fmt.Errorf("scan user quota: %w", err)
+	}
+	quota.CreatedAt = time.Unix(createdUnix, 0).UTC()
+	quota.UpdatedAt = time.Unix(updatedUnix, 0).UTC()
+	return quota, nil
+}
+
+func scanGroupQuota(row scanner) (domain.GroupQuota, error) {
+	var quota domain.GroupQuota
+	var createdUnix, updatedUnix int64
+	if err := row.Scan(&quota.GroupID, &quota.MaxCPUMillis, &quota.MaxMemoryBytes, &quota.MaxStorageBytes,
+		&quota.MaxWorkspaces, &quota.MaxRunningWorkspaces, &createdUnix, &updatedUnix); err != nil {
+		if err == sql.ErrNoRows {
+			return domain.GroupQuota{}, repository.ErrNotFound
+		}
+		return domain.GroupQuota{}, fmt.Errorf("scan group quota: %w", err)
 	}
 	quota.CreatedAt = time.Unix(createdUnix, 0).UTC()
 	quota.UpdatedAt = time.Unix(updatedUnix, 0).UTC()

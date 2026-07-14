@@ -229,8 +229,9 @@ Workspaces reference an owner and template through foreign keys. Creation
 stores the template's default allocations and desired state `stopped`; it does
 not contact Podman. Observed state, runtime ID, and reconciliation errors are
 stored separately and may only be updated by authorized runtime lifecycle or
-reconciliation code. Ordinary users can list and access their own records;
-administrators can inspect all records through service-layer authorization.
+reconciliation code. All users, including administrators, list and access only
+their own workspace records through the Workspaces page. Administrators inspect
+all runtime containers and their COWS ownership joins through the Runtime page.
 
 The reconciliation worker periodically performs a validated runtime inspection
 and persists observed state. Podman `exited` is normalized to COWS
@@ -250,8 +251,9 @@ Quota checks use measured storage for all existing workspaces, including
 stopped records. CPU and memory are counted only for running workspaces. A
 request must fit total and running workspace-count quotas and the remaining host
 capacity after reserved capacity.
-Missing quotas block ordinary users but do not restrict administrators. A zero
-value in an assigned quota means unlimited for that dimension; host capacity
+Explicit user quotas override group quotas. Without an explicit row, finite
+group limits add together and zero makes that dimension unlimited. Missing
+quotas block ordinary users but do not restrict administrators. Host capacity
 checks still apply to administrators.
 The scheduler does not overcommit by default. Rootless Podman reports CPU and memory;
 allocatable storage is an explicit host setting because the runtime host-info

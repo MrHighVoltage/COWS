@@ -140,6 +140,13 @@ func (s *Service) ListUsers(ctx context.Context, actorID string) ([]domain.User,
 	return s.store.ListUsers(ctx)
 }
 
+func (s *Service) FindUserForAdmin(ctx context.Context, actorID, userID string) (domain.User, error) {
+	if _, err := s.requireAdministrator(ctx, actorID); err != nil {
+		return domain.User{}, err
+	}
+	return s.store.FindUserByID(ctx, userID)
+}
+
 func (s *Service) ListGroups(ctx context.Context, actorID string) ([]domain.Group, error) {
 	if _, err := s.requireAdministrator(ctx, actorID); err != nil {
 		return nil, err

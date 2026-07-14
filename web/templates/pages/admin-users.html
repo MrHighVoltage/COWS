@@ -24,17 +24,10 @@
           <td>{{ if .Email }}{{ .Email }}{{ else }}<span class="muted">Not set</span>{{ end }}</td>
           <td>{{ .DisplayName }}</td>
           <td><span class="badge">{{ .Role }}</span></td>
-          <td>
-            <form method="post" action="/admin/users/{{ .ID }}/groups">
-              <input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}">
-              <div class="check-list compact-check-list">
-              {{ range $.Groups }}<label class="check-row"><input type="checkbox" name="group_ids" value="{{ .ID }}"{{ if hasID (index $.UserGroupIDs $user.ID) .ID }} checked{{ end }}> {{ .Name }}</label>{{ else }}<span class="muted">No groups</span>{{ end }}
-              </div>
-              {{ if $.Groups }}<button class="table-action" type="submit">Save groups</button>{{ end }}
-            </form>
-          </td>
+          <td>{{ range index $.UserGroups $user.ID }}<span class="badge">{{ .Name }}</span> {{ else }}<span class="muted">None</span>{{ end }}</td>
           <td>{{ if .Disabled }}<span class="status-value status-disabled">Disabled</span>{{ else }}<span class="status-value status-ok">Active</span>{{ end }}</td>
           <td>
+            <a class="table-action button-link" href="/admin/users/{{ .ID }}/edit">Edit user</a>
             {{ if ne .ID $.User.ID }}
             <form method="post" action="/admin/users/{{ .ID }}/disabled" x-on:submit="if (!confirm('Change this user status?')) $event.preventDefault()">
               <input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}">

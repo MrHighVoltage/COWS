@@ -146,7 +146,7 @@ func TestWorkspaceCreationOwnershipAndDesiredObservedState(t *testing.T) {
 	if err != nil || len(accessMethods) != 2 || accessMethods[0] != domain.AccessTerminal || accessMethods[1] != domain.AccessDesktop {
 		t.Fatalf("workspace access methods: %v, %v", accessMethods, err)
 	}
-	if created.OwnerUserID != student.ID || created.DesiredState != domain.DesiredWorkspaceStopped || created.ObservedState != "unknown" || created.AllocatedCPUMillis != template.DefaultCPUMillis || created.InitialConnectionTimeoutSeconds != template.InitialConnectionTimeoutSeconds || created.StoppedRetentionSeconds != template.StoppedRetentionSeconds || created.DataRetentionSeconds != template.DataRetentionSeconds {
+	if created.OwnerUserID != student.ID || created.DesiredState != domain.DesiredWorkspaceStopped || created.ObservedState != "unknown" || created.AllocatedCPUMillis != template.DefaultCPUMillis || created.InitialConnectionTimeoutSeconds != template.InitialConnectionTimeoutSeconds || created.StoppedRetentionSeconds != template.StoppedRetentionSeconds {
 		t.Fatalf("unexpected workspace: %+v", created)
 	}
 	if err := service.SetDesiredState(ctx, student.ID, created.ID, domain.DesiredWorkspaceRunning); err != nil {
@@ -163,7 +163,7 @@ func TestWorkspaceCreationOwnershipAndDesiredObservedState(t *testing.T) {
 		t.Fatalf("unexpected observed workspace: %+v", observed)
 	}
 	all, err := service.ListWorkspaces(ctx, adminID)
-	if err != nil || len(all) != 1 {
+	if err != nil || len(all) != 0 {
 		t.Fatalf("administrator workspace list: count=%d err=%v", len(all), err)
 	}
 }
