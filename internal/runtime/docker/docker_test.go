@@ -241,6 +241,7 @@ func TestCreateWorkspaceMapsTypedConfiguration(t *testing.T) {
 			var body struct {
 				Cmd        []string `json:"Cmd"`
 				Env        []string `json:"Env"`
+				User       string   `json:"User"`
 				HostConfig struct {
 					NetworkMode  string                                         `json:"NetworkMode"`
 					Mounts       []struct{ Source, Target string }              `json:"Mounts"`
@@ -250,7 +251,7 @@ func TestCreateWorkspaceMapsTypedConfiguration(t *testing.T) {
 			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 				t.Fatalf("decode create request: %v", err)
 			}
-			if len(body.Cmd) != 2 || body.Cmd[0] != "/bin/sh" || len(body.Env) != 1 || body.Env[0] != "DESKTOP_PORT=10000" || body.HostConfig.NetworkMode != "bridge" {
+			if len(body.Cmd) != 2 || body.Cmd[0] != "/bin/sh" || len(body.Env) != 1 || body.Env[0] != "DESKTOP_PORT=10000" || body.User != "" || body.HostConfig.NetworkMode != "bridge" {
 				t.Fatalf("unexpected typed configuration: %+v", body)
 			}
 			if len(body.HostConfig.Mounts) != 1 || body.HostConfig.Mounts[0].Source != "cows-workspace-123-workspace-data" || body.HostConfig.Mounts[0].Target != "/workspace" {
@@ -274,6 +275,43 @@ func TestCreateWorkspaceMapsTypedConfiguration(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("create configured workspace: %v", err)
+	}
+}
+
+func TestCreateWorkspaceUsesPodmanLibpodForPasswdEntry(t *testing.T) {
+	adapter := &Adapter{client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/version":
+			return dockerResponse(http.StatusOK, `{"ApiVersion":"4.9"}`), nil
+		case "/v4.9/info":
+			return dockerResponse(http.StatusOK, `{"NCPU":8,"MemTotal":8589934592,"MemoryLimit":true,"PidsLimit":true,"CgroupVersion":"2","Rootless":true}`), nil
+		case "/v4.9/libpod/containers/create":
+			var body struct {
+				User        string `json:"user"`
+				PasswdEntry string `json:"passwd_entry"`
+				NetNS       struct {
+					Mode string `json:"nsmode"`
+				} `json:"netns"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Fatalf("decode Podman create request: %v", err)
+			}
+			if body.User != "1000:1001" || body.PasswdEntry != "alice:x:1000:1001:Alice:/home/alice:/bin/bash" || body.NetNS.Mode != "none" {
+				t.Fatalf("unexpected Podman identity configuration: %+v", body)
+			}
+			return dockerResponse(http.StatusCreated, `{"Id":"abcdef0123456789"}`), nil
+		default:
+			return dockerResponse(http.StatusNotFound, `not found`), nil
+		}
+	})}}
+	_, err := adapter.CreateWorkspace(context.Background(), runtime.WorkspaceSpec{
+		WorkspaceID: "workspace-123",
+		Image:       runtime.Image{Reference: "registry.example/research:1"},
+		Limits:      runtime.ResourceLimits{CPUMillis: 1000, MemoryBytes: 2 << 30},
+		User:        &runtime.ContainerUser{Username: "alice", UID: 1000, GID: 1001, Name: "Alice", Home: "/home/alice", Shell: "/bin/bash", PasswdEntry: "alice:x:1000:1001:Alice:/home/alice:/bin/bash"},
+	})
+	if err != nil {
+		t.Fatalf("create Podman workspace: %v", err)
 	}
 }
 

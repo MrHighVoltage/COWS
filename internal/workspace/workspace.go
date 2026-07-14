@@ -621,7 +621,11 @@ func (s *Service) runtimeSpec(ctx context.Context, value domain.Workspace) (runt
 	if err != nil {
 		return runtime.WorkspaceSpec{}, err
 	}
-	resolved, err := resolveConfiguration(configuration, value.ID, value.Name, allocations, value.TemplateSecrets)
+	owner, err := s.store.FindUserByID(ctx, value.OwnerUserID)
+	if err != nil {
+		return runtime.WorkspaceSpec{}, err
+	}
+	resolved, err := resolveConfiguration(configuration, owner, value.ID, value.Name, allocations, value.TemplateSecrets)
 	if err != nil {
 		return runtime.WorkspaceSpec{}, err
 	}
@@ -633,7 +637,7 @@ func (s *Service) runtimeSpec(ctx context.Context, value domain.Workspace) (runt
 	if image.Reference == "" {
 		image = runtime.Image{Reference: template.ImageReference, Digest: template.ImageDigest}
 	}
-	return runtime.WorkspaceSpec{WorkspaceID: value.ID, Image: image, Limits: runtime.ResourceLimits{CPUMillis: value.AllocatedCPUMillis, MemoryBytes: value.AllocatedMemoryBytes, StorageBytes: value.AllocatedStorageBytes}, Labels: runtime.ManagedLabels(value.ID), Command: resolved.Command, Environment: resolved.Environment, Mounts: resolved.Mounts, Ports: resolved.Ports, NetworkMode: networkMode}, nil
+	return runtime.WorkspaceSpec{WorkspaceID: value.ID, Image: image, Limits: runtime.ResourceLimits{CPUMillis: value.AllocatedCPUMillis, MemoryBytes: value.AllocatedMemoryBytes, StorageBytes: value.AllocatedStorageBytes}, Labels: runtime.ManagedLabels(value.ID), Command: resolved.Command, Environment: resolved.Environment, Mounts: resolved.Mounts, Ports: resolved.Ports, NetworkMode: networkMode, User: resolved.User}, nil
 }
 
 func (s *Service) effectiveConfiguration(ctx context.Context, value domain.Workspace) (domain.TemplateConfiguration, error) {

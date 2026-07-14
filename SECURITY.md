@@ -62,6 +62,10 @@ partial operations, and compromised or misconfigured images.
 - Template placeholders cannot access host environment variables, host paths,
   secrets, or arbitrary runtime objects. Port bindings are loopback-only and
   managed mounts are named volumes; host bind mounts are not supported.
+- The optional template `container_user` block is administrator-controlled. It
+  is resolved from the server-side COWS username and validated UID/GID, home,
+  shell, and display-name fields. Docker must reject a template requiring the
+  Podman-only passwd-entry extension instead of silently dropping it.
 
 ## Access gateway risks
 

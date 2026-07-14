@@ -74,6 +74,7 @@ func (a *Adapter) Capabilities(ctx context.Context) (runtime.Capabilities, error
 		SupportsStorageResourceLimits: false,
 		SupportsPrivateNetwork:        true,
 		SupportsManagedLabels:         true,
+		SupportsPasswdEntry:           runtimeName(info) == runtime.RuntimeNamePodman,
 	}, nil
 }
 
@@ -148,11 +149,17 @@ func (a *Adapter) CreateWorkspace(ctx context.Context, spec runtime.WorkspaceSpe
 		}
 		imageReference += "@" + spec.Image.Digest
 	}
-	nanoCPUs := spec.Limits.CPUMillis * 1_000_000
 	networkMode := spec.NetworkMode
 	if networkMode == "" {
 		networkMode = "none"
 	}
+	if spec.User != nil && spec.User.PasswdEntry != "" && !capabilities.SupportsPasswdEntry {
+		return runtime.WorkspaceHandle{}, fmt.Errorf("%w: passwd entries require the Podman Libpod API", runtime.ErrNotSupported)
+	}
+	if spec.User != nil && spec.User.PasswdEntry != "" {
+		return a.createPodmanWorkspace(ctx, spec, imageReference, networkMode)
+	}
+	nanoCPUs := spec.Limits.CPUMillis * 1_000_000
 	environment := make([]string, 0, len(spec.Environment))
 	for _, value := range spec.Environment {
 		environment = append(environment, value.Name+"="+value.Value)
@@ -198,7 +205,11 @@ func (a *Adapter) CreateWorkspace(ctx context.Context, spec runtime.WorkspaceSpe
 			Mounts       any    `json:"Mounts,omitempty"`
 			PortBindings any    `json:"PortBindings,omitempty"`
 		} `json:"HostConfig"`
+		User string `json:"User,omitempty"`
 	}{Image: imageReference, Labels: copyLabels(spec.Labels), Cmd: append([]string(nil), spec.Command...), Env: environment, ExposedPorts: exposedPorts}
+	if spec.User != nil {
+		body.User = strconv.FormatInt(spec.User.UID, 10) + ":" + strconv.FormatInt(spec.User.GID, 10)
+	}
 	body.HostConfig.Memory = spec.Limits.MemoryBytes
 	body.HostConfig.NanoCPUs = nanoCPUs
 	body.HostConfig.NetworkMode = networkMode
@@ -217,6 +228,80 @@ func (a *Adapter) CreateWorkspace(ctx context.Context, spec runtime.WorkspaceSpe
 		return runtime.WorkspaceHandle{}, fmt.Errorf("%w: Docker returned invalid container ID", runtime.ErrInvalidObservation)
 	}
 	return runtime.WorkspaceHandle{RuntimeID: response.ID, WorkspaceID: spec.WorkspaceID}, nil
+}
+
+func (a *Adapter) createPodmanWorkspace(ctx context.Context, spec runtime.WorkspaceSpec, imageReference, networkMode string) (runtime.WorkspaceHandle, error) {
+	environment := make(map[string]string, len(spec.Environment))
+	for _, value := range spec.Environment {
+		environment[value.Name] = value.Value
+	}
+	type podmanMount struct {
+		Type        string   `json:"type"`
+		Source      string   `json:"source"`
+		Destination string   `json:"destination"`
+		Options     []string `json:"options,omitempty"`
+	}
+	type portMapping struct {
+		ContainerPort int    `json:"container_port"`
+		HostPort      int    `json:"host_port"`
+		HostIP        string `json:"host_ip"`
+		Protocol      string `json:"protocol"`
+	}
+	body := struct {
+		Name           string            `json:"name,omitempty"`
+		Image          string            `json:"image"`
+		Command        []string          `json:"command,omitempty"`
+		Env            map[string]string `json:"env,omitempty"`
+		Labels         map[string]string `json:"labels,omitempty"`
+		User           string            `json:"user,omitempty"`
+		PasswdEntry    string            `json:"passwd_entry,omitempty"`
+		NetNS          map[string]string `json:"netns,omitempty"`
+		Mounts         []podmanMount     `json:"mounts,omitempty"`
+		PortMappings   []portMapping     `json:"portmappings,omitempty"`
+		ResourceLimits struct {
+			CPU struct {
+				Quota  int64  `json:"quota,omitempty"`
+				Period uint64 `json:"period,omitempty"`
+			} `json:"cpu,omitempty"`
+			Memory struct {
+				Limit int64 `json:"limit,omitempty"`
+			} `json:"memory,omitempty"`
+			PIDs struct {
+				Limit int64 `json:"limit,omitempty"`
+			} `json:"pids,omitempty"`
+		} `json:"resource_limits,omitempty"`
+	}{Image: imageReference, Command: append([]string(nil), spec.Command...), Env: environment, Labels: copyLabels(spec.Labels), PasswdEntry: spec.User.PasswdEntry}
+	body.Name = "cows-" + spec.WorkspaceID
+	body.User = strconv.FormatInt(spec.User.UID, 10) + ":" + strconv.FormatInt(spec.User.GID, 10)
+	body.NetNS = map[string]string{"nsmode": networkMode}
+	body.ResourceLimits.CPU.Quota = spec.Limits.CPUMillis * 100
+	body.ResourceLimits.CPU.Period = 100000
+	body.ResourceLimits.Memory.Limit = spec.Limits.MemoryBytes
+	body.ResourceLimits.PIDs.Limit = 512
+	for _, value := range spec.Mounts {
+		body.Mounts = append(body.Mounts, podmanMount{Type: "volume", Source: "cows-" + spec.WorkspaceID + "-" + value.Name, Destination: value.ContainerPath, Options: readOnlyOptions(value.ReadOnly)})
+	}
+	for _, value := range spec.Ports {
+		body.PortMappings = append(body.PortMappings, portMapping{ContainerPort: value.ContainerPort, HostPort: value.HostPort, HostIP: value.HostIP, Protocol: value.Protocol})
+	}
+	var response struct {
+		ID string `json:"Id"`
+	}
+	path := "/libpod/containers/create?name=" + url.QueryEscape(body.Name)
+	if err := a.mutation(ctx, http.MethodPost, path, &body, &response); err != nil {
+		return runtime.WorkspaceHandle{}, err
+	}
+	if !validRuntimeID(response.ID) {
+		return runtime.WorkspaceHandle{}, fmt.Errorf("%w: Podman returned invalid container ID", runtime.ErrInvalidObservation)
+	}
+	return runtime.WorkspaceHandle{RuntimeID: response.ID, WorkspaceID: spec.WorkspaceID}, nil
+}
+
+func readOnlyOptions(readOnly bool) []string {
+	if readOnly {
+		return []string{"ro"}
+	}
+	return nil
 }
 
 func validRuntimeConfiguration(spec runtime.WorkspaceSpec) bool {
@@ -245,7 +330,19 @@ func validRuntimeConfiguration(spec runtime.WorkspaceSpec) bool {
 			return false
 		}
 	}
+	if spec.User != nil {
+		if spec.User.Username == "" || spec.User.Name == "" || spec.User.Home == "" || spec.User.Shell == "" || spec.User.UID < 0 || spec.User.UID > 2147483647 || spec.User.GID < 0 || spec.User.GID > 2147483647 || strings.ContainsAny(spec.User.PasswdEntry, "\x00\r\n") {
+			return false
+		}
+		if !validRuntimeUserField(spec.User.Username) || !validRuntimeUserField(spec.User.Name) || !validRuntimeUserField(spec.User.Home) || !validRuntimeUserField(spec.User.Shell) {
+			return false
+		}
+	}
 	return true
+}
+
+func validRuntimeUserField(value string) bool {
+	return value != "" && len(value) <= 256 && !strings.Contains(value, ":")
 }
 
 func validEnvironmentName(value string) bool {

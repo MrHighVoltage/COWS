@@ -38,10 +38,10 @@
 
     <fieldset>
       <legend>Container configuration</legend>
-      <p class="muted">Administrator-only typed JSON. Users can select this template but cannot edit or see the resolved values. Use named secrets with <code>{{"{{"}}cows.secret.name{{"}}"}}</code>; generated secrets are resolved per workspace. Ports may be referenced with <code>{{"{{"}}cows.service.desktop.port{{"}}"}}</code>.</p>
+      <p class="muted">Administrator-only typed JSON. Users can select this template but cannot edit or see the resolved values. Use named secrets with <code>{{"{{"}}cows.secret.name{{"}}"}}</code>; generated secrets are resolved per workspace. Ports may be referenced with <code>{{"{{"}}cows.service.desktop.port{{"}}"}}</code>. An optional <code>container_user</code> block creates a COWS-user passwd entry; its numeric IDs are required and its other fields are administrator overrides.</p>
       <label for="configuration-json">Environment, mounts, services, and command</label>
       <textarea id="configuration-json" name="configuration_json" rows="16" maxlength="20000" spellcheck="false">{{ .Template.ConfigurationJSON }}</textarea>
-      <p class="muted">Example: <code>{"command":["/bin/sh","-l"],"environment":[{"name":"VNC_PW","value":"{{"{{"}}cows.secret.vnc_password{{"}}"}}","sensitive":true}],"secrets":[{"name":"vnc_password","generate":true,"length":8}],"mounts":[{"name":"workspace-data","container_path":"/workspace"}],"services":[{"name":"desktop","protocol":"tcp","container_port":5901,"port_pool":"desktop","host_port_start":10000,"host_port_end":10099,"password_secret":"vnc_password"}]}</code></p>
+      <p class="muted">Example: <code>{"command":["/bin/bash","-l"],"container_user":{"uid":1000,"gid":1000,"name":"{{"{{"}}cows.user.display_name{{"}}"}}","home":"/home/{{"{{"}}cows.user.username{{"}}"}}","shell":"/bin/bash"},"environment":[{"name":"VNC_PW","value":"{{"{{"}}cows.secret.vnc_password{{"}}"}}","sensitive":true}],"secrets":[{"name":"vnc_password","generate":true,"length":8}],"mounts":[{"name":"workspace-data","container_path":"/workspace"}],"services":[{"name":"desktop","protocol":"tcp","container_port":5901,"port_pool":"desktop","host_port_start":10000,"host_port_end":10099,"password_secret":"vnc_password"}]}</code></p>
     </fieldset>
 
     <fieldset>
