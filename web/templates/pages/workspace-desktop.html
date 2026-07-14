@@ -7,7 +7,7 @@
     <a class="secondary-button button-link" href="/workspaces">Back to workspaces</a>
   </div>
 </section>
-<section class="panel desktop-panel" data-desktop data-desktop-url="/workspaces/{{ .ActiveWorkspace.ID }}/desktop/ws" aria-labelledby="desktop-panel-title">
+<section class="panel desktop-panel" data-desktop data-desktop-url="/workspaces/{{ .ActiveWorkspace.ID }}/desktop/ws" data-credentials-url="/workspaces/{{ .ActiveWorkspace.ID }}/desktop/credentials" aria-labelledby="desktop-panel-title">
   <div class="panel-heading"><div><h2 id="desktop-panel-title">Desktop</h2><p class="muted">The session expires after inactivity or one hour.</p></div><span id="desktop-status" class="badge">Connecting</span></div>
   <div id="desktop-display" class="desktop-display" role="application" aria-label="Workspace graphical desktop"></div>
   <p id="desktop-error" class="alert alert-error" role="alert" hidden></p>

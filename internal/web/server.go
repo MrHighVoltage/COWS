@@ -209,6 +209,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /workspaces/{id}/terminal", s.workspaceTerminalPage)
 	mux.HandleFunc("GET /workspaces/{id}/terminal/ws", s.workspaceTerminalWebSocket)
 	mux.HandleFunc("GET /workspaces/{id}/desktop", s.workspaceDesktopPage)
+	mux.HandleFunc("GET /workspaces/{id}/desktop/credentials", s.workspaceDesktopCredentials)
 	mux.HandleFunc("GET /workspaces/{id}/desktop/ws", s.workspaceDesktopWebSocket)
 	mux.HandleFunc("GET /admin/users", s.adminUsers)
 	mux.HandleFunc("GET /admin/users/new", s.adminUsersNew)
@@ -645,6 +646,27 @@ func (s *Server) workspaceDesktopPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, http.StatusOK, "workspace-desktop-page", pageData{Title: "Desktop | COWS", User: user, ActiveWorkspace: &value})
+}
+
+func (s *Server) workspaceDesktopCredentials(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	password, err := s.workspace.GetDesktopCredentials(r.Context(), user.ID, r.PathValue("id"))
+	if err != nil {
+		status := http.StatusForbidden
+		if errors.Is(err, repository.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		http.Error(w, desktopErrorText(err), status)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(struct {
+		Password string `json:"password"`
+	}{Password: password})
 }
 
 func (s *Server) workspaceDesktopWebSocket(w http.ResponseWriter, r *http.Request) {

@@ -197,6 +197,9 @@ func TestOpenDesktopUsesApprovedAllocatedService(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
+	if len(value.VNCPassword) != 8 {
+		t.Fatalf("VNC password length = %d, want 8", len(value.VNCPassword))
+	}
 	fake := &lifecycleRuntime{}
 	service = NewWithRuntime(store, fake)
 	if err := service.UpdateObservedState(context.Background(), value.ID, "running", "runtime-123", "", time.Now()); err != nil {
@@ -211,6 +214,10 @@ func TestOpenDesktopUsesApprovedAllocatedService(t *testing.T) {
 	}
 	if fake.internalServiceRuntimeID != "runtime-123" || fake.internalServiceContainerPort != 5900 || fake.internalServiceHostPort != 10000 {
 		t.Fatalf("desktop target = %q:%d -> %d", fake.internalServiceRuntimeID, fake.internalServiceContainerPort, fake.internalServiceHostPort)
+	}
+	credentials, err := service.GetDesktopCredentials(context.Background(), user.ID, value.ID)
+	if err != nil || credentials != value.VNCPassword {
+		t.Fatalf("desktop credentials = %q, %v; want generated password", credentials, err)
 	}
 }
 

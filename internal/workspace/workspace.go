@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -68,6 +69,13 @@ func (s *Service) CreateWorkspace(ctx context.Context, actorID string, input Cre
 	if !template.Enabled || !roleAllowed(template.AllowedRoles, user.Role) {
 		return domain.Workspace{}, ErrTemplateNotAvailable
 	}
+	vncPassword := ""
+	if desktopConfigurationEnabled(template.AccessMethods, template.Configuration) {
+		vncPassword, err = newVNCPassword()
+		if err != nil {
+			return domain.Workspace{}, fmt.Errorf("generate workspace VNC password: %w", err)
+		}
+	}
 	if s.scheduler != nil {
 		if err := s.scheduler.CheckCreate(ctx, user.ID, domain.ResourceRequest{CPUMillis: template.DefaultCPUMillis, MemoryBytes: template.DefaultMemoryBytes, StorageBytes: template.DefaultStorageBytes}); err != nil {
 			return domain.Workspace{}, err
@@ -91,6 +99,7 @@ func (s *Service) CreateWorkspace(ctx context.Context, actorID string, input Cre
 		TemplateImageReference:          template.ImageReference,
 		TemplateImageDigest:             template.ImageDigest,
 		TemplateConfiguration:           cloneTemplateConfiguration(template.Configuration),
+		VNCPassword:                     vncPassword,
 		Name:                            name,
 		DesiredState:                    domain.DesiredWorkspaceStopped,
 		ObservedState:                   "unknown",
@@ -390,14 +399,8 @@ func (s *Service) OpenDesktop(ctx context.Context, actorID, workspaceID string) 
 	if err != nil {
 		return nil, err
 	}
-	var desktopService domain.TemplateService
-	for _, service := range configuration.Services {
-		if service.Name == "desktop" && service.Protocol == "tcp" {
-			desktopService = service
-			break
-		}
-	}
-	if desktopService.Name == "" {
+	desktopService, ok := findDesktopService(configuration)
+	if !ok || value.VNCPassword == "" {
 		return nil, ErrDesktopNotAvailable
 	}
 	allocations, err := s.store.ListWorkspacePortAllocations(ctx, value.ID)
@@ -424,6 +427,35 @@ func (s *Service) OpenDesktop(ctx context.Context, actorID, workspaceID string) 
 		return connection, nil
 	}
 	return nil, ErrDesktopNotAvailable
+}
+
+// GetDesktopCredentials returns a workspace-scoped VNC password only after
+// the normal workspace authorization and desktop availability checks pass.
+// The web layer uses this for noVNC's credentialsrequired event; it is not a
+// general workspace secret endpoint.
+func (s *Service) GetDesktopCredentials(ctx context.Context, actorID, workspaceID string) (string, error) {
+	value, err := s.GetWorkspace(ctx, actorID, workspaceID)
+	if err != nil {
+		return "", err
+	}
+	if value.ObservedState != string(runtime.StateRunning) || value.RuntimeID == "" || value.VNCPassword == "" {
+		return "", ErrDesktopNotAvailable
+	}
+	template, err := s.store.FindTemplateByID(ctx, value.TemplateID)
+	if err != nil {
+		return "", err
+	}
+	configuration, err := s.effectiveConfiguration(ctx, value)
+	if err != nil {
+		return "", err
+	}
+	if !desktopConfigurationEnabled(template.AccessMethods, configuration) {
+		return "", ErrDesktopNotAvailable
+	}
+	if _, ok := findDesktopService(configuration); !ok {
+		return "", ErrDesktopNotAvailable
+	}
+	return value.VNCPassword, nil
 }
 
 func (s *Service) RecordDesktopDisconnect(ctx context.Context, actorID, workspaceID string) {
@@ -600,6 +632,9 @@ func (s *Service) runtimeSpec(ctx context.Context, value domain.Workspace) (runt
 	if image.Reference == "" {
 		image = runtime.Image{Reference: template.ImageReference, Digest: template.ImageDigest}
 	}
+	if value.VNCPassword != "" && desktopConfigurationEnabled(template.AccessMethods, configuration) {
+		resolved.Environment = withVNCPassword(resolved.Environment, value.VNCPassword)
+	}
 	return runtime.WorkspaceSpec{WorkspaceID: value.ID, Image: image, Limits: runtime.ResourceLimits{CPUMillis: value.AllocatedCPUMillis, MemoryBytes: value.AllocatedMemoryBytes, StorageBytes: value.AllocatedStorageBytes}, Labels: runtime.ManagedLabels(value.ID), Command: resolved.Command, Environment: resolved.Environment, Mounts: resolved.Mounts, Ports: resolved.Ports, NetworkMode: networkMode}, nil
 }
 
@@ -650,6 +685,47 @@ func hasAccessMethod(methods []domain.AccessMethod, wanted domain.AccessMethod) 
 		}
 	}
 	return false
+}
+
+func desktopConfigurationEnabled(methods []domain.AccessMethod, configuration domain.TemplateConfiguration) bool {
+	_, ok := findDesktopService(configuration)
+	return hasAccessMethod(methods, domain.AccessDesktop) && ok
+}
+
+func findDesktopService(configuration domain.TemplateConfiguration) (domain.TemplateService, bool) {
+	for _, service := range configuration.Services {
+		if service.Name == "desktop" && service.Protocol == "tcp" {
+			return service, true
+		}
+	}
+	return domain.TemplateService{}, false
+}
+
+const vncPasswordAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+
+func newVNCPassword() (string, error) {
+	password := make([]byte, 8)
+	alphabetSize := big.NewInt(int64(len(vncPasswordAlphabet)))
+	for index := range password {
+		value, err := rand.Int(rand.Reader, alphabetSize)
+		if err != nil {
+			return "", err
+		}
+		password[index] = vncPasswordAlphabet[value.Int64()]
+	}
+	return string(password), nil
+}
+
+func withVNCPassword(environment []runtime.EnvironmentVariable, password string) []runtime.EnvironmentVariable {
+	result := make([]runtime.EnvironmentVariable, 0, len(environment)+1)
+	for _, value := range environment {
+		if value.Name == "VNC_PW" {
+			continue
+		}
+		result = append(result, value)
+	}
+	result = append(result, runtime.EnvironmentVariable{Name: "VNC_PW", Value: password, Sensitive: true})
+	return result
 }
 
 func validWorkspaceName(value string) bool {

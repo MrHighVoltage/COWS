@@ -1,0 +1,1 @@
+ALTER TABLE workspaces ADD COLUMN vnc_password TEXT NOT NULL DEFAULT '';
