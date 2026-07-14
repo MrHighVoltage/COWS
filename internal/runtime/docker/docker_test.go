@@ -285,6 +285,8 @@ func TestCreateWorkspaceUsesPodmanLibpodForPasswdEntry(t *testing.T) {
 			return dockerResponse(http.StatusOK, `{"ApiVersion":"4.9"}`), nil
 		case "/v4.9/info":
 			return dockerResponse(http.StatusOK, `{"NCPU":8,"MemTotal":8589934592,"MemoryLimit":true,"PidsLimit":true,"CgroupVersion":"2","Rootless":true,"IDMappings":{"UIDMap":[{"ContainerID":0,"HostID":100000,"Size":65536}],"GIDMap":[{"ContainerID":0,"HostID":100000,"Size":65536}]}}`), nil
+		case "/v4.9/libpod/info":
+			return dockerResponse(http.StatusOK, `{"host":{"idMappings":{"uidmap":[{"container_id":0,"host_id":1000,"size":1},{"container_id":1,"host_id":100000,"size":65536}],"gidmap":[{"container_id":0,"host_id":1000,"size":1},{"container_id":1,"host_id":100000,"size":65536}]}}}`), nil
 		case "/v4.9/libpod/containers/create":
 			var body struct {
 				User        string `json:"user"`
@@ -308,7 +310,7 @@ func TestCreateWorkspaceUsesPodmanLibpodForPasswdEntry(t *testing.T) {
 			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 				t.Fatalf("decode Podman create request: %v", err)
 			}
-			if body.User != "1000:1001" || body.PasswdEntry != "alice:x:1000:1001:Alice:/home/alice:/bin/bash" || len(body.UserNS.UIDMappings) != 1 || len(body.UserNS.GIDMappings) != 1 || body.UserNS.UIDMappings[0].ContainerID != 0 || body.UserNS.UIDMappings[0].HostID != 1 || body.UserNS.UIDMappings[0].Size != 65535 || body.UserNS.GIDMappings[0].HostID != 1 || body.NetNS.Mode != "none" {
+			if body.User != "1000:1001" || body.PasswdEntry != "alice:x:1000:1001:Alice:/home/alice:/bin/bash" || len(body.UserNS.UIDMappings) != 1 || len(body.UserNS.GIDMappings) != 1 || body.UserNS.UIDMappings[0].ContainerID != 0 || body.UserNS.UIDMappings[0].HostID != 1 || body.UserNS.UIDMappings[0].Size != 65536 || body.UserNS.GIDMappings[0].HostID != 1 || body.NetNS.Mode != "none" {
 				t.Fatalf("unexpected Podman identity configuration: %+v", body)
 			}
 			return dockerResponse(http.StatusCreated, `{"Id":"abcdef0123456789"}`), nil
