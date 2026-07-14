@@ -177,10 +177,10 @@ type FileAccessSpec struct {
 }
 
 type FileEntry struct {
-	Name    string
-	IsDir   bool
-	Size    int64
-	ModTime time.Time
+	Name    string    `json:"name"`
+	IsDir   bool      `json:"is_dir"`
+	Size    int64     `json:"size"`
+	ModTime time.Time `json:"mod_time"`
 }
 
 // FileAccess is deliberately narrower than a general filesystem interface.
