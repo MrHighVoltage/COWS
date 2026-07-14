@@ -205,8 +205,9 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 		options.LoginLimiter, _ = auth.NewLoginLimiter(auth.DefaultLoginFailureLimit, auth.DefaultLoginFailureWindow)
 	}
 	templates, err := template.New("cows").Funcs(template.FuncMap{
-		"mib": func(bytes int64) int64 { return bytes / (1 << 20) },
-		"gib": func(bytes int64) int64 { return bytes / (1 << 30) },
+		"mib":        func(bytes int64) int64 { return bytes / (1 << 20) },
+		"gib":        func(bytes int64) int64 { return bytes / (1 << 30) },
+		"quotaClass": quotaProgressClass,
 		"timeoutPhase": func(value domain.Workspace) workspace.TimeoutStatus {
 			return workspace.EvaluateTimeouts(value, time.Now())
 		},
@@ -251,6 +252,24 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 	}
 	fileAccessRuntime, _ := runtimeAdapter.(runtime.FileAccessRuntime)
 	return &Server{db: db, auth: authService, workspace: templateService, quota: quotaService, runtime: runtimeAdapter, files: files.New(templateService, fileAccessRuntime), options: options, templates: templates, static: static}, nil
+}
+
+func quotaProgressClass(current, limit int64) string {
+	if limit <= 0 {
+		return ""
+	}
+	if current >= limit {
+		return "quota-progress-danger"
+	}
+	if current < 0 {
+		current = 0
+	}
+	// Use the remaining fifth instead of multiplying values, which keeps the
+	// comparison safe for large byte-based quotas.
+	if current >= limit-limit/5 {
+		return "quota-progress-warning"
+	}
+	return ""
 }
 
 func (s *Server) Handler() http.Handler {
