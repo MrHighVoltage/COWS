@@ -293,11 +293,15 @@ func (a *Adapter) createPodmanWorkspace(ctx context.Context, spec runtime.Worksp
 		return runtime.WorkspaceHandle{}, err
 	}
 	if info.Rootless {
-		uidMappings, err := explicitRootlessMapping(info.IDMappings.UIDMap, spec.User.UID)
+		mappings, err := a.podmanIDMappings(ctx)
 		if err != nil {
 			return runtime.WorkspaceHandle{}, err
 		}
-		gidMappings, err := explicitRootlessMapping(info.IDMappings.GIDMap, spec.User.GID)
+		uidMappings, err := explicitRootlessMapping(mappings.UIDMap, spec.User.UID)
+		if err != nil {
+			return runtime.WorkspaceHandle{}, err
+		}
+		gidMappings, err := explicitRootlessMapping(mappings.GIDMap, spec.User.GID)
 		if err != nil {
 			return runtime.WorkspaceHandle{}, err
 		}
@@ -596,6 +600,23 @@ type idMapping struct {
 type idMappings struct {
 	UIDMap []idMapping `json:"uidmap"`
 	GIDMap []idMapping `json:"gidmap"`
+}
+
+type podmanInfo struct {
+	Host struct {
+		IDMappings idMappings `json:"idMappings"`
+	} `json:"host"`
+}
+
+func (a *Adapter) podmanIDMappings(ctx context.Context) (idMappings, error) {
+	var info podmanInfo
+	if err := a.get(ctx, "/libpod/info", &info); err != nil {
+		return idMappings{}, err
+	}
+	if len(info.Host.IDMappings.UIDMap) == 0 || len(info.Host.IDMappings.GIDMap) == 0 {
+		return idMappings{}, fmt.Errorf("%w: Podman did not report rootless UID/GID mappings", runtime.ErrNotSupported)
+	}
+	return info.Host.IDMappings, nil
 }
 
 func (a *Adapter) version(ctx context.Context) (string, error) {
