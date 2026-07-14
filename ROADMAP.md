@@ -57,7 +57,9 @@ connection and stopped-container retention timeouts, user-visible policy
 details, rootless Podman lifecycle operations, and a
 reconciler-driven timeout worker are now present. Warning-event hooks exist in
 the lifecycle model, but email and automatic retention archival remain
-disabled. Remaining
+disabled. Each start resets the initial-connection observation period, and
+explicit deletion records retained named-volume metadata before removing the
+workspace record. Remaining
 exit work includes reconciliation handling for orphaned and partially-created
 objects, runtime-enforced storage policy, idempotence across restart,
 long-running operation execution, and irreversible-operation failure-path
@@ -108,7 +110,9 @@ bounded uploads, downloads, folder creation, rename, deletion, and streamed
 bounded ZIP downloads. Rootless Podman operations use the runtime-backed file
 access helper in ADR 0011, preserving the mapped container identity. Explicit
 workspace deletion archives managed directory mounts while timeout cleanup
-leaves data in place. Remaining exit work is stronger temporary storage and
+leaves data in place. Explicit deletion retains named volumes with durable
+control-plane tombstones for later administrator recovery or cleanup. Remaining
+exit work is stronger temporary storage and
 file-count policy, symlink-race
 hardening, audit events for every file mutation, and broader browser
 accessibility review.

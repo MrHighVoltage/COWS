@@ -57,14 +57,21 @@ subordinate UID/GID mappings, not `keep-id`, and keep the COWS-owned
 per-container parent separate from mapped inner mount directories. Explicit
 workspace deletion archives the complete per-container directory in the
 sibling archive root; timeout cleanup must not silently delete or archive user
-data. Directory ZIP downloads are streamed and bounded;
+data. Explicit deletion retains named volumes and must persist their tombstone
+metadata before removing the workspace record. Retained-volume metadata does
+not authorize restore, mount, or cleanup. Directory ZIP downloads are streamed and bounded;
 do not add archive extraction without dedicated security tests.
 
 Workspace timeout policies are backend-enforced and must not depend on browser
 timers. Keep the initial no-connection stop and stopped-container deletion
 timestamps. Automatic timeout cleanup must never delete or archive user data;
 explicit deletion's managed-directory archive is separate. Do not reintroduce
-the removed post-deletion data-retention configuration.
+the removed post-deletion data-retention configuration. Reset the recorded
+connection timestamp whenever a workspace enters a new running period.
+
+Never render raw runtime, filesystem, or database errors to ordinary users.
+Persist stable public error categories separately from administrator-side
+diagnostic detail.
 
 ## Development commands
 

@@ -41,6 +41,9 @@ partial operations, and compromised or misconfigured images.
   limits.
 - Logs and audit records exclude passwords, tokens, terminal contents, file
   contents, and sensitive environment values.
+- User-facing state contains stable COWS error categories only. Detailed Podman,
+  filesystem, and database errors remain administrator-side diagnostic data and
+  must not be rendered to workspace owners.
 - Login failures are rate-limited per source by the single COWS process. A
   multi-instance deployment must move this control to shared infrastructure.
 - Newly created users must change their initial password before administrator
@@ -142,6 +145,11 @@ included, and no temporary archive is created. Archive extraction, bulk
 operations, and stronger quota accounting are not implemented. Before those
 features are added, include explicit ZIP-slip, ZIP-bomb, symlink replacement,
 file-count, temporary-storage, and generated-download-size tests.
+
+Explicit deletion retains named volumes and records tombstone metadata before
+the workspace row is removed. A retained-volume record is not authorization to
+mount, inspect, restore, or delete that volume. Those actions require a future
+administrator-only workflow with separate authorization and audit events.
 
 ## Known limitations of the current milestone
 
