@@ -16,16 +16,16 @@
     <span class="header-context">Containerized On-Demand Workspace System</span>
     <nav class="site-nav" aria-label="Primary navigation">
       {{ if .User }}
-        <a href="/">Dashboard</a>
-        {{ if not .User.MustChangePassword }}<a href="/workspaces">Workspaces</a>{{ end }}
-        {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a href="/admin/users">Users</a>{{ end }}
-        {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a href="/admin/quotas">Quotas</a>{{ end }}
-        {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a href="/admin/settings">Settings</a>{{ end }}
-        {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a href="/admin/templates">Templates</a>{{ end }}
-        {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a href="/admin/runtime">Runtime</a>{{ end }}
-        <form method="post" action="/logout">
+        <a class="nav-tab" href="/">Dashboard</a>
+        {{ if not .User.MustChangePassword }}<a class="nav-tab" href="/workspaces">Workspaces</a>{{ end }}
+        {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a class="nav-tab" href="/admin/users">Users</a>{{ end }}
+        {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a class="nav-tab" href="/admin/quotas">Quotas</a>{{ end }}
+        {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a class="nav-tab" href="/admin/settings">Settings</a>{{ end }}
+        {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a class="nav-tab" href="/admin/templates">Templates</a>{{ end }}
+        {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a class="nav-tab" href="/admin/runtime">Runtime</a>{{ end }}
+        <form class="sign-out-form" method="post" action="/logout">
           <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
-          <button class="link-button" type="submit">Sign out</button>
+          <button class="link-button sign-out-button" type="submit">Sign out</button>
         </form>
       {{ else }}
         <a href="/login">Sign in</a>
