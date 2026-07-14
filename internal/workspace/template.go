@@ -258,13 +258,26 @@ func validateTemplate(input TemplateInput) error {
 }
 
 func cloneTemplateConfiguration(value domain.TemplateConfiguration) domain.TemplateConfiguration {
-	return domain.TemplateConfiguration{
+	clone := domain.TemplateConfiguration{
 		Command:     append([]string(nil), value.Command...),
 		Environment: append([]domain.TemplateEnvironment(nil), value.Environment...),
 		Secrets:     append([]domain.TemplateSecret(nil), value.Secrets...),
 		Mounts:      append([]domain.TemplateMount(nil), value.Mounts...),
 		Services:    append([]domain.TemplateService(nil), value.Services...),
 	}
+	if value.ContainerUser != nil {
+		user := *value.ContainerUser
+		if value.ContainerUser.UID != nil {
+			uid := *value.ContainerUser.UID
+			user.UID = &uid
+		}
+		if value.ContainerUser.GID != nil {
+			gid := *value.ContainerUser.GID
+			user.GID = &gid
+		}
+		clone.ContainerUser = &user
+	}
+	return clone
 }
 
 func validTimeout(seconds int64) bool {

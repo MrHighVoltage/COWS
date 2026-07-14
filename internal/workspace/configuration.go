@@ -18,6 +18,7 @@ import (
 var (
 	configurationNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 	environmentNamePattern   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
+	containerUsernamePattern = regexp.MustCompile(`^[a-z][a-z0-9._-]{2,63}$`)
 	placeholderPattern       = regexp.MustCompile(`\{\{([a-z][a-z0-9_.-]*)\}\}`)
 	ErrPortPoolUnavailable   = errors.New("workspace port pool is unavailable")
 )
@@ -28,6 +29,26 @@ func validateTemplateConfiguration(configuration domain.TemplateConfiguration) e
 	}
 	for _, value := range configuration.Command {
 		if len(value) == 0 || len(value) > 256 || hasControl(value) {
+			return ErrInvalidTemplate
+		}
+	}
+	if configuration.ContainerUser != nil {
+		user := configuration.ContainerUser
+		if user.UID == nil || user.GID == nil || *user.UID < 0 || *user.UID > 2147483647 || *user.GID < 0 || *user.GID > 2147483647 {
+			return ErrInvalidTemplate
+		}
+		if user.Username != "" && user.Username != "{{cows.user.username}}" {
+			return ErrInvalidTemplate
+		}
+		for _, value := range []string{user.Username, user.Name, user.Home, user.Shell} {
+			if len(value) > 256 || hasControl(value) || strings.Contains(value, ":") || !validPlaceholders(value, configuration) {
+				return ErrInvalidTemplate
+			}
+		}
+		if user.Home != "" && (strings.HasPrefix(user.Home, "{{") || !validContainerPath(user.Home)) {
+			return ErrInvalidTemplate
+		}
+		if user.Shell != "" && (strings.HasPrefix(user.Shell, "{{") || !validContainerPath(user.Shell)) {
 			return ErrInvalidTemplate
 		}
 	}
@@ -111,7 +132,7 @@ func validPlaceholders(value string, configuration domain.TemplateConfiguration)
 	for _, match := range placeholderPattern.FindAllStringSubmatch(value, -1) {
 		name := match[1]
 		switch {
-		case name == "cows.workspace_id", name == "cows.workspace_name":
+		case name == "cows.workspace_id", name == "cows.workspace_name", name == "cows.user.username", name == "cows.user.display_name":
 		case strings.HasPrefix(name, "cows.service.") && strings.HasSuffix(name, ".port"):
 			serviceName := strings.TrimSuffix(strings.TrimPrefix(name, "cows.service."), ".port")
 			if _, ok := services[serviceName]; !ok {
@@ -190,12 +211,17 @@ func (s *Service) ensureWorkspacePorts(ctx context.Context, workspaceID string, 
 	return s.reserveWorkspacePorts(ctx, workspaceID, configuration.Services)
 }
 
-func resolveConfiguration(configuration domain.TemplateConfiguration, workspaceID, workspaceName string, allocations []domain.PortAllocation, secrets map[string]string) (runtime.WorkspaceConfiguration, error) {
+func resolveConfiguration(configuration domain.TemplateConfiguration, user domain.User, workspaceID, workspaceName string, allocations []domain.PortAllocation, secrets map[string]string) (runtime.WorkspaceConfiguration, error) {
 	ports := make(map[string]string, len(allocations))
 	for _, allocation := range allocations {
 		ports[allocation.ServiceName] = strconv.Itoa(allocation.HostPort)
 	}
-	values := map[string]string{"cows.workspace_id": workspaceID, "cows.workspace_name": workspaceName}
+	values := map[string]string{
+		"cows.workspace_id":      workspaceID,
+		"cows.workspace_name":    workspaceName,
+		"cows.user.username":     user.Username,
+		"cows.user.display_name": user.DisplayName,
+	}
 	for service, port := range ports {
 		values["cows.service."+service+".port"] = port
 	}
@@ -206,6 +232,13 @@ func resolveConfiguration(configuration domain.TemplateConfiguration, workspaceI
 		values["cows.mount."+mount.Name+".path"] = mount.ContainerPath
 	}
 	result := runtime.WorkspaceConfiguration{}
+	if configuration.ContainerUser != nil {
+		containerUser, err := resolveContainerUser(*configuration.ContainerUser, user, values)
+		if err != nil {
+			return runtime.WorkspaceConfiguration{}, err
+		}
+		result.User = containerUser
+	}
 	for _, value := range configuration.Command {
 		resolved, err := resolveValue(value, values)
 		if err != nil {
@@ -236,6 +269,54 @@ func resolveConfiguration(configuration domain.TemplateConfiguration, workspaceI
 		result.Ports = append(result.Ports, runtime.PortBinding{ServiceName: value.Name, Protocol: value.Protocol, ContainerPort: value.ContainerPort, HostPort: resolvedPort, HostIP: "127.0.0.1"})
 	}
 	return result, nil
+}
+
+func resolveContainerUser(configuration domain.TemplateContainerUser, user domain.User, values map[string]string) (*runtime.ContainerUser, error) {
+	if configuration.UID == nil || configuration.GID == nil {
+		return nil, ErrInvalidTemplate
+	}
+	username := configuration.Username
+	if username == "" {
+		username = "{{cows.user.username}}"
+	}
+	resolvedUsername, err := resolveValue(username, values)
+	if err != nil || !containerUsernamePattern.MatchString(resolvedUsername) {
+		return nil, ErrInvalidTemplate
+	}
+	name := configuration.Name
+	if name == "" {
+		name = "{{cows.user.display_name}}"
+	}
+	resolvedName, err := resolveValue(name, values)
+	if err != nil || resolvedName == "" || strings.Contains(resolvedName, ":") {
+		return nil, ErrInvalidTemplate
+	}
+	home := configuration.Home
+	if home == "" {
+		home = "/home/" + resolvedUsername
+	}
+	resolvedHome, err := resolveValue(home, values)
+	if err != nil || !validContainerPath(resolvedHome) {
+		return nil, ErrInvalidTemplate
+	}
+	shell := configuration.Shell
+	if shell == "" {
+		shell = "/bin/sh"
+	}
+	resolvedShell, err := resolveValue(shell, values)
+	if err != nil || !validContainerPath(resolvedShell) {
+		return nil, ErrInvalidTemplate
+	}
+	uid, gid := *configuration.UID, *configuration.GID
+	return &runtime.ContainerUser{
+		Username:    resolvedUsername,
+		UID:         uid,
+		GID:         gid,
+		Name:        resolvedName,
+		Home:        resolvedHome,
+		Shell:       resolvedShell,
+		PasswdEntry: strings.Join([]string{resolvedUsername, "x", strconv.FormatInt(uid, 10), strconv.FormatInt(gid, 10), resolvedName, resolvedHome, resolvedShell}, ":"),
+	}, nil
 }
 
 const generatedSecretAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"

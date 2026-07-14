@@ -46,6 +46,7 @@ type Capabilities struct {
 	SupportsStorageResourceLimits bool
 	SupportsPrivateNetwork        bool
 	SupportsManagedLabels         bool
+	SupportsPasswdEntry           bool
 }
 
 type HostCapacity struct {
@@ -95,6 +96,19 @@ type WorkspaceConfiguration struct {
 	Environment []EnvironmentVariable
 	Mounts      []Mount
 	Ports       []PortBinding
+	User        *ContainerUser
+}
+
+// ContainerUser is fully resolved by COWS before it reaches a runtime
+// adapter. The adapter decides how to express it in its native API.
+type ContainerUser struct {
+	Username    string
+	UID         int64
+	GID         int64
+	Name        string
+	Home        string
+	Shell       string
+	PasswdEntry string
 }
 
 // WorkspaceSpec is produced from a validated administrator template and COWS
@@ -109,6 +123,7 @@ type WorkspaceSpec struct {
 	Mounts      []Mount
 	Ports       []PortBinding
 	NetworkMode string
+	User        *ContainerUser
 }
 
 type WorkspaceHandle struct {

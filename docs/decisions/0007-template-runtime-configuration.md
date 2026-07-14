@@ -15,6 +15,8 @@ The supported configuration vocabulary initially contains:
 - environment variables with literal values or approved COWS placeholders;
 - managed named-volume mounts with container-only paths;
 - TCP or UDP services with administrator-defined host-port ranges.
+- an optional typed container-user block with administrator-selected numeric
+  UID/GID, shell, home, and display-name overrides.
 
 The resolver accepts only these placeholders:
 
@@ -23,6 +25,8 @@ The resolver accepts only these placeholders:
 {{cows.workspace_name}}
 {{cows.service.<name>.port}}
 {{cows.mount.<name>.path}}
+{{cows.user.username}}
+{{cows.user.display_name}}
 ```
 
 There is no general Go-template execution, shell expansion, host environment
@@ -45,6 +49,15 @@ input. Template revision history beyond the workspace snapshot is deferred.
 Runtime-specific fields remain in the Docker or Podman adapter. Dangerous
 options such as privileged mode, host networking, arbitrary binds, devices,
 and capabilities are not represented by this configuration model.
+
+When `container_user` is present, COWS resolves the existing application
+username for the workspace owner and builds a passwd entry in the form
+`username:x:uid:gid:name:home:shell`. The template may override the username
+only with `{{cows.user.username}}`; it may override the other fields with
+literal values or the approved user placeholders. Docker receives the
+controlled `uid:gid` selection. Podman uses its Libpod create API so the
+passwd entry is actually written into the container. A Docker runtime rejects
+templates that require the Podman-only passwd-entry capability.
 
 Sensitive environment values are stored as administrator configuration and are
 never returned to users or written to audit metadata. A dedicated secret store

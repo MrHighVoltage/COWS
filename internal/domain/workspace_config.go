@@ -3,11 +3,12 @@ package domain
 // TemplateConfiguration contains only typed, administrator-controlled runtime
 // configuration. It is never populated from a user workspace request.
 type TemplateConfiguration struct {
-	Command     []string              `json:"command,omitempty"`
-	Environment []TemplateEnvironment `json:"environment,omitempty"`
-	Secrets     []TemplateSecret      `json:"secrets,omitempty"`
-	Mounts      []TemplateMount       `json:"mounts,omitempty"`
-	Services    []TemplateService     `json:"services,omitempty"`
+	Command       []string               `json:"command,omitempty"`
+	Environment   []TemplateEnvironment  `json:"environment,omitempty"`
+	Secrets       []TemplateSecret       `json:"secrets,omitempty"`
+	Mounts        []TemplateMount        `json:"mounts,omitempty"`
+	Services      []TemplateService      `json:"services,omitempty"`
+	ContainerUser *TemplateContainerUser `json:"container_user,omitempty"`
 }
 
 type TemplateEnvironment struct {
@@ -39,6 +40,18 @@ type TemplateService struct {
 	HostPortStart  int    `json:"host_port_start"`
 	HostPortEnd    int    `json:"host_port_end"`
 	PasswordSecret string `json:"password_secret,omitempty"`
+}
+
+// TemplateContainerUser controls the optional passwd entry and process user
+// for a workspace. Omitted override fields use the resolved COWS user values.
+// The numeric IDs are pointers so zero remains a valid administrator choice.
+type TemplateContainerUser struct {
+	Username string `json:"username,omitempty"`
+	UID      *int64 `json:"uid,omitempty"`
+	GID      *int64 `json:"gid,omitempty"`
+	Name     string `json:"name,omitempty"`
+	Home     string `json:"home,omitempty"`
+	Shell    string `json:"shell,omitempty"`
 }
 
 type PortAllocation struct {

@@ -56,6 +56,14 @@ environment names, and dangerous runtime configuration. Managed mounts become
 named volumes derived from the COWS workspace ID; arbitrary host paths are not
 available through templates.
 
+Templates may opt into a typed `container_user` block. COWS uses the existing
+application username as the default container username and resolves the
+administrator-controlled UID, GID, display name, home, and shell into a
+passwd entry. Users cannot change these values when creating a workspace.
+Docker receives a controlled UID:GID selection. Rootless Podman uses the
+Libpod create API for the additional passwd entry; the Docker-compatible API
+does not claim to support that Podman-specific operation.
+
 Terminal, desktop, and proxy sessions are authenticated COWS sessions whose
 targets are selected from server-side workspace records and template policy.
 They are not generic reverse proxies.
@@ -184,7 +192,9 @@ Workspace templates are administrator-controlled records. Their current policy
 surface contains an image reference and optional immutable digest, CPU/memory/
 storage defaults and maxima, supported access-method names, allowed roles,
 enabled state, and initial-connection, stopped-retention, and data-retention
-durations. JSON columns store the small access-method and role lists for the
+durations. Typed JSON configuration may also define command, environment,
+managed mounts, loopback service ports, secrets, and an optional container
+identity. JSON columns store the small access-method and role lists for the
 initial SQLite deployment; browser input is converted to typed values and
 validated before persistence. Runtime arguments, mounts, capabilities, devices,
 host networking, and arbitrary environment values are intentionally absent.
