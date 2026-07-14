@@ -28,7 +28,7 @@
   <h2 id="managed-title">Managed containers</h2>
   <div class="table-scroll"><table><thead><tr><th>Workspace</th><th>Owner</th><th>Template</th><th>State</th><th>Observed</th><th>Access and controls</th></tr></thead><tbody>
   {{ range .RuntimeWorkspaces }}<tr>
-    <td><strong>{{ .WorkspaceID }}</strong>{{ if not .Managed }}<span class="badge">Orphan</span>{{ end }}</td>
+    <td><strong>{{ .WorkspaceID }}</strong>{{ if not .Managed }}<span class="badge">Orphan</span>{{ else if not .RuntimePresent }}<span class="badge">Runtime missing</span>{{ end }}</td>
     <td>{{ if .Owner }}{{ .Owner }}{{ else }}<span class="muted">Unknown</span>{{ end }}</td>
     <td>{{ if .Template }}{{ .Template }}{{ else }}<span class="muted">Unknown</span>{{ end }}</td>
     <td>{{ .Observed.State }}</td><td>{{ .Observed.ObservedAt }}</td>
@@ -40,9 +40,9 @@
         {{ else }}
           <form method="post" action="/workspaces/{{ .WorkspaceID }}/start"><input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}"><button class="table-action" type="submit">Start</button></form>
         {{ end }}
-        {{ if .Access.Terminal }}<a class="table-action button-link" href="/workspaces/{{ .WorkspaceID }}/terminal">Terminal</a>{{ end }}
-        {{ if .Access.Desktop }}<a class="table-action button-link" href="/workspaces/{{ .WorkspaceID }}/desktop">Desktop</a>{{ end }}
-        {{ if .Access.Files }}<a class="table-action button-link" href="/workspaces/{{ .WorkspaceID }}/files">Files</a>{{ end }}
+        {{ if and .RuntimePresent .Access.Terminal }}<a class="table-action button-link" href="/workspaces/{{ .WorkspaceID }}/terminal">Terminal</a>{{ end }}
+        {{ if and .RuntimePresent .Access.Desktop }}<a class="table-action button-link" href="/workspaces/{{ .WorkspaceID }}/desktop">Desktop</a>{{ end }}
+        {{ if and .RuntimePresent .Access.Files }}<a class="table-action button-link" href="/workspaces/{{ .WorkspaceID }}/files">Files</a>{{ end }}
       </div>
       {{ else }}<span class="muted">No matching COWS record</span>{{ end }}
     </td>

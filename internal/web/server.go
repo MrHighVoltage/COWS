@@ -176,13 +176,14 @@ type workspaceAccess struct {
 }
 
 type runtimeWorkspaceView struct {
-	Observed    runtime.ObservedWorkspace
-	Owner       string
-	OwnerID     string
-	Template    string
-	WorkspaceID string
-	Access      workspaceAccess
-	Managed     bool
+	Observed       runtime.ObservedWorkspace
+	Owner          string
+	OwnerID        string
+	Template       string
+	WorkspaceID    string
+	Access         workspaceAccess
+	Managed        bool
+	RuntimePresent bool
 }
 
 func New(db *sql.DB, authService *auth.Service, templateService *workspace.Service, quotaService *quota.Service, runtimeAdapter runtime.Runtime, options Options) (*Server, error) {
@@ -1469,14 +1470,26 @@ func (s *Server) runtimeWorkspaceViews(ctx context.Context, actorID string, obse
 	for _, value := range templates {
 		templateByID[value.ID] = value
 	}
-	views := make([]runtimeWorkspaceView, 0, len(observations))
+	observedByWorkspace := make(map[string]runtime.ObservedWorkspace, len(observations))
 	for _, observed := range observations {
-		view := runtimeWorkspaceView{Observed: observed, WorkspaceID: observed.WorkspaceID}
-		value, exists := workspaceByID[observed.WorkspaceID]
-		if !exists {
-			views = append(views, view)
-			continue
+		observedByWorkspace[observed.WorkspaceID] = observed
+	}
+	views := make([]runtimeWorkspaceView, 0, len(values)+len(observations))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		observed, present := observedByWorkspace[value.ID]
+		if !present {
+			observed = runtime.ObservedWorkspace{RuntimeID: value.RuntimeID, WorkspaceID: value.ID, State: runtime.State(value.ObservedState), ObservedAt: value.ObservedAt}
+			if value.RuntimeID != "" {
+				// A stale running record must not hide the fact that Podman no
+				// longer reports the container. Start will recreate it safely.
+				observed.State = runtime.StateUnknown
+				if value.ObservedState != string(runtime.StateRemoved) {
+					observed.State = runtime.State("missing")
+				}
+			}
 		}
+		view := runtimeWorkspaceView{Observed: observed, WorkspaceID: value.ID, Managed: true, RuntimePresent: present}
 		view.Managed = true
 		view.OwnerID = value.OwnerUserID
 		if owner, exists := userByID[value.OwnerUserID]; exists {
@@ -1499,6 +1512,13 @@ func (s *Server) runtimeWorkspaceViews(ctx context.Context, actorID string, obse
 			}
 		}
 		views = append(views, view)
+		seen[value.ID] = struct{}{}
+	}
+	for _, observed := range observations {
+		if _, exists := seen[observed.WorkspaceID]; exists {
+			continue
+		}
+		views = append(views, runtimeWorkspaceView{Observed: observed, WorkspaceID: observed.WorkspaceID})
 	}
 	return views
 }
