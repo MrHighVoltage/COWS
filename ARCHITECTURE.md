@@ -78,7 +78,11 @@ TCP mapping matches the expected container and host ports. COWS then bridges
 the raw VNC stream to a local noVNC core client over an authenticated WebSocket.
 There is no browser-selected target, arbitrary port, or generic reverse-proxy
 route. Desktop sessions use the same 15-minute idle and one-hour maximum
-lifetimes as terminal sessions.
+lifetimes as terminal sessions. For desktop-enabled templates, COWS generates
+an eight-character per-workspace `VNC_PW`, injects it as a sensitive runtime
+environment variable, and supplies it to noVNC only through an authorized
+no-store credentials request. The password is never entered by the user or
+placed in a URL.
 
 ## Request and state flow
 

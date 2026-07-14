@@ -22,10 +22,26 @@ if (root) {
       error.textContent = "The graphical desktop connection was interrupted.";
     }
   });
-  rfb.addEventListener("credentialsrequired", function () {
-    status.textContent = "Credentials required";
-    error.hidden = false;
-    error.textContent = "This workspace requires VNC credentials that are not configured in COWS yet.";
+  rfb.addEventListener("credentialsrequired", async function () {
+    status.textContent = "Authenticating";
+    try {
+      const response = await fetch(root.dataset.credentialsUrl, {
+        credentials: "same-origin",
+        headers: { "Accept": "application/json" }
+      });
+      if (!response.ok) {
+        throw new Error("credentials request failed");
+      }
+      const credentials = await response.json();
+      if (typeof credentials.password !== "string" || credentials.password.length === 0) {
+        throw new Error("credentials response was invalid");
+      }
+      rfb.sendCredentials({ password: credentials.password });
+    } catch (requestError) {
+      status.textContent = "Unavailable";
+      error.hidden = false;
+      error.textContent = "COWS could not authorize the graphical desktop session.";
+    }
   });
   rfb.addEventListener("securityfailure", function () {
     status.textContent = "Unavailable";

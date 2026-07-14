@@ -208,7 +208,7 @@ func TestTemplateConfigurationSnapshotsAndAllocatesPorts(t *testing.T) {
 	if err := runtimeService.StartWorkspace(context.Background(), user.ID, value.ID); err != nil {
 		t.Fatalf("start configured workspace: %v", err)
 	}
-	if fake.lastSpec.NetworkMode != "bridge" || len(fake.lastSpec.Environment) != 2 || fake.lastSpec.Environment[1].Value != strconv.Itoa(allocations[0].HostPort) || len(fake.lastSpec.Mounts) != 1 || len(fake.lastSpec.Ports) != 1 {
+	if fake.lastSpec.NetworkMode != "bridge" || len(fake.lastSpec.Environment) != 3 || fake.lastSpec.Environment[1].Value != strconv.Itoa(allocations[0].HostPort) || fake.lastSpec.Environment[2].Name != "VNC_PW" || fake.lastSpec.Environment[2].Value != value.VNCPassword || !fake.lastSpec.Environment[2].Sensitive || len(fake.lastSpec.Mounts) != 1 || len(fake.lastSpec.Ports) != 1 {
 		t.Fatalf("resolved runtime spec: %+v", fake.lastSpec)
 	}
 }

@@ -19,12 +19,19 @@ only. COWS bridges the resulting raw VNC stream to noVNC. It does not expose a
 public VNC port and does not implement a generic application proxy in this
 milestone.
 
+Desktop-enabled workspaces receive an eight-character random `VNC_PW` at
+workspace creation. COWS injects it into the container as a sensitive
+environment variable and returns it only from an authorized, non-cacheable
+credentials endpoint when noVNC requests it. Users do not enter a second
+password. The secret is stored in the protected SQLite control-plane database;
+it is excluded from ordinary page rendering, URLs, logs, and audit events.
+
 ## Consequences
 
 - VNC-enabled images must listen on the template-configured internal TCP port.
 - The template must define a `desktop` service and enable desktop access.
-- VNC authentication credentials are not provisioned by this milestone; images
-  requiring credentials report that the desktop session is unavailable.
+- The upstream image must honor the `VNC_PW` environment variable. COWS does
+  not require an image rebuild or a user-supplied VNC password.
 - The runtime adapter remains the only component that knows the local service
   forwarding details.
 - A future host agent can replace local loopback dialing without changing the
