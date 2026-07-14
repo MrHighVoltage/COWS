@@ -12,14 +12,26 @@ COWS supports two administrator-controlled template mount types:
 - `directory`: a host directory below `COWS_MOUNT_ROOT`, mounted into the
   container as a bind mount.
 
-The runtime source name is generated as
-`cows-<workspace-id>-<prefix><mount-name><suffix>`. Prefixes and suffixes are
-validated, and users never receive control over the resulting source, host
-path, or runtime arguments. Directory roots are created with restrictive
-permissions before container creation. Explicit workspace deletion moves
-COWS-managed directory roots to `<mount-root>/archive/<managed-name>`;
-named volumes remain owned and removed by the runtime lifecycle. Timeout
-cleanup currently keeps data for later retention handling.
+The active layout is:
+
+```text
+COWS_MOUNT_ROOT/
+  cows-<workspace-id>/
+    <prefix><mount-name><suffix>/
+COWS_MOUNT_ARCHIVE_ROOT/
+  cows-<workspace-id>/
+```
+
+The per-container directory name is derived from the immutable COWS workspace
+identifier because the runtime's opaque ID does not exist before bind sources
+are passed to container creation. Prefixes and suffixes are validated, and
+users never receive control over the resulting source, host path, or runtime
+arguments. The per-container parent remains owned by COWS; rootless Podman
+prepares inner bind directories for the explicit subordinate UID/GID mapping.
+Explicit workspace deletion moves the complete per-container directory to the
+sibling archive root. Both roots must be on the same filesystem for the
+atomic move. Named volumes remain owned and removed by the runtime lifecycle.
+Timeout cleanup currently keeps data for later retention handling.
 
 Templates may set `file_manager: true` only on directory mounts. They must also
 include the `files` access method. The browser file manager resolves mounts
@@ -42,10 +54,10 @@ future privileged host agent and for stronger file auditing and archive policy.
 
 ## Consequences
 
-Directory mounts require a writable local COWS mount root and inherit host
-filesystem availability. Explicit workspace deletion moves managed directory
-mounts to `<mount-root>/archive/<managed-name>` before deleting the workspace
-record. The unique managed name is preserved. Timeout deletion does not archive
-data; it only marks later retention eligibility. The initial file manager does
+Directory mounts require writable local COWS mount and archive roots and
+inherit host filesystem availability. Explicit workspace deletion moves the
+per-container directory before deleting the workspace record. The stable
+container directory name and all inner mount names are preserved. Timeout
+deletion does not archive data; it only marks later retention eligibility. The initial file manager does
 not provide archive extraction, bulk operations, file previews, or named-volume
 access. Those features require additional limits and security tests.

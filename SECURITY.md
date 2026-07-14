@@ -67,11 +67,12 @@ partial operations, and compromised or misconfigured images.
   file manager are exposed through rooted file operations.
 - The optional template `container_user` block is administrator-controlled. It
   is resolved from the server-side COWS username and validated UID/GID, home,
-  shell, and display-name fields. Rootless Podman uses a server-selected
-  `keep-id` mapping so the host COWS account and configured container identity
-  share ownership for read-write directory mounts. Docker must reject a
-  template requiring the Podman-only passwd-entry extension instead of
-  silently dropping it.
+  shell, and display-name fields. Rootless Podman uses explicit UID/GID
+  mappings derived from its subordinate-ID map. The COWS host account is
+  intentionally not mapped into the container; container-owned mount contents
+  therefore use subordinate host IDs. The per-container parent remains
+  COWS-owned for lifecycle moves. Docker must reject a template requiring the
+  Podman-only passwd-entry extension instead of silently dropping it.
 
 ## Access gateway risks
 

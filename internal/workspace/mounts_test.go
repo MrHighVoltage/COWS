@@ -23,7 +23,7 @@ func TestMaterializeMountUsesManagedVolumeAndDirectoryNames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("materialize directory: %v", err)
 	}
-	if value.Type != "bind" || value.Source != "/srv/cows-mounts/cows-workspace-123-workspace-designs-data" {
+	if value.Type != "bind" || value.Source != "/srv/cows-mounts/cows-workspace-123/workspace-designs-data" || !value.RemapOwnership {
 		t.Fatalf("unexpected directory mount: %+v", value)
 	}
 }
@@ -37,16 +37,17 @@ func TestEnsureMountDirectoriesCreatesOnlyDirectoryMounts(t *testing.T) {
 	if err := ensureMountDirectories(root, "workspace-123", mounts); err != nil {
 		t.Fatalf("ensure mount directories: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "cows-workspace-123-directory")); err != nil {
+	containerRoot := filepath.Join(root, "cows-workspace-123")
+	if _, err := os.Stat(filepath.Join(containerRoot, "directory")); err != nil {
 		t.Fatalf("directory mount was not created: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "cows-workspace-123-volume")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(root, "cows-workspace-123", "volume")); !os.IsNotExist(err) {
 		t.Fatalf("volume mount unexpectedly created a host directory: %v", err)
 	}
 	if err := removeMountDirectories(root, "workspace-123", mounts); err != nil {
 		t.Fatalf("remove mount directories: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "cows-workspace-123-directory")); !os.IsNotExist(err) {
+	if _, err := os.Stat(containerRoot); !os.IsNotExist(err) {
 		t.Fatalf("directory mount was not removed: %v", err)
 	}
 }
@@ -61,14 +62,15 @@ func TestArchiveMountDirectoriesPreservesManagedNames(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, managedName, "saved.txt"), []byte("saved"), 0o600); err != nil {
 		t.Fatalf("write managed data: %v", err)
 	}
-	if err := archiveMountDirectories(root, "workspace-123", []domain.TemplateMount{mount}); err != nil {
+	archiveRoot := filepath.Join(t.TempDir(), "cows-mounts-archive")
+	if err := archiveMountDirectories(root, archiveRoot, "workspace-123", []domain.TemplateMount{mount}); err != nil {
 		t.Fatalf("archive mount directory: %v", err)
 	}
-	archived := filepath.Join(root, "archive", managedName, "saved.txt")
+	archived := filepath.Join(archiveRoot, "cows-workspace-123", "designs", "saved.txt")
 	if value, err := os.ReadFile(archived); err != nil || string(value) != "saved" {
 		t.Fatalf("archived data = %q, error = %v", value, err)
 	}
-	if _, err := os.Stat(filepath.Join(root, managedName)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(root, "cows-workspace-123")); !os.IsNotExist(err) {
 		t.Fatalf("managed directory still exists: %v", err)
 	}
 }

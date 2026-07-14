@@ -48,11 +48,12 @@ type TemplateInput struct {
 }
 
 type Service struct {
-	store     repository.Store
-	scheduler *quota.Scheduler
-	runtime   runtime.Runtime
-	mountRoot string
-	now       func() time.Time
+	store            repository.Store
+	scheduler        *quota.Scheduler
+	runtime          runtime.Runtime
+	mountRoot        string
+	mountArchiveRoot string
+	now              func() time.Time
 }
 
 func New(store repository.Store, schedulers ...*quota.Scheduler) *Service {
@@ -64,8 +65,13 @@ func NewWithRuntime(store repository.Store, runtimeAdapter runtime.Runtime, sche
 }
 
 func NewWithRuntimeAndMountRoot(store repository.Store, runtimeAdapter runtime.Runtime, mountRoot string, schedulers ...*quota.Scheduler) *Service {
+	return NewWithRuntimeAndMountRoots(store, runtimeAdapter, mountRoot, mountRoot+"-archive", schedulers...)
+}
+
+func NewWithRuntimeAndMountRoots(store repository.Store, runtimeAdapter runtime.Runtime, mountRoot, mountArchiveRoot string, schedulers ...*quota.Scheduler) *Service {
 	service := newService(store, runtimeAdapter, schedulers...)
 	service.mountRoot = mountRoot
+	service.mountArchiveRoot = mountArchiveRoot
 	return service
 }
 

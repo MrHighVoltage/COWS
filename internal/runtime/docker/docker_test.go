@@ -284,13 +284,22 @@ func TestCreateWorkspaceUsesPodmanLibpodForPasswdEntry(t *testing.T) {
 		case "/version":
 			return dockerResponse(http.StatusOK, `{"ApiVersion":"4.9"}`), nil
 		case "/v4.9/info":
-			return dockerResponse(http.StatusOK, `{"NCPU":8,"MemTotal":8589934592,"MemoryLimit":true,"PidsLimit":true,"CgroupVersion":"2","Rootless":true}`), nil
+			return dockerResponse(http.StatusOK, `{"NCPU":8,"MemTotal":8589934592,"MemoryLimit":true,"PidsLimit":true,"CgroupVersion":"2","Rootless":true,"IDMappings":{"UIDMap":[{"ContainerID":0,"HostID":100000,"Size":65536}],"GIDMap":[{"ContainerID":0,"HostID":100000,"Size":65536}]}}`), nil
 		case "/v4.9/libpod/containers/create":
 			var body struct {
 				User        string `json:"user"`
 				PasswdEntry string `json:"passwd_entry"`
 				UserNS      struct {
-					Mode string `json:"nsmode"`
+					UIDMappings []struct {
+						ContainerID int64 `json:"container_id"`
+						HostID      int64 `json:"host_id"`
+						Size        int64 `json:"size"`
+					} `json:"uidmapping"`
+					GIDMappings []struct {
+						ContainerID int64 `json:"container_id"`
+						HostID      int64 `json:"host_id"`
+						Size        int64 `json:"size"`
+					} `json:"gidmapping"`
 				} `json:"userns"`
 				NetNS struct {
 					Mode string `json:"nsmode"`
@@ -299,7 +308,7 @@ func TestCreateWorkspaceUsesPodmanLibpodForPasswdEntry(t *testing.T) {
 			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 				t.Fatalf("decode Podman create request: %v", err)
 			}
-			if body.User != "1000:1001" || body.PasswdEntry != "alice:x:1000:1001:Alice:/home/alice:/bin/bash" || body.UserNS.Mode != "keep-id:uid=1000,gid=1001" || body.NetNS.Mode != "none" {
+			if body.User != "1000:1001" || body.PasswdEntry != "alice:x:1000:1001:Alice:/home/alice:/bin/bash" || len(body.UserNS.UIDMappings) != 1 || len(body.UserNS.GIDMappings) != 1 || body.UserNS.UIDMappings[0].ContainerID != 0 || body.UserNS.UIDMappings[0].HostID != 1 || body.UserNS.UIDMappings[0].Size != 65535 || body.UserNS.GIDMappings[0].HostID != 1 || body.NetNS.Mode != "none" {
 				t.Fatalf("unexpected Podman identity configuration: %+v", body)
 			}
 			return dockerResponse(http.StatusCreated, `{"Id":"abcdef0123456789"}`), nil
@@ -315,6 +324,19 @@ func TestCreateWorkspaceUsesPodmanLibpodForPasswdEntry(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("create Podman workspace: %v", err)
+	}
+}
+
+func TestExplicitRootlessMappingLeavesInvokingUserUnmapped(t *testing.T) {
+	mappings, err := explicitRootlessMapping([]idMapping{{ContainerID: 0, HostID: 100000, Size: 65536}}, 1000)
+	if err != nil {
+		t.Fatalf("build explicit mapping: %v", err)
+	}
+	if len(mappings) != 1 || mappings[0] != (idMapping{ContainerID: 0, HostID: 1, Size: 65535}) {
+		t.Fatalf("unexpected mapping: %+v", mappings)
+	}
+	if _, err := explicitRootlessMapping([]idMapping{{ContainerID: 0, HostID: 100000, Size: 1000}}, 999); !errors.Is(err, runtime.ErrNotSupported) {
+		t.Fatalf("expected out-of-range identity to be rejected, got %v", err)
 	}
 }
 

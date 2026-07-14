@@ -77,8 +77,10 @@ host settings row only when it does not exist; administrators can change host
 storage and reserved CPU, memory, and storage in **Settings** without
 restarting COWS. Zero leaves storage capacity unknown and causes workspace
 creation to fail closed. Directory mounts are created below `COWS_MOUNT_ROOT`
-(default `./data/cows-mounts`) using engine-managed workspace names. Only
-directory mounts marked for file-manager access are visible in the browser;
+(default `./data/cows-mounts`) in per-container directories named from the
+immutable COWS workspace identifier. Explicit deletion moves that complete
+directory to `COWS_MOUNT_ARCHIVE_ROOT` (default `./data/cows-mounts-archive`)
+on the same filesystem. Only directory mounts marked for file-manager access are visible in the browser;
 named volumes remain runtime-managed.
 
 ## Security warning

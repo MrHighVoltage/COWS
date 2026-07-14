@@ -83,6 +83,10 @@ type Mount struct {
 	Source        string
 	ContainerPath string
 	ReadOnly      bool
+	// RemapOwnership asks a runtime with user namespaces to prepare a bind
+	// mount for the configured container identity. It is ignored by runtimes
+	// that do not support this operation.
+	RemapOwnership bool
 }
 
 type PortBinding struct {

@@ -28,10 +28,14 @@ cannot represent Podman's passwd-entry extension, so a Docker runtime rejects
 a specification that requires that extension instead of silently ignoring it.
 For Podman, the adapter uses the Libpod container-create endpoint and sends
 the typed `user`, `passwd_entry`, resource, mount, network, and port fields.
+In rootless mode it also sends explicit UID/GID mappings covering the
+subordinate range reported by Podman. The invoking COWS host UID/GID is not
+mapped into the container, so container-owned files use subordinate host IDs.
 
 This is intentionally not a general runtime-argument escape hatch. Privileged
 mode, host networking, arbitrary capabilities, host binds, device access,
-user namespaces, and group-entry editing remain outside the template surface.
+arbitrary user namespace maps, and group-entry editing remain outside the
+template surface.
 
 ## Consequences
 

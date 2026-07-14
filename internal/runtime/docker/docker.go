@@ -256,17 +256,19 @@ func (a *Adapter) createPodmanWorkspace(ctx context.Context, spec runtime.Worksp
 		HostIP        string `json:"host_ip"`
 		Protocol      string `json:"protocol"`
 	}
+	type userNamespace struct {
+		UIDMappings []idMapping `json:"uidmapping,omitempty"`
+		GIDMappings []idMapping `json:"gidmapping,omitempty"`
+	}
 	body := struct {
-		Name        string            `json:"name,omitempty"`
-		Image       string            `json:"image"`
-		Command     []string          `json:"command,omitempty"`
-		Env         map[string]string `json:"env,omitempty"`
-		Labels      map[string]string `json:"labels,omitempty"`
-		User        string            `json:"user,omitempty"`
-		PasswdEntry string            `json:"passwd_entry,omitempty"`
-		UserNS      struct {
-			Mode string `json:"nsmode"`
-		} `json:"userns,omitempty"`
+		Name           string            `json:"name,omitempty"`
+		Image          string            `json:"image"`
+		Command        []string          `json:"command,omitempty"`
+		Env            map[string]string `json:"env,omitempty"`
+		Labels         map[string]string `json:"labels,omitempty"`
+		User           string            `json:"user,omitempty"`
+		PasswdEntry    string            `json:"passwd_entry,omitempty"`
+		UserNS         *userNamespace    `json:"userns,omitempty"`
 		NetNS          map[string]string `json:"netns,omitempty"`
 		Mounts         []podmanMount     `json:"mounts,omitempty"`
 		PortMappings   []portMapping     `json:"portmappings,omitempty"`
@@ -285,8 +287,22 @@ func (a *Adapter) createPodmanWorkspace(ctx context.Context, spec runtime.Worksp
 	}{Image: imageReference, Command: append([]string(nil), spec.Command...), Env: environment, Labels: copyLabels(spec.Labels), PasswdEntry: spec.User.PasswdEntry}
 	body.Name = "cows-" + spec.WorkspaceID
 	body.User = strconv.FormatInt(spec.User.UID, 10) + ":" + strconv.FormatInt(spec.User.GID, 10)
-	body.UserNS.Mode = "keep-id:uid=" + strconv.FormatInt(spec.User.UID, 10) + ",gid=" + strconv.FormatInt(spec.User.GID, 10)
 	body.NetNS = map[string]string{"nsmode": networkMode}
+	info, err := a.hostInfo(ctx)
+	if err != nil {
+		return runtime.WorkspaceHandle{}, err
+	}
+	if info.Rootless {
+		uidMappings, err := explicitRootlessMapping(info.IDMappings.UIDMap, spec.User.UID)
+		if err != nil {
+			return runtime.WorkspaceHandle{}, err
+		}
+		gidMappings, err := explicitRootlessMapping(info.IDMappings.GIDMap, spec.User.GID)
+		if err != nil {
+			return runtime.WorkspaceHandle{}, err
+		}
+		body.UserNS = &userNamespace{UIDMappings: uidMappings, GIDMappings: gidMappings}
+	}
 	body.ResourceLimits.CPU.Quota = spec.Limits.CPUMillis * 100
 	body.ResourceLimits.CPU.Period = 100000
 	body.ResourceLimits.Memory.Limit = spec.Limits.MemoryBytes
@@ -300,7 +316,7 @@ func (a *Adapter) createPodmanWorkspace(ctx context.Context, spec runtime.Worksp
 		if mountType == "" {
 			mountType = "volume"
 		}
-		body.Mounts = append(body.Mounts, podmanMount{Type: mountType, Source: source, Destination: value.ContainerPath, Options: readOnlyOptions(value.ReadOnly)})
+		body.Mounts = append(body.Mounts, podmanMount{Type: mountType, Source: source, Destination: value.ContainerPath, Options: readOnlyOptions(value.ReadOnly, value.RemapOwnership)})
 	}
 	for _, value := range spec.Ports {
 		body.PortMappings = append(body.PortMappings, portMapping{ContainerPort: value.ContainerPort, HostPort: value.HostPort, HostIP: value.HostIP, Protocol: value.Protocol})
@@ -318,11 +334,35 @@ func (a *Adapter) createPodmanWorkspace(ctx context.Context, spec runtime.Worksp
 	return runtime.WorkspaceHandle{RuntimeID: response.ID, WorkspaceID: spec.WorkspaceID}, nil
 }
 
-func readOnlyOptions(readOnly bool) []string {
+func readOnlyOptions(readOnly, remapOwnership bool) []string {
+	options := make([]string, 0, 2)
 	if readOnly {
-		return []string{"ro"}
+		options = append(options, "ro")
 	}
-	return nil
+	if remapOwnership {
+		options = append(options, "U")
+	}
+	return options
+}
+
+func explicitRootlessMapping(mappings []idMapping, containerID int64) ([]idMapping, error) {
+	if containerID < 0 {
+		return nil, fmt.Errorf("%w: container identity must not be negative", runtime.ErrNotSupported)
+	}
+	var total int64
+	for _, mapping := range mappings {
+		if mapping.Size <= 0 || mapping.ContainerID < 0 || mapping.HostID < 0 {
+			return nil, fmt.Errorf("%w: invalid rootless ID mapping", runtime.ErrNotSupported)
+		}
+		total += mapping.Size
+	}
+	// Podman's rootless mapping reserves intermediate ID 0 for the invoking
+	// host account. Mapping the remaining range explicitly keeps that account
+	// outside the container while still making every normal container ID usable.
+	if total <= 1 || containerID >= total-1 {
+		return nil, fmt.Errorf("%w: container identity %d is outside the available subordinate ID range", runtime.ErrNotSupported, containerID)
+	}
+	return []idMapping{{ContainerID: 0, HostID: 1, Size: total - 1}}, nil
 }
 
 func validRuntimeConfiguration(spec runtime.WorkspaceSpec) bool {
@@ -547,6 +587,17 @@ type containerInspect struct {
 	} `json:"NetworkSettings"`
 }
 
+type idMapping struct {
+	ContainerID int64 `json:"container_id"`
+	HostID      int64 `json:"host_id"`
+	Size        int64 `json:"size"`
+}
+
+type idMappings struct {
+	UIDMap []idMapping `json:"uidmap"`
+	GIDMap []idMapping `json:"gidmap"`
+}
+
 func (a *Adapter) version(ctx context.Context) (string, error) {
 	var response struct {
 		APIVersion string `json:"ApiVersion"`
@@ -561,15 +612,16 @@ func (a *Adapter) version(ctx context.Context) (string, error) {
 }
 
 type hostInfo struct {
-	NCPU            int      `json:"NCPU"`
-	MemTotal        int64    `json:"MemTotal"`
-	MemoryLimit     bool     `json:"MemoryLimit"`
-	PidsLimit       bool     `json:"PidsLimit"`
-	CPUCFSQuota     bool     `json:"CpuCfsQuota"`
-	CPUCFSPeriod    bool     `json:"CpuCfsPeriod"`
-	CgroupVersion   string   `json:"CgroupVersion"`
-	Rootless        bool     `json:"Rootless"`
-	SecurityOptions []string `json:"SecurityOptions"`
+	NCPU            int        `json:"NCPU"`
+	MemTotal        int64      `json:"MemTotal"`
+	MemoryLimit     bool       `json:"MemoryLimit"`
+	PidsLimit       bool       `json:"PidsLimit"`
+	CPUCFSQuota     bool       `json:"CpuCfsQuota"`
+	CPUCFSPeriod    bool       `json:"CpuCfsPeriod"`
+	CgroupVersion   string     `json:"CgroupVersion"`
+	Rootless        bool       `json:"Rootless"`
+	SecurityOptions []string   `json:"SecurityOptions"`
+	IDMappings      idMappings `json:"IDMappings"`
 }
 
 func (a *Adapter) hostInfo(ctx context.Context) (hostInfo, error) {

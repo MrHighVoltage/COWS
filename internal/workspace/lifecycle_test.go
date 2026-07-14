@@ -166,8 +166,7 @@ func TestManualDeleteRemovesWorkspaceRecordAfterContainer(t *testing.T) {
 	if err := service.DeleteWorkspace(context.Background(), user.ID, value.ID); err != nil {
 		t.Fatalf("delete workspace: %v", err)
 	}
-	managedName := mountRootName(value.ID, templateInput.Configuration.Mounts[0])
-	if _, err := os.Stat(filepath.Join(mountRoot, "archive", managedName)); err != nil {
+	if _, err := os.Stat(filepath.Join(mountRoot+"-archive", managedContainerName(value.ID), "designs")); err != nil {
 		t.Fatalf("archived mount directory: %v", err)
 	}
 	if fake.removed != 1 {
