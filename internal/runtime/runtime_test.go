@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -30,6 +31,20 @@ func TestManagedLabels(t *testing.T) {
 	labels := ManagedLabels("workspace-123")
 	if labels[ManagedLabel] != "true" || labels[WorkspaceIDLabel] != "workspace-123" {
 		t.Fatalf("unexpected managed labels: %#v", labels)
+	}
+}
+
+func TestFileEntryJSONPreservesDirectoryMetadata(t *testing.T) {
+	encoded, err := json.Marshal(FileEntry{Name: "project", IsDir: true, Size: 4096})
+	if err != nil {
+		t.Fatalf("marshal file entry: %v", err)
+	}
+	var decoded FileEntry
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("unmarshal file entry: %v", err)
+	}
+	if !decoded.IsDir || decoded.Name != "project" || decoded.Size != 4096 {
+		t.Fatalf("decoded file entry = %+v", decoded)
 	}
 }
 
