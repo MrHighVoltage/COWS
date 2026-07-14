@@ -19,19 +19,23 @@ only. COWS bridges the resulting raw VNC stream to noVNC. It does not expose a
 public VNC port and does not implement a generic application proxy in this
 milestone.
 
-Desktop-enabled workspaces receive an eight-character random `VNC_PW` at
-workspace creation. COWS injects it into the container as a sensitive
-environment variable and returns it only from an authorized, non-cacheable
-credentials endpoint when noVNC requests it. Users do not enter a second
-password. The secret is stored in the protected SQLite control-plane database;
-it is excluded from ordinary page rendering, URLs, logs, and audit events.
+Templates may define named static or generated secrets. The desktop service
+explicitly selects its password secret, and the template uses a placeholder
+such as `{{cows.secret.vnc_password}}` in `VNC_PW` or another environment
+value. Generated values are resolved once per workspace; COWS injects the
+resolved value as a sensitive environment variable and returns the selected
+password only from an authorized, non-cacheable credentials endpoint when
+noVNC requests it. Users do not enter a second password. Resolved secrets are
+stored in the protected SQLite control-plane database and excluded from
+ordinary page rendering, URLs, logs, and audit events.
 
 ## Consequences
 
 - VNC-enabled images must listen on the template-configured internal TCP port.
 - The template must define a `desktop` service and enable desktop access.
 - The upstream image must honor the `VNC_PW` environment variable. COWS does
-  not require an image rebuild or a user-supplied VNC password.
+  not require an image rebuild; the administrator chooses whether the template
+  uses a static password or a generated password and its length.
 - The runtime adapter remains the only component that knows the local service
   forwarding details.
 - A future host agent can replace local loopback dialing without changing the

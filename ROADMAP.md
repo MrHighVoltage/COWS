@@ -77,9 +77,10 @@ remain hardening work.
 Completed initial implementation: local noVNC 1.6.0 core modules, an
 authenticated COWS WebSocket, template-controlled `desktop` TCP service access,
 loopback port verification, session cleanup, and tests proving that non-loopback
-VNC mappings are rejected. Desktop-enabled workspaces now receive a generated
-per-workspace `VNC_PW`, which COWS supplies automatically to noVNC after
-authorization. Browser accessibility review and runtime integration
+VNC mappings are rejected. Templates can define static or generated secrets,
+bind one to the desktop service, and use it through `{{cows.secret.name}}` in
+environment values; COWS supplies the selected value automatically to noVNC
+after authorization. Browser accessibility review and runtime integration
 tests against VNC-enabled Docker and Podman images remain hardening work.
 
 ## Milestone 6: Workspace web applications

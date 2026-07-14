@@ -170,9 +170,10 @@ func TestTemplateConfigurationSnapshotsAndAllocatesPorts(t *testing.T) {
 	input := validTemplateInput()
 	input.Configuration = domain.TemplateConfiguration{
 		Command:     []string{"/bin/sh", "-l"},
-		Environment: []domain.TemplateEnvironment{{Name: "WORKSPACE_ID", Value: "{{cows.workspace_id}}"}, {Name: "DESKTOP_PORT", Value: "{{cows.service.desktop.port}}"}},
+		Environment: []domain.TemplateEnvironment{{Name: "WORKSPACE_ID", Value: "{{cows.workspace_id}}"}, {Name: "DESKTOP_PORT", Value: "{{cows.service.desktop.port}}"}, {Name: "VNC_PW", Value: "{{cows.secret.vnc_password}}", Sensitive: true}, {Name: "STATIC_SECRET", Value: "{{cows.secret.fixed}}", Sensitive: true}},
+		Secrets:     []domain.TemplateSecret{{Name: "vnc_password", Generate: true, Length: 8}, {Name: "fixed", Value: "static-value"}},
 		Mounts:      []domain.TemplateMount{{Name: "workspace-data", ContainerPath: "/workspace"}},
-		Services:    []domain.TemplateService{{Name: "desktop", Protocol: "tcp", ContainerPort: 5900, PortPool: "desktop", HostPortStart: 10000, HostPortEnd: 10099}},
+		Services:    []domain.TemplateService{{Name: "desktop", Protocol: "tcp", ContainerPort: 5900, PortPool: "desktop", HostPortStart: 10000, HostPortEnd: 10099, PasswordSecret: "vnc_password"}},
 	}
 	template, err := service.CreateTemplate(context.Background(), adminID, input)
 	if err != nil {
@@ -196,7 +197,7 @@ func TestTemplateConfigurationSnapshotsAndAllocatesPorts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create configured workspace: %v", err)
 	}
-	if value.TemplateRevision != 1 || len(value.TemplateConfiguration.Services) != 1 {
+	if value.TemplateRevision != 1 || len(value.TemplateConfiguration.Services) != 1 || len(value.TemplateSecrets["vnc_password"]) != 8 {
 		t.Fatalf("workspace configuration snapshot: revision=%d config=%+v", value.TemplateRevision, value.TemplateConfiguration)
 	}
 	allocations, err := store.ListWorkspacePortAllocations(context.Background(), value.ID)
@@ -208,7 +209,7 @@ func TestTemplateConfigurationSnapshotsAndAllocatesPorts(t *testing.T) {
 	if err := runtimeService.StartWorkspace(context.Background(), user.ID, value.ID); err != nil {
 		t.Fatalf("start configured workspace: %v", err)
 	}
-	if fake.lastSpec.NetworkMode != "bridge" || len(fake.lastSpec.Environment) != 3 || fake.lastSpec.Environment[1].Value != strconv.Itoa(allocations[0].HostPort) || fake.lastSpec.Environment[2].Name != "VNC_PW" || fake.lastSpec.Environment[2].Value != value.VNCPassword || !fake.lastSpec.Environment[2].Sensitive || len(fake.lastSpec.Mounts) != 1 || len(fake.lastSpec.Ports) != 1 {
+	if fake.lastSpec.NetworkMode != "bridge" || len(fake.lastSpec.Environment) != 4 || fake.lastSpec.Environment[1].Value != strconv.Itoa(allocations[0].HostPort) || fake.lastSpec.Environment[2].Name != "VNC_PW" || fake.lastSpec.Environment[2].Value != value.TemplateSecrets["vnc_password"] || !fake.lastSpec.Environment[2].Sensitive || fake.lastSpec.Environment[3].Value != "static-value" || len(fake.lastSpec.Mounts) != 1 || len(fake.lastSpec.Ports) != 1 {
 		t.Fatalf("resolved runtime spec: %+v", fake.lastSpec)
 	}
 }

@@ -384,12 +384,12 @@ func (s *Store) FindWorkspaceByOwnerAndName(ctx context.Context, ownerUserID, na
 
 func (s *Store) CreateWorkspace(ctx context.Context, workspace domain.Workspace) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO workspaces
-		(id, owner_user_id, template_id, template_revision, template_configuration_json, template_image_reference, template_image_digest, vnc_password, name, desired_state, observed_state, runtime_id, observed_error,
+		(id, owner_user_id, template_id, template_revision, template_configuration_json, template_secrets_json, template_image_reference, template_image_digest, name, desired_state, observed_state, runtime_id, observed_error,
 		 allocated_cpu_millis, allocated_memory_bytes, allocated_storage_bytes, initial_connection_timeout_seconds,
 		 stopped_retention_seconds, data_retention_seconds, created_at, updated_at, observed_at, started_at,
 		 last_connected_at, stopped_at, container_deleted_at, data_archive_eligible_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, workspace.ID, workspace.OwnerUserID, workspace.TemplateID,
-		workspace.TemplateRevision, templateConfigurationJSON(workspace.TemplateConfiguration), workspace.TemplateImageReference, workspace.TemplateImageDigest, workspace.VNCPassword, workspace.Name, workspace.DesiredState, workspace.ObservedState, workspace.RuntimeID, workspace.ObservedError,
+		workspace.TemplateRevision, templateConfigurationJSON(workspace.TemplateConfiguration), templateSecretsJSON(workspace.TemplateSecrets), workspace.TemplateImageReference, workspace.TemplateImageDigest, workspace.Name, workspace.DesiredState, workspace.ObservedState, workspace.RuntimeID, workspace.ObservedError,
 		workspace.AllocatedCPUMillis, workspace.AllocatedMemoryBytes, workspace.AllocatedStorageBytes,
 		workspace.InitialConnectionTimeoutSeconds, workspace.StoppedRetentionSeconds, workspace.DataRetentionSeconds,
 		unixOrZero(workspace.CreatedAt), unixOrZero(workspace.UpdatedAt), unixOrZero(workspace.ObservedAt), unixOrZero(workspace.StartedAt),
@@ -576,7 +576,7 @@ func (s *Store) UpsertHostSettings(ctx context.Context, settings domain.HostSett
 }
 
 const workspaceSelect = `SELECT id, owner_user_id, template_id, name, desired_state, observed_state, runtime_id,
-	template_revision, template_configuration_json, template_image_reference, template_image_digest, vnc_password, observed_error, allocated_cpu_millis, allocated_memory_bytes, allocated_storage_bytes, created_at, updated_at,
+	template_revision, template_configuration_json, template_secrets_json, template_image_reference, template_image_digest, observed_error, allocated_cpu_millis, allocated_memory_bytes, allocated_storage_bytes, created_at, updated_at,
 	observed_at, initial_connection_timeout_seconds, stopped_retention_seconds, data_retention_seconds,
 	started_at, last_connected_at, stopped_at, container_deleted_at, data_archive_eligible_at,
 	operation, operation_status, operation_error, operation_started_at, operation_updated_at FROM workspaces`
@@ -606,6 +606,7 @@ func scanWorkspace(row scanner) (domain.Workspace, error) {
 		workspace                                                                 domain.Workspace
 		desiredState                                                              string
 		templateConfiguration                                                     string
+		templateSecrets                                                           string
 		createdUnix                                                               int64
 		updatedUnix                                                               int64
 		observedAtUnix                                                            int64
@@ -614,7 +615,7 @@ func scanWorkspace(row scanner) (domain.Workspace, error) {
 		operation, operationStatus, operationError                                string
 	)
 	if err := row.Scan(&workspace.ID, &workspace.OwnerUserID, &workspace.TemplateID, &workspace.Name, &desiredState,
-		&workspace.ObservedState, &workspace.RuntimeID, &workspace.TemplateRevision, &templateConfiguration, &workspace.TemplateImageReference, &workspace.TemplateImageDigest, &workspace.VNCPassword, &workspace.ObservedError, &workspace.AllocatedCPUMillis,
+		&workspace.ObservedState, &workspace.RuntimeID, &workspace.TemplateRevision, &templateConfiguration, &templateSecrets, &workspace.TemplateImageReference, &workspace.TemplateImageDigest, &workspace.ObservedError, &workspace.AllocatedCPUMillis,
 		&workspace.AllocatedMemoryBytes, &workspace.AllocatedStorageBytes, &createdUnix, &updatedUnix,
 		&observedAtUnix, &workspace.InitialConnectionTimeoutSeconds, &workspace.StoppedRetentionSeconds,
 		&workspace.DataRetentionSeconds, &startedUnix, &connectedUnix, &stoppedUnix, &deletedUnix, &archiveEligibleUnix,
@@ -645,6 +646,11 @@ func scanWorkspace(row scanner) (domain.Workspace, error) {
 			return domain.Workspace{}, fmt.Errorf("decode workspace template configuration: %w", err)
 		}
 	}
+	if templateSecrets != "" && templateSecrets != "{}" {
+		if err := json.Unmarshal([]byte(templateSecrets), &workspace.TemplateSecrets); err != nil {
+			return domain.Workspace{}, fmt.Errorf("decode workspace template secrets: %w", err)
+		}
+	}
 	return workspace, nil
 }
 
@@ -673,6 +679,14 @@ func unixOrZero(value time.Time) int64 {
 }
 
 func templateConfigurationJSON(value domain.TemplateConfiguration) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "{}"
+	}
+	return string(encoded)
+}
+
+func templateSecretsJSON(value map[string]string) string {
 	encoded, err := json.Marshal(value)
 	if err != nil {
 		return "{}"
