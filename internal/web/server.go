@@ -914,9 +914,13 @@ func (s *Server) workspaceFileMkdir(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) workspaceFileDelete(w http.ResponseWriter, r *http.Request) {
-	s.workspaceFileMutation(w, r, func(user *domain.User, workspaceID string) error {
+	s.workspaceFileMutationTo(w, r, func(user *domain.User, workspaceID string) error {
 		return s.files.Delete(r.Context(), user.ID, workspaceID, r.FormValue("mount"), r.FormValue("path"))
-	})
+	}, fileDeleteParent)
+}
+
+func fileDeleteParent(relativePath string) string {
+	return path.Dir(relativePath)
 }
 
 func (s *Server) workspaceFileRename(w http.ResponseWriter, r *http.Request) {
@@ -953,6 +957,10 @@ func (s *Server) workspaceFileUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) workspaceFileMutation(w http.ResponseWriter, r *http.Request, action func(*domain.User, string) error) {
+	s.workspaceFileMutationTo(w, r, action, func(relativePath string) string { return relativePath })
+}
+
+func (s *Server) workspaceFileMutationTo(w http.ResponseWriter, r *http.Request, action func(*domain.User, string) error, redirectPath func(string) string) {
 	user, ok := s.requireUser(w, r)
 	if !ok {
 		return
@@ -970,7 +978,7 @@ func (s *Server) workspaceFileMutation(w http.ResponseWriter, r *http.Request, a
 		s.renderFilePageError(w, r, user, r.PathValue("id"), r.FormValue("mount"), r.FormValue("path"), err)
 		return
 	}
-	s.redirectFiles(w, r, r.PathValue("id"), r.FormValue("mount"), r.FormValue("path"))
+	s.redirectFiles(w, r, r.PathValue("id"), r.FormValue("mount"), redirectPath(r.FormValue("path")))
 }
 
 func (s *Server) redirectFiles(w http.ResponseWriter, r *http.Request, workspaceID, mountName, relativePath string) {

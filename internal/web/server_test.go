@@ -60,6 +60,24 @@ func TestQuotaProgressClass(t *testing.T) {
 	}
 }
 
+func TestFileDeleteParent(t *testing.T) {
+	tests := []struct {
+		path string
+		want string
+	}{
+		{path: "file.txt", want: "."},
+		{path: "folder/file.txt", want: "folder"},
+		{path: "one/two/folder", want: "one/two"},
+	}
+	for _, test := range tests {
+		t.Run(test.path, func(t *testing.T) {
+			if got := fileDeleteParent(test.path); got != test.want {
+				t.Fatalf("fileDeleteParent(%q) = %q, want %q", test.path, got, test.want)
+			}
+		})
+	}
+}
+
 func TestHomeRendersLocalServerDrivenPage(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
