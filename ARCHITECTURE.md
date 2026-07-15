@@ -273,8 +273,10 @@ recorded as orphan audit events and are not removed automatically.
 
 Lifecycle operations persist their current operation, status, safe user-facing
 error category, and timestamps. Workspace pages poll a server-rendered HTMX
-fragment so observed state and operation results update without duplicating
-authoritative state in the browser. Resource summaries show allocations across
+fragment so operation results and controls update without duplicating
+authoritative state in the browser. Desired and observed state remain available
+to reconciliation and administrator diagnostics, but are intentionally hidden
+from the ordinary user workspace table. Resource summaries show allocations across
 all workspace records, including stopped workspaces, alongside the applicable
 quota or explicit unassigned/unlimited status.
 
