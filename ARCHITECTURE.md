@@ -23,11 +23,14 @@ flowchart LR
     Runtime --> Container[Private managed containers]
     Reconcile[Reconciliation worker] --> Runtime
     Reconcile --> Repo
+    Notify[Notification worker] --> Repo
+    Notify --> SMTP[Optional SMTP relay]
 ```
 
 ## Security boundaries
 
-The public boundary is the COWS HTTPS endpoint. The browser supplies user
+The public boundary is the COWS HTTP service, normally placed behind a reverse
+proxy that provides HTTPS. The browser supplies user
 intent, not a container ID, backend address, port, image, or runtime argument.
 Handlers authenticate the request and authorize the concrete operation before
 calling a domain service. Domain services repeat ownership and policy checks
@@ -118,6 +121,30 @@ Directory downloads can be streamed as bounded ZIP archives without
 temporary files; bounded uploads are implemented, while archive extraction and
 file previews are deferred.
 
+## Accounts and registration
+
+Local accounts use bcrypt password hashes and opaque server-side sessions.
+Administrator-created accounts are marked for a mandatory first-login
+password change. Authenticated users can change their password from the
+account page after supplying the current password. Self-registration is
+disabled by default and, when enabled, accepts only user identity fields and
+requires an email address. The server applies configured quota values and
+resolves configured default group names; role, quota, and group selection are
+never accepted from the browser. SQLite persists the complete registration in
+one transaction so a failed default assignment cannot leave a partial account.
+
+There is no email verification or password-reset flow yet. Those flows need
+short-lived single-use tokens and a recovery policy before they are enabled.
+
+## Email notification boundary
+
+Timeout evaluation and reconciliation remain authoritative. A separate
+notification worker observes upcoming stop and deletion deadlines, creates a
+deduplicated SQLite event, and attempts delivery through an optional standard
+library SMTP sender. Delivery status and retry timing are control-plane data,
+but message content never contains secrets, terminal output, runtime IDs, host
+paths, or internal addresses. A mail failure cannot prevent a stop or delete.
+
 ## Request and state flow
 
 ```mermaid
@@ -164,8 +191,8 @@ retention deadline or cleanup action.
 
 The lifecycle worker evaluates these deadlines on the server. A browser timer
 is never authoritative. User pages show the effective durations, current phase,
-and any due or upcoming deadline. The policy model leaves room for future
-warning events and email delivery without making email a lifecycle dependency.
+and any due or upcoming deadline. The policy model creates advisory warning
+events and optional email delivery without making email a lifecycle dependency.
 
 Explicit user or administrator deletion is separate from timeout cleanup. Once
 the runtime container is confirmed removed, explicit deletion moves the

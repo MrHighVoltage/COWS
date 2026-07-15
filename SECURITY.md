@@ -151,6 +151,21 @@ the workspace row is removed. A retained-volume record is not authorization to
 mount, inspect, restore, or delete that volume. Those actions require a future
 administrator-only workflow with separate authorization and audit events.
 
+## Registration and email risks
+
+Self-registration is disabled by default. Enabling it permits unauthenticated
+account creation and therefore requires conservative default quotas, rate
+limiting, monitoring, and an operator decision that email addresses do not
+need to be verified yet. The server assigns the user role, default quota, and
+default groups; browser fields cannot select them. Registration does not
+provide password reset or email verification.
+
+SMTP credentials must be protected as deployment secrets. Email warnings are
+advisory and may be delayed, duplicated around process crashes, rejected by a
+relay, or unavailable. They never authorize access and never determine whether
+COWS stops or deletes a container. Notification messages exclude secrets,
+terminal contents, runtime identifiers, host paths, and internal addresses.
+
 ## Known limitations of the current milestone
 
 Local username/password authentication, mandatory first-login password change,

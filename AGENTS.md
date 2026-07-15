@@ -13,6 +13,10 @@ Resource, storage, rootless-Podman, and group-access changes must follow
 `docs/decisions/0012-rootless-podman-resource-and-group-policy.md`.
 Group quota and administrator-view changes must follow
 `docs/decisions/0013-group-quotas-and-administrator-views.md`.
+Registration and account-credential changes must follow
+`docs/decisions/0014-self-registration-and-account-credentials.md`.
+Email notification changes must follow
+`docs/decisions/0015-email-notifications.md`.
 
 ## Technology constraints
 
@@ -72,6 +76,17 @@ connection timestamp whenever a workspace enters a new running period.
 Never render raw runtime, filesystem, or database errors to ordinary users.
 Persist stable public error categories separately from administrator-side
 diagnostic detail.
+
+Self-registration is disabled by default. When enabled, it creates only user
+accounts, requires a valid email address and password confirmation, applies
+server-configured default quota and group membership atomically, and must not
+accept a role, quota, group, or template from the browser. Do not add email
+verification or password-reset tokens without a dedicated security design.
+
+Email delivery is optional and must not block workspace lifecycle operations.
+Use a persisted, deduplicated notification boundary with retries, never log
+SMTP credentials or message contents, and keep warning delivery separate from
+the authoritative timeout worker.
 
 ## Development commands
 
