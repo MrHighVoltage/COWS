@@ -22,16 +22,19 @@ Exit criteria:
   is required.
 - Documentation describes the architecture, security limits, and next steps.
 
-## Milestone 1: Local users and authorization foundation (in progress)
+## Milestone 1: Local users, registration, and authorization foundation (in progress)
 
 Implemented so far: administrator bootstrap, bcrypt password hashing,
 login/logout, mandatory first-login password changes, stored user email
 addresses, opaque server-side sessions, CSRF protection, user and administrator
-roles, basic user management, and the first audit events. The remaining exit
-work includes authorization coverage for every state-changing handler,
-operational audit review, and a documented recovery procedure. Login failure
-rate limiting is now process-local and must move to shared infrastructure if
-COWS ever runs multiple active instances.
+roles, basic user management, and the first audit events. The next
+implementation adds disabled-by-default self-registration with required email,
+server-assigned default quotas, server-assigned default groups, and
+registration rate limiting. Remaining exit work includes authorization
+coverage for every state-changing handler, operational audit review, a
+documented recovery procedure, and tests for registration abuse and atomic
+default assignment. Login and registration rate limiting are process-local and
+must move to shared infrastructure if COWS ever runs multiple active instances.
 
 ## Milestone 2: Templates and runtime inspection (in progress)
 
@@ -91,15 +94,26 @@ Add template-defined applications and a constrained authenticated proxy with
 WebSocket support, SSRF defenses, origin/redirect handling, and size/time
 limits. Do not create a generic reverse proxy.
 
-## Milestone 7: Resource policies
+## Milestone 7: Resource policies and email notifications
 
 Add live resource display, host capacity views, idle shutdown, expiration,
-cleanup policies, and administrator capacity inspection. Keep high-frequency
-samples out of the main SQLite control-plane tables.
+cleanup policies, administrator capacity inspection, and optional email
+warnings for upcoming automatic stop and deletion. Keep high-frequency samples
+out of the main SQLite control-plane tables. Email delivery must use a small
+internal boundary, persisted deduplication and retries, and the standard
+library SMTP client; it must never block or decide lifecycle operations.
 
 Timeout policy execution belongs to Milestone 3. Milestone 7 may add richer
 idle detection and resource-driven policies, but must not replace the explicit
 timeout phases with browser-only or metrics-only behavior.
+
+Email warning exit criteria:
+
+- SMTP is disabled unless explicitly configured.
+- Upcoming stop and deletion warnings are deduplicated per workspace deadline.
+- Delivery retries are persisted and bounded without blocking reconciliation.
+- Messages contain only the workspace name, action, deadline, and safe links.
+- SMTP credentials and message contents are absent from logs and audit events.
 
 ## Milestone 8: Restricted file manager
 

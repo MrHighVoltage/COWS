@@ -27,7 +27,8 @@ runtime capacity, policies, and audit information.
 
 ## Goals
 
-- Centralize authenticated workspace access behind COWS HTTPS.
+- Centralize authenticated workspace access behind COWS, with HTTPS normally
+  terminated by the deployment's reverse proxy.
 - Keep user input away from arbitrary image names, runtime arguments, targets,
   ports, host mounts, capabilities, and devices.
 - Enforce resource limits in the runtime as well as quotas in COWS.
@@ -36,6 +37,10 @@ runtime capacity, policies, and audit information.
 - Use rootless Podman as the initial and only supported runtime.
 - Use server-rendered HTML, HTMX, and small Alpine.js interactions without a
   frontend build process.
+- Support optional, administrator-controlled local-account registration with
+  server-assigned default quotas and groups.
+- Provide advisory email warnings for upcoming lifecycle actions without making
+  email delivery part of the lifecycle safety path.
 
 ## Non-goals for the initial milestones
 
@@ -45,6 +50,8 @@ runtime capacity, policies, and audit information.
 - Full file management, uploads, archive extraction, or historical metrics.
 - A complete permissions framework before the basic user/administrator roles
   are proven.
+- Institutional identity, email verification, and password-reset email flows
+  before their dedicated security designs are complete.
 - PostgreSQL or high availability during the SQLite deployment phase.
 - An application-specific frontend development server.
 
@@ -77,9 +84,16 @@ Workspace lifecycle policies must support two administrator-defined durations:
   cleanup never deletes or archives user data. There is no post-deletion data
   retention setting.
 
-These policies are visible to users on workspace pages. COWS does not archive
-data or send email in the initial implementation, but policy evaluation must
-leave explicit hooks for future warning notifications and audit events.
+These policies are visible to users on workspace pages. COWS may create
+deduplicated advisory warning notifications for upcoming actions, but email
+delivery must never decide whether a timeout is enforced.
+
+Self-registration is disabled by default. If enabled, it requires an email
+address and applies server-configured default quota values and default group
+membership atomically. Newly self-registered accounts use the normal user
+role. Administrator-created accounts retain the mandatory first-login password
+change. Authenticated users can change their passwords; password-reset tokens
+and email verification are separate future work.
 
 The database is control-plane state, not a high-frequency metrics store. Runtime
 observations remain authoritative for container existence and running state.
