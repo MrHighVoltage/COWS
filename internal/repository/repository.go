@@ -18,6 +18,15 @@ type UserRecord struct {
 	PasswordHash string
 }
 
+// UserImportEntry is an administrator-approved account change. Existing
+// users have a non-empty User.ID and retain their password and role.
+type UserImportEntry struct {
+	User         domain.User
+	PasswordHash string
+	GroupIDs     []string
+	Existing     bool
+}
+
 type UserRepository interface {
 	CountUsers(ctx context.Context) (int, error)
 	CountActiveAdministrators(ctx context.Context) (int, error)
@@ -26,6 +35,7 @@ type UserRepository interface {
 	FindUserCredentialsByID(ctx context.Context, id string) (UserRecord, error)
 	ListUsers(ctx context.Context) ([]domain.User, error)
 	CreateUser(ctx context.Context, user domain.User, passwordHash string) error
+	ImportUsers(ctx context.Context, entries []UserImportEntry) error
 	RegisterUser(ctx context.Context, user domain.User, passwordHash string, groupIDs []string, userQuota domain.UserQuota) error
 	UpdateUserPassword(ctx context.Context, id, passwordHash string, mustChangePassword bool) error
 	SetUserDisabled(ctx context.Context, id string, disabled bool) error

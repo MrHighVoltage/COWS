@@ -1,0 +1,49 @@
+{{ define "admin-user-import-page" }}
+{{ template "base-start" . }}
+<section class="intro" aria-labelledby="user-import-title">
+  <p class="eyebrow">Administration</p>
+  <h1 id="user-import-title">Import users</h1>
+  <p class="lede">Preview account changes before committing them. New users receive a temporary password and must change it at first login.</p>
+</section>
+{{ if .UserImport.Error }}<p class="alert alert-error" role="alert">{{ .UserImport.Error }}</p>{{ end }}
+{{ if .UserImport.DownloadURL }}
+<section class="panel" aria-labelledby="import-complete-title">
+  <h2 id="import-complete-title">Import completed</h2>
+  <p>{{ .UserImport.CreatedCount }} new users were created and {{ .UserImport.UpdatedCount }} existing users were updated.</p>
+  <p class="alert alert-warning">The download contains temporary passwords for newly created users. Treat it as sensitive and remove it after distribution.</p>
+  <a class="primary-button button-link" href="{{ .UserImport.DownloadURL }}">Download credentials CSV</a>
+</section>
+{{ end }}
+<section class="panel" aria-labelledby="csv-format-title">
+  <h2 id="csv-format-title">CSV format</h2>
+  <p class="muted">Use a header row with exactly these columns:</p>
+  <code>username,email,display_name</code>
+  <p class="muted">Existing usernames are not recreated. Their email is updated when a non-empty CSV email differs, and selected groups are added without removing existing memberships.</p>
+</section>
+<section class="panel" aria-labelledby="csv-upload-title">
+  <h2 id="csv-upload-title">Upload and preview</h2>
+  <form class="form-panel" method="post" action="/admin/users/import/preview" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
+    <label for="csv-file">User CSV</label>
+    <input id="csv-file" name="csv_file" type="file" accept=".csv,text/csv" required>
+    <fieldset>
+      <legend>Groups to assign</legend>
+      {{ range .UserImport.Groups }}<label class="checkbox-row"><input type="checkbox" name="group_ids" value="{{ .ID }}"{{ if hasID $.UserImport.SelectedGroupIDs .ID }} checked{{ end }}> <span>{{ .Name }}</span></label>{{ else }}<p class="muted">No groups have been created.</p>{{ end }}
+    </fieldset>
+    <div class="form-actions"><a class="secondary-button button-link" href="/admin/users">Cancel</a><button class="primary-button" type="submit">Preview import</button></div>
+  </form>
+</section>
+{{ if .UserImport.DraftToken }}
+<section class="panel table-panel" aria-labelledby="preview-title">
+  <div class="panel-heading"><div><h2 id="preview-title">Import preview</h2><p class="muted">No changes have been committed. This preview expires shortly.</p></div></div>
+  <div class="table-scroll"><table><thead><tr><th>Username</th><th>Email</th><th>Display name</th><th>Action</th><th>Group changes</th></tr></thead><tbody>
+    {{ range .UserImport.Previews }}<tr><td><strong>{{ .Username }}</strong></td><td>{{ if .Email }}{{ .Email }}{{ else }}<span class="muted">Not supplied</span>{{ end }}</td><td>{{ if .DisplayName }}{{ .DisplayName }}{{ else }}<span class="muted">Defaults to username</span>{{ end }}</td><td>{{ if .Existing }}<span class="status-value status-warning">Existing account</span>{{ if .EmailChanged }}<span class="table-subtext">Email will update</span>{{ else }}<span class="table-subtext">No email change</span>{{ end }}{{ else }}<span class="status-value status-ok">Create account</span><span class="table-subtext">Temporary password generated after commit</span>{{ end }}</td><td>{{ range .GroupsToAdd }}<span class="badge">Add {{ index $.UserImport.GroupNames . }}</span> {{ else }}<span class="muted">No new groups</span>{{ end }}</td></tr>{{ end }}
+  </tbody></table></div>
+  <form class="form-actions" method="post" action="/admin/users/import/commit">
+    <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}"><input type="hidden" name="draft_token" value="{{ .UserImport.DraftToken }}">
+    <button class="primary-button" type="submit">Commit import</button>
+  </form>
+</section>
+{{ end }}
+{{ template "base-end" . }}
+{{ end }}

@@ -35,6 +35,10 @@ authorization coverage for every state-changing handler, operational audit
 review, a documented recovery procedure, and broader registration-abuse tests.
 Login and registration rate limiting are process-local and must move to shared
 infrastructure if COWS ever runs multiple active instances.
+Administrator CSV user import now provides bounded preview, existing-user
+matching, additive group assignment, transactional commit, generated temporary
+passwords, and a short-lived credential export. Password reset and email
+verification remain intentionally deferred.
 
 ## Milestone 2: Templates and runtime inspection (in progress)
 
@@ -71,8 +75,9 @@ status, and automatically refreshed state.
 ## Milestone 4: Terminal access
 
 Completed initial implementation: local xterm.js 5.3.0 assets, an authenticated
-WebSocket, approved `/bin/sh -l` execution, resize handling, idle and maximum
-session expiry, cleanup, audit events, and Podman exec stream adapter tests.
+WebSocket, template-selected shell execution with `/bin/sh -l` as the default,
+resize handling, idle and maximum session expiry, cleanup, audit events, and
+Podman exec stream adapter tests.
 Exit criteria for this checkpoint are met. Browser accessibility review and
 rootless Podman integration tests remain hardening work.
 
@@ -98,7 +103,7 @@ limits. Do not create a generic reverse proxy.
 The initial optional email implementation now warns about upcoming automatic
 stop and deletion using the standard library SMTP client, persisted
 deduplication, bounded retries, and a separate worker. Remaining work includes
-live resource display, richer host capacity views, idle shutdown, expiration,
+richer host capacity views, idle shutdown, expiration,
 cleanup policies, and administrator capacity inspection. Keep high-frequency
 samples out of the main SQLite control-plane tables. Email must never block or
 decide lifecycle operations.
@@ -114,6 +119,12 @@ Email warning exit criteria:
 - Delivery retries are persisted and bounded without blocking reconciliation.
 - Messages contain only the workspace name, action, and deadline.
 - SMTP credentials and message contents are absent from logs and audit events.
+
+Live workspace usage now reads non-streaming rootless Podman statistics for
+running workspaces and displays CPU, memory, and PID observations. Lifecycle
+operations publish phases such as preparing, creating, starting, stopping, and
+archiving; image-pull progress and persistent historical metrics remain future
+work.
 
 ## Milestone 8: Restricted file manager
 

@@ -178,6 +178,11 @@ generic application proxy, or production HTTPS configuration. The initial file
 manager supports approved directory and named-volume listing, bounded upload,
 individual file download, streamed directory ZIP download, folder creation,
 rename, and deletion; it does not support archive extraction.
+Administrator CSV imports are bounded, previewed before commit, restricted to
+local user identity fields, and committed transactionally. Generated temporary
+passwords are returned only through a short-lived administrator-bound download;
+they are not stored in the database, logs, or audit metadata. Treat the export
+as sensitive and delete it after distribution.
 Terminal access uses a fixed server-resolved template shell and desktop access
 uses a template-approved VNC service through the rootless Podman adapter; desktop sessions
 automatically authenticate using the template-selected VNC secret when one is
