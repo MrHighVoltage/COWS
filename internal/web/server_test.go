@@ -64,6 +64,26 @@ func TestQuotaProgressClass(t *testing.T) {
 	}
 }
 
+func TestWorkspaceActionReturnPathKeepsAdministratorRuntimeContext(t *testing.T) {
+	admin := &domain.User{Role: domain.RoleAdministrator}
+	user := &domain.User{Role: domain.RoleUser}
+
+	request := httptest.NewRequest(http.MethodPost, "/workspaces/id/stop", strings.NewReader("return_to=/admin/runtime"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if got := workspaceActionReturnPath(request, admin); got != "/admin/runtime" {
+		t.Fatalf("administrator return path = %q, want /admin/runtime", got)
+	}
+	if got := workspaceActionReturnPath(request, user); got != "/workspaces" {
+		t.Fatalf("user return path = %q, want /workspaces", got)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/workspaces/id/stop", strings.NewReader("return_to=https://example.test"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if got := workspaceActionReturnPath(request, admin); got != "/workspaces" {
+		t.Fatalf("external return path = %q, want /workspaces", got)
+	}
+}
+
 func TestFileDeleteParent(t *testing.T) {
 	tests := []struct {
 		path string

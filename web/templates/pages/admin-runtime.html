@@ -36,9 +36,9 @@
       {{ if .Managed }}
       <div class="table-actions">
         {{ if eq .Observed.State "running" }}
-          <form method="post" action="/workspaces/{{ .WorkspaceID }}/stop"><input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}"><button class="table-action" type="submit">Stop</button></form>
+          <form method="post" action="/workspaces/{{ .WorkspaceID }}/stop"><input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}"><input type="hidden" name="return_to" value="/admin/runtime"><button class="table-action" type="submit">Stop</button></form>
         {{ else }}
-          <form method="post" action="/workspaces/{{ .WorkspaceID }}/start"><input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}"><button class="table-action" type="submit">Start</button></form>
+          <form method="post" action="/workspaces/{{ .WorkspaceID }}/start"><input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}"><input type="hidden" name="return_to" value="/admin/runtime"><button class="table-action" type="submit">Start</button></form>
         {{ end }}
         {{ if and .RuntimePresent .Access.Terminal }}<a class="table-action button-link" href="{{ accessURL .WorkspaceID "terminal" }}">Terminal</a>{{ end }}
         {{ if and .RuntimePresent .Access.Desktop }}<a class="table-action button-link" href="{{ accessURL .WorkspaceID "desktop" }}">Desktop</a>{{ end }}
