@@ -303,6 +303,11 @@ of authoritative workspace state. Browser libraries are pinned, stored locally,
 and served from COWS. There is no Node.js, npm, TypeScript, bundler, or required
 frontend compilation step.
 
+Workspace terminal, graphical desktop, and file-manager access share one
+server-rendered tab shell. Terminal and desktop WebSockets are initialized only
+when their tab is first activated; file listings are fetched on first use.
+Fullscreen applies to the shared shell so its access tabs remain available.
+
 HTMX and Alpine.js are the only browser dependencies in the foundation. Web
 Awesome is the preferred candidate for a later standards-based component
 library, but it is not added until its self-hosted distribution, licensing, and

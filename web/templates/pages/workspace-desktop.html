@@ -1,3 +1,12 @@
+{{ define "workspace-desktop-panel" }}
+<section class="desktop-panel access-service-panel" data-desktop data-desktop-url="/workspaces/{{ .ActiveWorkspace.ID }}/desktop/ws" data-credentials-url="/workspaces/{{ .ActiveWorkspace.ID }}/desktop/credentials" data-fullscreen-target="workspace-access-shell" aria-labelledby="desktop-panel-title">
+  <div class="access-control-bar"><h2 id="desktop-panel-title">Desktop</h2><span id="desktop-status" class="badge">Not connected</span><button class="secondary-button" type="button" data-desktop-fit>Fit</button><button class="secondary-button" type="button" data-desktop-fullscreen>Full screen</button></div>
+  <p class="access-session-note">The session expires after inactivity or one hour.</p>
+  <div id="desktop-display" class="desktop-display" role="application" aria-label="Workspace graphical desktop"></div>
+  <p id="desktop-error" class="alert alert-error" role="alert" hidden></p>
+</section>
+{{ end }}
+
 {{ define "workspace-desktop-page" }}
 {{ template "base-start" . }}
 <section class="intro" aria-labelledby="desktop-title">
@@ -7,11 +16,7 @@
     <a class="secondary-button button-link" href="/workspaces">Back to workspaces</a>
   </div>
 </section>
-<section class="panel desktop-panel" data-desktop data-desktop-url="/workspaces/{{ .ActiveWorkspace.ID }}/desktop/ws" data-credentials-url="/workspaces/{{ .ActiveWorkspace.ID }}/desktop/credentials" aria-labelledby="desktop-panel-title">
-  <div class="panel-heading"><div><h2 id="desktop-panel-title">Desktop</h2><p class="muted">The session expires after inactivity or one hour.</p></div><div class="panel-actions"><span id="desktop-status" class="badge">Connecting</span><button class="secondary-button" type="button" data-desktop-fit>Fit to window</button><button class="secondary-button" type="button" data-desktop-fullscreen>Full screen</button></div></div>
-  <div id="desktop-display" class="desktop-display" role="application" aria-label="Workspace graphical desktop"></div>
-  <p id="desktop-error" class="alert alert-error" role="alert" hidden></p>
-</section>
+{{ template "workspace-desktop-panel" . }}
 <script type="module" src="/static/js/desktop.js"></script>
 {{ template "base-end" . }}
 {{ end }}

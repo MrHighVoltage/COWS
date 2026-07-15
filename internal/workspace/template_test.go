@@ -162,6 +162,10 @@ func TestWorkspaceCreationOwnershipAndDesiredObservedState(t *testing.T) {
 	if observed.DesiredState != domain.DesiredWorkspaceRunning || observed.ObservedState != "running" || observed.RuntimeID != "container-123" {
 		t.Fatalf("unexpected observed workspace: %+v", observed)
 	}
+	owned, err := service.ListWorkspaces(ctx, student.ID)
+	if err != nil || len(owned) != 1 || owned[0].TemplateName != "Research Desktop" {
+		t.Fatalf("workspace template name: values=%+v err=%v", owned, err)
+	}
 	all, err := service.ListWorkspaces(ctx, adminID)
 	if err != nil || len(all) != 0 {
 		t.Fatalf("administrator workspace list: count=%d err=%v", len(all), err)

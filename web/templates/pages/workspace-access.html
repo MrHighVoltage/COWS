@@ -1,0 +1,26 @@
+{{ define "workspace-access-page" }}
+{{ template "base-start" . }}
+<link rel="stylesheet" href="/static/vendor/xterm/xterm.css">
+<section class="intro" aria-labelledby="workspace-access-title">
+  <p class="eyebrow">Workspace access</p>
+  <div class="title-row">
+    <div><h1 id="workspace-access-title">{{ .ActiveWorkspace.Name }}</h1><p class="lede">Access your workspace through COWS.</p></div>
+    <a class="secondary-button button-link" href="/workspaces">Back to workspaces</a>
+  </div>
+</section>
+
+<section id="workspace-access-shell" class="workspace-access-shell" data-access data-initial-tab="{{ .AccessTab }}" data-files-url="{{ .AccessFilesURL }}" aria-label="Workspace access methods">
+  <nav class="access-tabs" role="tablist" aria-label="Workspace access methods">
+    {{ if .Access.Terminal }}<button class="access-tab" type="button" role="tab" data-access-tab="terminal" aria-controls="access-terminal-panel">Terminal</button>{{ end }}
+    {{ if .Access.Desktop }}<button class="access-tab" type="button" role="tab" data-access-tab="desktop" aria-controls="access-desktop-panel">Desktop</button>{{ end }}
+    {{ if .Access.Files }}<button class="access-tab" type="button" role="tab" data-access-tab="files" aria-controls="access-files-panel">Files</button>{{ end }}
+  </nav>
+  <div class="access-panels">
+    {{ if .Access.Terminal }}<div id="access-terminal-panel" class="access-panel" data-access-panel="terminal" role="tabpanel" aria-label="Terminal access" hidden>{{ template "workspace-terminal-panel" . }}</div>{{ end }}
+    {{ if .Access.Desktop }}<div id="access-desktop-panel" class="access-panel" data-access-panel="desktop" role="tabpanel" aria-label="Desktop access" hidden>{{ template "workspace-desktop-panel" . }}</div>{{ end }}
+    {{ if .Access.Files }}<div id="access-files-panel" class="access-panel" data-access-panel="files" role="tabpanel" aria-label="File manager access" hidden><div data-access-files>{{ if .FileListing }}{{ template "workspace-files-panel" . }}{{ else }}<p class="panel access-placeholder">Select the Files tab to load the approved workspace directories.</p>{{ end }}</div></div>{{ end }}
+  </div>
+</section>
+<script type="module" src="/static/js/access.js"></script>
+{{ template "base-end" . }}
+{{ end }}

@@ -7,6 +7,11 @@
     <a class="secondary-button button-link" href="/workspaces">Back to workspaces</a>
   </div>
 </section>
+{{ template "workspace-files-panel" . }}
+{{ template "base-end" . }}
+{{ end }}
+
+{{ define "workspace-files-panel" }}
 {{ if .FileError }}<p class="alert alert-error" role="alert">{{ .FileError }}</p>{{ end }}
 {{ if .FileListing }}
 <section class="panel file-panel" aria-labelledby="file-panel-title">
@@ -34,5 +39,4 @@
   </tbody></table></div>
 </section>
 {{ end }}
-{{ template "base-end" . }}
 {{ end }}

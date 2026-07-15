@@ -141,7 +141,22 @@ func (s *Service) ListWorkspaces(ctx context.Context, actorID string) ([]domain.
 	if err != nil {
 		return nil, err
 	}
+	values, err = s.withTemplateNames(ctx, values)
+	if err != nil {
+		return nil, err
+	}
 	return s.withStorageUsage(ctx, values)
+}
+
+func (s *Service) withTemplateNames(ctx context.Context, values []domain.Workspace) ([]domain.Workspace, error) {
+	for index := range values {
+		template, err := s.store.FindTemplateByID(ctx, values[index].TemplateID)
+		if err != nil {
+			return nil, err
+		}
+		values[index].TemplateName = template.Name
+	}
+	return values, nil
 }
 
 // ListWorkspacesForRuntimeOverview returns control-plane records without

@@ -1,3 +1,12 @@
+{{ define "workspace-terminal-panel" }}
+<section class="terminal-panel access-service-panel" data-terminal data-terminal-url="/workspaces/{{ .ActiveWorkspace.ID }}/terminal/ws" data-fullscreen-target="workspace-access-shell" aria-labelledby="terminal-panel-title">
+  <div class="access-control-bar"><h2 id="terminal-panel-title">Terminal</h2><span id="terminal-status" class="badge">Not connected</span><button class="secondary-button" type="button" data-terminal-fit>Fit</button><button class="secondary-button" type="button" data-terminal-fullscreen>Full screen</button></div>
+  <p class="access-session-note">The session expires after inactivity or one hour.</p>
+  <div id="terminal" class="terminal" role="application" aria-label="Workspace terminal"></div>
+  <p id="terminal-error" class="alert alert-error" role="alert" hidden></p>
+</section>
+{{ end }}
+
 {{ define "workspace-terminal-page" }}
 {{ template "base-start" . }}
 <link rel="stylesheet" href="/static/vendor/xterm/xterm.css">
@@ -8,11 +17,7 @@
     <a class="secondary-button button-link" href="/workspaces">Back to workspaces</a>
   </div>
 </section>
-<section class="panel terminal-panel" data-terminal data-terminal-url="/workspaces/{{ .ActiveWorkspace.ID }}/terminal/ws" aria-labelledby="terminal-panel-title">
-  <div class="panel-heading"><div><h2 id="terminal-panel-title">Shell</h2><p class="muted">The session expires after inactivity or one hour.</p></div><div class="panel-actions"><span id="terminal-status" class="badge">Connecting</span><button class="secondary-button" type="button" data-terminal-fit>Fit to window</button><button class="secondary-button" type="button" data-terminal-fullscreen>Full screen</button></div></div>
-  <div id="terminal" class="terminal" role="application" aria-label="Workspace terminal"></div>
-  <p id="terminal-error" class="alert alert-error" role="alert" hidden></p>
-</section>
+{{ template "workspace-terminal-panel" . }}
 <script src="/static/vendor/xterm/xterm.js"></script>
 <script src="/static/vendor/xterm/xterm-addon-fit.js"></script>
 <script src="/static/js/terminal.js"></script>

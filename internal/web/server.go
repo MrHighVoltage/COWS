@@ -161,6 +161,9 @@ type pageData struct {
 	RuntimeError        string
 	Workspaces          []domain.Workspace
 	Workspace           workspaceFormData
+	AccessTab           string
+	Access              workspaceAccess
+	AccessFilesURL      string
 	Quota               quotaFormData
 	QuotaAssigned       bool
 	Settings            *domain.HostSettings
@@ -219,6 +222,9 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 		"timeoutPhaseText": func(value workspace.TimeoutPhase) string { return timeoutPhaseText(value) },
 		"timeoutText":      func(seconds int64) string { return formatTimeout(seconds) },
 		"operationText":    func(value string) string { return operationText(value) },
+		"accessURL": func(workspaceID, tab string) string {
+			return "/workspaces/" + workspaceID + "/access?tab=" + url.QueryEscape(tab)
+		},
 		"observedErrorText": func(value string) string {
 			return observedErrorText(value)
 		},
@@ -235,7 +241,8 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 			values := url.Values{}
 			values.Set("mount", mountName)
 			values.Set("path", relativePath)
-			return "/workspaces/" + workspaceID + "/files?" + values.Encode()
+			values.Set("tab", "files")
+			return "/workspaces/" + workspaceID + "/access?" + values.Encode()
 		},
 		"fileParent": func(relativePath string) string {
 			parent := path.Dir(relativePath)
@@ -302,6 +309,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /workspaces/{id}/delete", s.workspaceDelete)
 	mux.HandleFunc("GET /workspaces/{id}/terminal", s.workspaceTerminalPage)
 	mux.HandleFunc("GET /workspaces/{id}/terminal/ws", s.workspaceTerminalWebSocket)
+	mux.HandleFunc("GET /workspaces/{id}/access", s.workspaceAccessPage)
+	mux.HandleFunc("GET /workspaces/{id}/access/files", s.workspaceAccessFilesFragment)
 	mux.HandleFunc("GET /workspaces/{id}/desktop", s.workspaceDesktopPage)
 	mux.HandleFunc("GET /workspaces/{id}/desktop/credentials", s.workspaceDesktopCredentials)
 	mux.HandleFunc("GET /workspaces/{id}/desktop/ws", s.workspaceDesktopWebSocket)
@@ -658,16 +667,96 @@ func (s *Server) workspaceAction(w http.ResponseWriter, r *http.Request, action 
 }
 
 func (s *Server) workspaceTerminalPage(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "/workspaces/"+r.PathValue("id")+"/access?tab=terminal", http.StatusSeeOther)
+}
+
+func (s *Server) workspaceAccessPage(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireUser(w, r)
 	if !ok {
 		return
 	}
-	value, err := s.workspace.GetWorkspace(r.Context(), user.ID, r.PathValue("id"))
-	if err != nil {
-		http.Error(w, "workspace not found", http.StatusNotFound)
+	data, err := s.workspaceAccessPageData(r.Context(), user, r.PathValue("id"), r.URL.Query().Get("tab"))
+	if errors.Is(err, repository.ErrNotFound) {
+		http.NotFound(w, r)
 		return
 	}
-	s.render(w, http.StatusOK, "workspace-terminal-page", pageData{Title: "Terminal | COWS", User: user, ActiveWorkspace: &value})
+	if err != nil {
+		http.Error(w, "workspace access is not available", http.StatusForbidden)
+		return
+	}
+	data.Title = "Workspace access | COWS"
+	data.User = user
+	data.CSRFToken = s.ensureCSRF(w, r)
+	s.render(w, http.StatusOK, "workspace-access-page", data)
+}
+
+func (s *Server) workspaceAccessPageData(ctx context.Context, user *domain.User, workspaceID, requestedTab string) (pageData, error) {
+	value, err := s.workspace.GetWorkspace(ctx, user.ID, workspaceID)
+	if err != nil {
+		return pageData{}, err
+	}
+	methods, err := s.workspace.WorkspaceAccessMethods(ctx, user.ID, workspaceID)
+	if err != nil {
+		return pageData{}, err
+	}
+	access := workspaceAccess{}
+	for _, method := range methods {
+		switch method {
+		case domain.AccessTerminal:
+			access.Terminal = true
+		case domain.AccessDesktop:
+			access.Desktop = true
+		case domain.AccessFiles:
+			access.Files = true
+		}
+	}
+	tab := requestedTab
+	if (tab == "terminal" && !access.Terminal) || (tab == "desktop" && !access.Desktop) || (tab == "files" && !access.Files) || (tab != "terminal" && tab != "desktop" && tab != "files") {
+		tab = firstAccessTab(access)
+	}
+	if tab == "" {
+		return pageData{}, errors.New("workspace has no enabled access methods")
+	}
+	return pageData{
+		ActiveWorkspace: &value,
+		AccessTab:       tab,
+		Access:          access,
+		AccessFilesURL:  "/workspaces/" + workspaceID + "/access/files",
+	}, nil
+}
+
+func firstAccessTab(access workspaceAccess) string {
+	if access.Terminal {
+		return "terminal"
+	}
+	if access.Desktop {
+		return "desktop"
+	}
+	if access.Files {
+		return "files"
+	}
+	return ""
+}
+
+func (s *Server) workspaceAccessFilesFragment(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := r.PathValue("id")
+	mountName := r.URL.Query().Get("mount")
+	relativePath := r.URL.Query().Get("path")
+	listing, err := s.files.List(r.Context(), user.ID, workspaceID, mountName, relativePath)
+	if err != nil {
+		s.renderFileAccessFragmentError(w, r, user, workspaceID, mountName, relativePath, err)
+		return
+	}
+	mounts, err := s.files.Mounts(r.Context(), user.ID, workspaceID)
+	if err != nil {
+		s.renderFileAccessFragmentError(w, r, user, workspaceID, mountName, relativePath, err)
+		return
+	}
+	s.render(w, http.StatusOK, "workspace-files-panel", pageData{User: user, CSRFToken: s.ensureCSRF(w, r), ActiveWorkspace: &domain.Workspace{ID: workspaceID}, FileListing: &listing, FileMounts: mounts})
 }
 
 type terminalResizeMessage struct {
@@ -813,16 +902,7 @@ func readTerminalOutput(ctx context.Context, terminal runtime.Terminal, output c
 }
 
 func (s *Server) workspaceDesktopPage(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireUser(w, r)
-	if !ok {
-		return
-	}
-	value, err := s.workspace.GetWorkspace(r.Context(), user.ID, r.PathValue("id"))
-	if err != nil {
-		http.Error(w, "workspace not found", http.StatusNotFound)
-		return
-	}
-	s.render(w, http.StatusOK, "workspace-desktop-page", pageData{Title: "Desktop | COWS", User: user, ActiveWorkspace: &value})
+	http.Redirect(w, r, "/workspaces/"+r.PathValue("id")+"/access?tab=desktop", http.StatusSeeOther)
 }
 
 func (s *Server) workspaceDesktopCredentials(w http.ResponseWriter, r *http.Request) {
@@ -911,23 +991,14 @@ func (s *Server) workspaceDesktopWebSocket(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) workspaceFilesPage(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireUser(w, r)
-	if !ok {
-		return
+	values := url.Values{"tab": {"files"}}
+	if mount := r.URL.Query().Get("mount"); mount != "" {
+		values.Set("mount", mount)
 	}
-	mountName := r.URL.Query().Get("mount")
-	relativePath := r.URL.Query().Get("path")
-	listing, err := s.files.List(r.Context(), user.ID, r.PathValue("id"), mountName, relativePath)
-	if err != nil {
-		s.renderFilePageError(w, r, user, r.PathValue("id"), mountName, relativePath, err)
-		return
+	if relativePath := r.URL.Query().Get("path"); relativePath != "" {
+		values.Set("path", relativePath)
 	}
-	mounts, err := s.files.Mounts(r.Context(), user.ID, r.PathValue("id"))
-	if err != nil {
-		s.renderFilePageError(w, r, user, r.PathValue("id"), mountName, relativePath, err)
-		return
-	}
-	s.render(w, http.StatusOK, "workspace-files-page", pageData{Title: "Files | COWS", User: user, CSRFToken: s.ensureCSRF(w, r), ActiveWorkspace: &domain.Workspace{ID: r.PathValue("id")}, FileListing: &listing, FileMounts: mounts})
+	http.Redirect(w, r, "/workspaces/"+r.PathValue("id")+"/access?"+values.Encode(), http.StatusSeeOther)
 }
 
 func (s *Server) workspaceFileDownload(w http.ResponseWriter, r *http.Request) {
@@ -1048,13 +1119,31 @@ func (s *Server) redirectFiles(w http.ResponseWriter, r *http.Request, workspace
 	values := url.Values{}
 	values.Set("mount", mountName)
 	values.Set("path", relativePath)
-	http.Redirect(w, r, "/workspaces/"+workspaceID+"/files?"+values.Encode(), http.StatusSeeOther)
+	values.Set("tab", "files")
+	http.Redirect(w, r, "/workspaces/"+workspaceID+"/access?"+values.Encode(), http.StatusSeeOther)
 }
 
 func (s *Server) renderFilePageError(w http.ResponseWriter, r *http.Request, user *domain.User, workspaceID, mountName, relativePath string, err error) {
 	mounts, _ := s.files.Mounts(r.Context(), user.ID, workspaceID)
 	listing, _ := s.files.List(r.Context(), user.ID, workspaceID, mountName, relativePath)
-	s.render(w, fileErrorStatus(err), "workspace-files-page", pageData{Title: "Files | COWS", User: user, CSRFToken: s.ensureCSRF(w, r), ActiveWorkspace: &domain.Workspace{ID: workspaceID}, FileListing: &listing, FileMounts: mounts, FileError: fileErrorText(err)})
+	data, accessErr := s.workspaceAccessPageData(r.Context(), user, workspaceID, "files")
+	if accessErr != nil {
+		http.Error(w, fileErrorText(err), fileErrorStatus(err))
+		return
+	}
+	data.Title = "Workspace access | COWS"
+	data.User = user
+	data.CSRFToken = s.ensureCSRF(w, r)
+	data.FileListing = &listing
+	data.FileMounts = mounts
+	data.FileError = fileErrorText(err)
+	s.render(w, fileErrorStatus(err), "workspace-access-page", data)
+}
+
+func (s *Server) renderFileAccessFragmentError(w http.ResponseWriter, r *http.Request, user *domain.User, workspaceID, mountName, relativePath string, err error) {
+	mounts, _ := s.files.Mounts(r.Context(), user.ID, workspaceID)
+	listing, _ := s.files.List(r.Context(), user.ID, workspaceID, mountName, relativePath)
+	s.render(w, fileErrorStatus(err), "workspace-files-panel", pageData{User: user, CSRFToken: s.ensureCSRF(w, r), ActiveWorkspace: &domain.Workspace{ID: workspaceID}, FileListing: &listing, FileMounts: mounts, FileError: fileErrorText(err)})
 }
 
 type activityStream struct {
