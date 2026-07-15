@@ -20,6 +20,9 @@ resource.
 
 The administrator Users page shows group badges and links to a dedicated user
 edit page. Group membership editing is not embedded in every user table row.
+Explicit user quotas are edited from that user edit page. Group quotas are
+edited from a dedicated group edit page linked from the Groups table; there is
+no separate global quota list to scan as the account count grows.
 
 The Workspaces page always lists only the authenticated user's workspaces,
 including for administrators. The Runtime page is the administrator view for

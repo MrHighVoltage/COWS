@@ -310,6 +310,12 @@ update procedure are verified against the repository policy. The initial page
 uses semantic HTML and a small project stylesheet so the library decision does
 not become an unreviewed runtime dependency.
 
+Administrator quota editing is contextual rather than a separate global list:
+explicit user quotas are managed in the user edit view, and group quotas are
+managed in the group edit view. The quota service remains the authorization and
+validation boundary; this UI arrangement only changes how administrators find
+the settings as the number of users and groups grows.
+
 ## Future host-agent boundary
 
 The runtime interface is intentionally internal and domain-oriented. It keeps

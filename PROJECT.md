@@ -72,7 +72,9 @@ one or more groups before creating a workspace. An explicit user quota
 overrides group quotas. Group limits add together, while zero makes that
 resource unlimited. An administrator without either quota type is unrestricted
 by COWS user quotas. Physical host capacity and reserved host capacity still
-apply to all accounts.
+apply to all accounts. Administrators edit explicit user quotas from the user
+edit view and group quotas from the group edit view; there is no separate
+global quota list.
 
 Workspace lifecycle policies must support two administrator-defined durations:
 

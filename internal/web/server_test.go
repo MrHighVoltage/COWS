@@ -384,26 +384,107 @@ func TestAdministratorCanRemoveExplicitUserQuota(t *testing.T) {
 		t.Fatalf("authenticate changed administrator: %v", err)
 	}
 	sessionCookie := &http.Cookie{Name: "cows_session", Value: token}
-	pageRequest := httptest.NewRequest(http.MethodGet, "/admin/quotas", nil)
+	legacyRequest := httptest.NewRequest(http.MethodGet, "/admin/quotas", nil)
+	legacyRequest.AddCookie(sessionCookie)
+	legacyRecorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(legacyRecorder, legacyRequest)
+	if legacyRecorder.Code != http.StatusNotFound {
+		t.Fatalf("legacy quota page response = %d, want 404", legacyRecorder.Code)
+	}
+	pageRequest := httptest.NewRequest(http.MethodGet, "/admin/users/"+student.ID+"/edit", nil)
 	pageRequest.AddCookie(sessionCookie)
 	pageRecorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(pageRecorder, pageRequest)
 	csrfCookie := cookieByName(pageRecorder.Result().Cookies(), "cows_csrf")
-	if pageRecorder.Code != http.StatusOK || csrfCookie == nil {
-		t.Fatalf("quota page response: status=%d csrf=%#v", pageRecorder.Code, csrfCookie)
+	if pageRecorder.Code != http.StatusOK || csrfCookie == nil || !strings.Contains(pageRecorder.Body.String(), "User quota") {
+		t.Fatalf("user edit page response: status=%d csrf=%#v body=%s", pageRecorder.Code, csrfCookie, pageRecorder.Body.String())
+	}
+	updateForm := url.Values{
+		"csrf_token":             {csrfCookie.Value},
+		"max_cpu_millis":         {"1500"},
+		"max_memory_mib":         {"1024"},
+		"max_storage_gib":        {"10"},
+		"max_workspaces":         {"3"},
+		"max_running_workspaces": {"1"},
+	}
+	updateRequest := httptest.NewRequest(http.MethodPost, "/admin/users/"+student.ID+"/quota", strings.NewReader(updateForm.Encode()))
+	updateRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	updateRequest.AddCookie(sessionCookie)
+	updateRequest.AddCookie(csrfCookie)
+	updateRecorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(updateRecorder, updateRequest)
+	if updateRecorder.Code != http.StatusSeeOther || updateRecorder.Header().Get("Location") != "/admin/users/"+student.ID+"/edit" {
+		t.Fatalf("update quota response: status=%d location=%q body=%s", updateRecorder.Code, updateRecorder.Header().Get("Location"), updateRecorder.Body.String())
+	}
+	updated, err := server.quota.Get(ctx, admin.ID, student.ID)
+	if err != nil || updated.MaxStorageBytes != 10<<30 {
+		t.Fatalf("updated quota = %#v, err=%v", updated, err)
 	}
 	form := url.Values{"csrf_token": {csrfCookie.Value}}
-	request := httptest.NewRequest(http.MethodPost, "/admin/quotas/user/"+student.ID+"/delete", strings.NewReader(form.Encode()))
+	request := httptest.NewRequest(http.MethodPost, "/admin/users/"+student.ID+"/quota/delete", strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.AddCookie(sessionCookie)
 	request.AddCookie(csrfCookie)
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusSeeOther || recorder.Header().Get("Location") != "/admin/quotas" {
+	if recorder.Code != http.StatusSeeOther || recorder.Header().Get("Location") != "/admin/users/"+student.ID+"/edit" {
 		t.Fatalf("remove quota response: status=%d location=%q body=%s", recorder.Code, recorder.Header().Get("Location"), recorder.Body.String())
 	}
 	if _, err := server.quota.Get(ctx, admin.ID, student.ID); !errors.Is(err, repository.ErrNotFound) {
 		t.Fatalf("quota after removal = %v, want not found", err)
+	}
+}
+
+func TestAdministratorCanEditGroupQuotaFromGroupView(t *testing.T) {
+	server, authService := testServer(t)
+	ctx := context.Background()
+	if _, err := authService.BootstrapAdministrator(ctx, auth.CreateUserInput{Username: "admin", Password: "correct horse battery staple"}); err != nil {
+		t.Fatalf("bootstrap administrator: %v", err)
+	}
+	admin, _, err := authService.Authenticate(ctx, "admin", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate administrator: %v", err)
+	}
+	if err := authService.ChangePassword(ctx, admin.ID, "correct horse battery staple", "changed correct horse battery staple"); err != nil {
+		t.Fatalf("change administrator password: %v", err)
+	}
+	group, err := authService.CreateGroup(ctx, admin.ID, "research", "Research users")
+	if err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+	_, token, err := authService.Authenticate(ctx, "admin", "changed correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate changed administrator: %v", err)
+	}
+	sessionCookie := &http.Cookie{Name: "cows_session", Value: token}
+	pageRequest := httptest.NewRequest(http.MethodGet, "/admin/groups/"+group.ID+"/edit", nil)
+	pageRequest.AddCookie(sessionCookie)
+	pageRecorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(pageRecorder, pageRequest)
+	csrfCookie := cookieByName(pageRecorder.Result().Cookies(), "cows_csrf")
+	if pageRecorder.Code != http.StatusOK || csrfCookie == nil || !strings.Contains(pageRecorder.Body.String(), "Group quota") {
+		t.Fatalf("group edit page response: status=%d csrf=%#v body=%s", pageRecorder.Code, csrfCookie, pageRecorder.Body.String())
+	}
+	form := url.Values{
+		"csrf_token":             {csrfCookie.Value},
+		"max_cpu_millis":         {"2000"},
+		"max_memory_mib":         {"2048"},
+		"max_storage_gib":        {"20"},
+		"max_workspaces":         {"4"},
+		"max_running_workspaces": {"2"},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/admin/groups/"+group.ID+"/quota", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(sessionCookie)
+	request.AddCookie(csrfCookie)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusSeeOther || recorder.Header().Get("Location") != "/admin/groups/"+group.ID+"/edit" {
+		t.Fatalf("group quota response: status=%d location=%q body=%s", recorder.Code, recorder.Header().Get("Location"), recorder.Body.String())
+	}
+	assigned, err := server.quota.GetGroup(ctx, admin.ID, group.ID)
+	if err != nil || assigned.MaxRunningWorkspaces != 2 {
+		t.Fatalf("assigned group quota = %#v, err=%v", assigned, err)
 	}
 }
 

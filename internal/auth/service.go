@@ -233,6 +233,13 @@ func (s *Service) ListGroups(ctx context.Context, actorID string) ([]domain.Grou
 	return s.store.ListGroups(ctx)
 }
 
+func (s *Service) FindGroupForAdmin(ctx context.Context, actorID, groupID string) (domain.Group, error) {
+	if _, err := s.requireAdministrator(ctx, actorID); err != nil {
+		return domain.Group{}, err
+	}
+	return s.store.FindGroupByID(ctx, groupID)
+}
+
 func (s *Service) CreateGroup(ctx context.Context, actorID, name, description string) (domain.Group, error) {
 	if _, err := s.requireAdministrator(ctx, actorID); err != nil {
 		return domain.Group{}, err

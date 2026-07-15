@@ -110,18 +110,6 @@ type settingsFormData struct {
 	Error              string
 }
 
-type quotaView struct {
-	User     domain.User
-	Quota    domain.UserQuota
-	Assigned bool
-}
-
-type groupQuotaView struct {
-	Group    domain.Group
-	Quota    domain.GroupQuota
-	Assigned bool
-}
-
 type allocationView struct {
 	Summary       domain.AllocationSummary
 	Quota         domain.UserQuota
@@ -173,8 +161,8 @@ type pageData struct {
 	RuntimeError        string
 	Workspaces          []domain.Workspace
 	Workspace           workspaceFormData
-	Quotas              []quotaView
 	Quota               quotaFormData
+	QuotaAssigned       bool
 	Settings            *domain.HostSettings
 	SettingsForm        settingsFormData
 	Allocation          *allocationView
@@ -188,7 +176,9 @@ type pageData struct {
 	UserGroups          map[string][]domain.Group
 	EditUser            *domain.User
 	EditUserGroups      []string
-	GroupQuotas         []groupQuotaView
+	EditGroup           *domain.Group
+	GroupQuota          quotaFormData
+	GroupQuotaAssigned  bool
 	RuntimeWorkspaces   []runtimeWorkspaceView
 }
 
@@ -330,11 +320,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/users/{id}/groups", s.adminUserGroups)
 	mux.HandleFunc("GET /admin/groups", s.adminGroups)
 	mux.HandleFunc("POST /admin/groups", s.adminGroupsCreate)
-	mux.HandleFunc("GET /admin/quotas", s.adminQuotas)
-	mux.HandleFunc("POST /admin/quotas/{id}", s.adminQuotaUpdate)
-	mux.HandleFunc("POST /admin/quotas/user/{id}/delete", s.adminQuotaDelete)
-	mux.HandleFunc("POST /admin/quotas/groups/{id}", s.adminGroupQuotaUpdate)
-	mux.HandleFunc("POST /admin/quotas/groups/{id}/delete", s.adminGroupQuotaDelete)
+	mux.HandleFunc("POST /admin/users/{id}/quota", s.adminQuotaUpdate)
+	mux.HandleFunc("POST /admin/users/{id}/quota/delete", s.adminQuotaDelete)
+	mux.HandleFunc("GET /admin/groups/{id}/edit", s.adminGroupEdit)
+	mux.HandleFunc("POST /admin/groups/{id}/quota", s.adminGroupQuotaUpdate)
+	mux.HandleFunc("POST /admin/groups/{id}/quota/delete", s.adminGroupQuotaDelete)
 	mux.HandleFunc("GET /admin/settings", s.adminSettings)
 	mux.HandleFunc("POST /admin/settings", s.adminSettingsUpdate)
 	mux.HandleFunc("GET /admin/templates", s.adminTemplates)
@@ -1155,7 +1145,7 @@ func (s *Server) adminUserEdit(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	target, err := s.auth.FindUserForAdmin(r.Context(), user.ID, r.PathValue("id"))
+	data, err := s.userEditPageData(r.Context(), user.ID, r.PathValue("id"))
 	if errors.Is(err, repository.ErrNotFound) {
 		http.NotFound(w, r)
 		return
@@ -1164,12 +1154,10 @@ func (s *Server) adminUserEdit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to load user", http.StatusInternalServerError)
 		return
 	}
-	groupIDs, err := s.auth.UserGroupIDs(r.Context(), user.ID, target.ID)
-	if err != nil {
-		http.Error(w, "failed to load user groups", http.StatusInternalServerError)
-		return
-	}
-	s.render(w, http.StatusOK, "admin-user-edit-page", pageData{Title: "Edit user | COWS", User: &user, EditUser: &target, Groups: s.templateGroups(r.Context(), user.ID), EditUserGroups: groupIDs, CSRFToken: s.ensureCSRF(w, r)})
+	data.Title = "Edit user | COWS"
+	data.User = &user
+	data.CSRFToken = s.ensureCSRF(w, r)
+	s.render(w, http.StatusOK, "admin-user-edit-page", data)
 }
 
 func (s *Server) adminUsersNew(w http.ResponseWriter, r *http.Request) {
@@ -1267,7 +1255,7 @@ func (s *Server) adminUserGroups(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, userActionError(err), status)
 		return
 	}
-	http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
+	http.Redirect(w, r, "/admin/users/"+r.PathValue("id")+"/edit", http.StatusSeeOther)
 }
 
 func (s *Server) adminGroups(w http.ResponseWriter, r *http.Request) {
@@ -1305,22 +1293,24 @@ func (s *Server) adminGroupsCreate(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin/groups", http.StatusSeeOther)
 }
 
-func (s *Server) adminQuotas(w http.ResponseWriter, r *http.Request) {
+func (s *Server) adminGroupEdit(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAdministrator(w, r)
 	if !ok {
 		return
 	}
-	views, err := s.loadQuotaViews(r.Context(), user.ID)
-	if err != nil {
-		http.Error(w, "failed to load quotas", http.StatusInternalServerError)
+	data, err := s.groupEditPageData(r.Context(), user.ID, r.PathValue("id"))
+	if errors.Is(err, repository.ErrNotFound) {
+		http.NotFound(w, r)
 		return
 	}
-	groupViews, err := s.loadGroupQuotaViews(r.Context(), user.ID)
 	if err != nil {
-		http.Error(w, "failed to load group quotas", http.StatusInternalServerError)
+		http.Error(w, "failed to load group", http.StatusInternalServerError)
 		return
 	}
-	s.render(w, http.StatusOK, "admin-quotas-page", pageData{Title: "Quotas | COWS", User: &user, Quotas: views, GroupQuotas: groupViews, CSRFToken: s.ensureCSRF(w, r)})
+	data.Title = "Edit group | COWS"
+	data.User = &user
+	data.CSRFToken = s.ensureCSRF(w, r)
+	s.render(w, http.StatusOK, "admin-group-edit-page", data)
 }
 
 func (s *Server) adminQuotaUpdate(w http.ResponseWriter, r *http.Request) {
@@ -1340,16 +1330,31 @@ func (s *Server) adminQuotaUpdate(w http.ResponseWriter, r *http.Request) {
 	form := quotaFormData{UserID: r.PathValue("id"), MaxCPUMillis: r.FormValue("max_cpu_millis"), MaxMemoryMiB: r.FormValue("max_memory_mib"), MaxStorageGiB: r.FormValue("max_storage_gib"), MaxWorkspaces: r.FormValue("max_workspaces"), MaxRunningWorkspaces: r.FormValue("max_running_workspaces")}
 	input, err := parseQuotaForm(form)
 	if err == nil {
-		_, err = s.quota.Set(r.Context(), user.ID, form.UserID, input)
+		if s.quota == nil {
+			err = errors.New("quota service unavailable")
+		} else {
+			_, err = s.quota.Set(r.Context(), user.ID, form.UserID, input)
+		}
 	}
 	if err != nil {
 		form.Error = quotaFormError(err)
-		views, _ := s.loadQuotaViews(r.Context(), user.ID)
-		groupViews, _ := s.loadGroupQuotaViews(r.Context(), user.ID)
-		s.render(w, http.StatusBadRequest, "admin-quotas-page", pageData{Title: "Quotas | COWS", User: &user, Quotas: views, GroupQuotas: groupViews, Quota: form, CSRFToken: s.ensureCSRF(w, r)})
+		data, loadErr := s.userEditPageData(r.Context(), user.ID, form.UserID)
+		if errors.Is(loadErr, repository.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		if loadErr != nil {
+			http.Error(w, "failed to load user", http.StatusInternalServerError)
+			return
+		}
+		data.Title = "Edit user | COWS"
+		data.User = &user
+		data.Quota = form
+		data.CSRFToken = s.ensureCSRF(w, r)
+		s.render(w, http.StatusBadRequest, "admin-user-edit-page", data)
 		return
 	}
-	http.Redirect(w, r, "/admin/quotas", http.StatusSeeOther)
+	http.Redirect(w, r, "/admin/users/"+form.UserID+"/edit", http.StatusSeeOther)
 }
 
 func (s *Server) adminQuotaDelete(w http.ResponseWriter, r *http.Request) {
@@ -1362,11 +1367,20 @@ func (s *Server) adminQuotaDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusForbidden)
 		return
 	}
-	if err := s.quota.Unset(r.Context(), user.ID, r.PathValue("id")); err != nil {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	userID := r.PathValue("id")
+	if s.quota == nil {
+		http.Error(w, "quota service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.quota.Unset(r.Context(), user.ID, userID); err != nil {
 		http.Error(w, "quota assignment could not be removed", http.StatusBadRequest)
 		return
 	}
-	http.Redirect(w, r, "/admin/quotas", http.StatusSeeOther)
+	http.Redirect(w, r, "/admin/users/"+userID+"/edit", http.StatusSeeOther)
 }
 
 func (s *Server) adminGroupQuotaUpdate(w http.ResponseWriter, r *http.Request) {
@@ -1386,16 +1400,31 @@ func (s *Server) adminGroupQuotaUpdate(w http.ResponseWriter, r *http.Request) {
 	form := quotaFormData{GroupID: r.PathValue("id"), MaxCPUMillis: r.FormValue("max_cpu_millis"), MaxMemoryMiB: r.FormValue("max_memory_mib"), MaxStorageGiB: r.FormValue("max_storage_gib"), MaxWorkspaces: r.FormValue("max_workspaces"), MaxRunningWorkspaces: r.FormValue("max_running_workspaces")}
 	input, err := parseQuotaForm(form)
 	if err == nil {
-		_, err = s.quota.SetGroup(r.Context(), user.ID, form.GroupID, input)
+		if s.quota == nil {
+			err = errors.New("quota service unavailable")
+		} else {
+			_, err = s.quota.SetGroup(r.Context(), user.ID, form.GroupID, input)
+		}
 	}
 	if err != nil {
 		form.Error = quotaFormError(err)
-		views, _ := s.loadQuotaViews(r.Context(), user.ID)
-		groupViews, _ := s.loadGroupQuotaViews(r.Context(), user.ID)
-		s.render(w, http.StatusBadRequest, "admin-quotas-page", pageData{Title: "Quotas | COWS", User: &user, Quotas: views, GroupQuotas: groupViews, Quota: form, CSRFToken: s.ensureCSRF(w, r)})
+		data, loadErr := s.groupEditPageData(r.Context(), user.ID, form.GroupID)
+		if errors.Is(loadErr, repository.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		if loadErr != nil {
+			http.Error(w, "failed to load group", http.StatusInternalServerError)
+			return
+		}
+		data.Title = "Edit group | COWS"
+		data.User = &user
+		data.GroupQuota = form
+		data.CSRFToken = s.ensureCSRF(w, r)
+		s.render(w, http.StatusBadRequest, "admin-group-edit-page", data)
 		return
 	}
-	http.Redirect(w, r, "/admin/quotas", http.StatusSeeOther)
+	http.Redirect(w, r, "/admin/groups/"+form.GroupID+"/edit", http.StatusSeeOther)
 }
 
 func (s *Server) adminGroupQuotaDelete(w http.ResponseWriter, r *http.Request) {
@@ -1408,11 +1437,74 @@ func (s *Server) adminGroupQuotaDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusForbidden)
 		return
 	}
-	if err := s.quota.UnsetGroup(r.Context(), user.ID, r.PathValue("id")); err != nil {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	groupID := r.PathValue("id")
+	if s.quota == nil {
+		http.Error(w, "quota service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.quota.UnsetGroup(r.Context(), user.ID, groupID); err != nil {
 		http.Error(w, "group quota assignment could not be removed", http.StatusBadRequest)
 		return
 	}
-	http.Redirect(w, r, "/admin/quotas", http.StatusSeeOther)
+	http.Redirect(w, r, "/admin/groups/"+groupID+"/edit", http.StatusSeeOther)
+}
+
+func (s *Server) userEditPageData(ctx context.Context, actorID, targetID string) (pageData, error) {
+	target, err := s.auth.FindUserForAdmin(ctx, actorID, targetID)
+	if err != nil {
+		return pageData{}, err
+	}
+	groupIDs, err := s.auth.UserGroupIDs(ctx, actorID, target.ID)
+	if err != nil {
+		return pageData{}, err
+	}
+	data := pageData{
+		EditUser:       &target,
+		Groups:         s.templateGroups(ctx, actorID),
+		EditUserGroups: groupIDs,
+		Quota:          quotaFormData{UserID: target.ID},
+	}
+	if s.quota == nil {
+		return data, nil
+	}
+	assigned, err := s.quota.Get(ctx, actorID, target.ID)
+	if errors.Is(err, repository.ErrNotFound) {
+		return data, nil
+	}
+	if err != nil {
+		return pageData{}, err
+	}
+	data.Quota = quotaFormFromUserQuota(assigned)
+	data.QuotaAssigned = true
+	return data, nil
+}
+
+func (s *Server) groupEditPageData(ctx context.Context, actorID, targetID string) (pageData, error) {
+	target, err := s.auth.FindGroupForAdmin(ctx, actorID, targetID)
+	if err != nil {
+		return pageData{}, err
+	}
+	data := pageData{
+		EditGroup:  &target,
+		GroupQuota: quotaFormData{GroupID: target.ID},
+	}
+	if s.quota == nil {
+		return data, nil
+	}
+	assigned, err := s.quota.GetGroup(ctx, actorID, target.ID)
+	if errors.Is(err, repository.ErrNotFound) {
+		return data, nil
+	}
+	if err != nil {
+		return pageData{}, err
+	}
+	data.GroupQuota = quotaFormFromGroupQuota(assigned)
+	data.GroupQuotaAssigned = true
+	return data, nil
 }
 
 func (s *Server) adminSettings(w http.ResponseWriter, r *http.Request) {
@@ -1476,46 +1568,6 @@ func (s *Server) adminSettingsUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)
-}
-
-func (s *Server) loadQuotaViews(ctx context.Context, actorID string) ([]quotaView, error) {
-	users, err := s.auth.ListUsers(ctx, actorID)
-	if err != nil {
-		return nil, err
-	}
-	views := make([]quotaView, 0, len(users))
-	for _, user := range users {
-		assigned, err := s.quota.Get(ctx, actorID, user.ID)
-		if errors.Is(err, repository.ErrNotFound) {
-			views = append(views, quotaView{User: user})
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		views = append(views, quotaView{User: user, Quota: assigned, Assigned: true})
-	}
-	return views, nil
-}
-
-func (s *Server) loadGroupQuotaViews(ctx context.Context, actorID string) ([]groupQuotaView, error) {
-	groups, err := s.auth.ListGroups(ctx, actorID)
-	if err != nil {
-		return nil, err
-	}
-	views := make([]groupQuotaView, 0, len(groups))
-	for _, group := range groups {
-		assigned, err := s.quota.GetGroup(ctx, actorID, group.ID)
-		if errors.Is(err, repository.ErrNotFound) {
-			views = append(views, groupQuotaView{Group: group})
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		views = append(views, groupQuotaView{Group: group, Quota: assigned, Assigned: true})
-	}
-	return views, nil
 }
 
 func (s *Server) adminTemplates(w http.ResponseWriter, r *http.Request) {
@@ -2014,6 +2066,28 @@ func parseQuotaForm(form quotaFormData) (quota.Input, error) {
 		return quota.Input{}, quota.ErrInvalidQuota
 	}
 	return quota.Input{MaxCPUMillis: cpu, MaxMemoryBytes: memory, MaxStorageBytes: storage, MaxWorkspaces: workspaces, MaxRunningWorkspaces: runningWorkspaces}, nil
+}
+
+func quotaFormFromUserQuota(value domain.UserQuota) quotaFormData {
+	return quotaFormData{
+		UserID:               value.UserID,
+		MaxCPUMillis:         strconv.FormatInt(value.MaxCPUMillis, 10),
+		MaxMemoryMiB:         strconv.FormatInt(value.MaxMemoryBytes/(1<<20), 10),
+		MaxStorageGiB:        strconv.FormatInt(value.MaxStorageBytes/(1<<30), 10),
+		MaxWorkspaces:        strconv.FormatInt(value.MaxWorkspaces, 10),
+		MaxRunningWorkspaces: strconv.FormatInt(value.MaxRunningWorkspaces, 10),
+	}
+}
+
+func quotaFormFromGroupQuota(value domain.GroupQuota) quotaFormData {
+	return quotaFormData{
+		GroupID:              value.GroupID,
+		MaxCPUMillis:         strconv.FormatInt(value.MaxCPUMillis, 10),
+		MaxMemoryMiB:         strconv.FormatInt(value.MaxMemoryBytes/(1<<20), 10),
+		MaxStorageGiB:        strconv.FormatInt(value.MaxStorageBytes/(1<<30), 10),
+		MaxWorkspaces:        strconv.FormatInt(value.MaxWorkspaces, 10),
+		MaxRunningWorkspaces: strconv.FormatInt(value.MaxRunningWorkspaces, 10),
+	}
 }
 
 func parseSettingsForm(form settingsFormData) (quota.HostSettingsInput, error) {
