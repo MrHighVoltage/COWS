@@ -121,6 +121,11 @@ code { color: #465866; font-size: .82rem; }
 .access-control-bar h2 { margin: 0 .35rem 0 0; font-size: 1rem; }
 .access-control-bar .badge { margin-right: auto; }
 .access-control-bar button { min-height: 1.95rem; padding: .3rem .6rem; font-size: .82rem; }
+.connection-status { transition: color .15s ease, border-color .15s ease, background-color .15s ease; }
+.connection-status-connected { border-color: #8ac5a8; color: #11734b; background: #effaf3; }
+.connection-status-connecting { border-color: #d2b36b; color: #8a641c; background: #fff8e8; }
+.connection-status-disconnected, .connection-status-unavailable { border-color: #d9a09a; color: #8c2d1a; background: #fff3f1; }
+.connection-toggle { min-width: 5.8rem; }
 .access-session-note { margin: .2rem 0 .65rem; color: #647482; font-size: .78rem; }
 .access-placeholder { margin: 0; }
 .workspace-access-shell:fullscreen { display: flex; flex-direction: column; width: 100vw; height: 100vh; padding: .5rem; overflow: hidden; background: #f5f7f9; }
