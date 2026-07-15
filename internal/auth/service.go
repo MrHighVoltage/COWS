@@ -78,6 +78,7 @@ func New(store repository.Store, sessionLifetime time.Duration, policies ...Regi
 		policy = policies[0]
 	}
 	seenGroups := make(map[string]struct{}, len(policy.DefaultGroupNames))
+	normalizedGroups := make([]string, 0, len(policy.DefaultGroupNames))
 	for _, name := range policy.DefaultGroupNames {
 		name = strings.TrimSpace(name)
 		if name == "" {
@@ -88,8 +89,9 @@ func New(store repository.Store, sessionLifetime time.Duration, policies ...Regi
 			return nil, fmt.Errorf("registration default group %q is repeated", name)
 		}
 		seenGroups[key] = struct{}{}
+		normalizedGroups = append(normalizedGroups, name)
 	}
-	policy.DefaultGroupNames = append([]string(nil), policy.DefaultGroupNames...)
+	policy.DefaultGroupNames = normalizedGroups
 	return &Service{store: store, sessionLifetime: sessionLifetime, registration: policy, now: time.Now}, nil
 }
 
