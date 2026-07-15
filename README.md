@@ -79,8 +79,10 @@ COWS uses the rootless Podman service socket at
 Docker sockets are rejected.
 COWS creates and manages only COWS-labeled containers using approved template
 images, server-side resource limits, and isolated networking. It does not
-expose container ports publicly. Terminal sessions use an approved `/bin/sh -l`
-and desktop sessions use a template-approved internal VNC service through
+expose container ports publicly. Terminal sessions use the template's
+server-resolved container-user shell with `-l` (or `/bin/sh -l` when no
+container user is configured), and desktop sessions use a template-approved
+internal VNC service through
 authenticated COWS WebSockets; neither is a generic user-selected proxy.
 Desktop-enabled workspaces can use an administrator-defined static or generated
 VNC password through secret placeholders; COWS supplies it automatically to

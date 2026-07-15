@@ -178,8 +178,8 @@ generic application proxy, or production HTTPS configuration. The initial file
 manager supports approved directory and named-volume listing, bounded upload,
 individual file download, streamed directory ZIP download, folder creation,
 rename, and deletion; it does not support archive extraction.
-Terminal access uses a fixed shell and desktop access uses a template-approved
-VNC service through the rootless Podman adapter; desktop sessions
+Terminal access uses a fixed server-resolved template shell and desktop access
+uses a template-approved VNC service through the rootless Podman adapter; desktop sessions
 automatically authenticate using the template-selected VNC secret when one is
 configured. Both require runtime support for the selected container. Podman lifecycle
 operations are limited to approved images,

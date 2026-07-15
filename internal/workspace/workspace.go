@@ -485,7 +485,27 @@ func (s *Service) OpenTerminal(ctx context.Context, actorID, workspaceID string)
 	if !ok {
 		return nil, ErrTerminalNotAvailable
 	}
-	terminal, err := shellRuntime.OpenShell(ctx, value.RuntimeID, []string{"/bin/sh", "-l"})
+	configuration, err := s.effectiveConfiguration(ctx, value)
+	if err != nil {
+		return nil, err
+	}
+	owner, err := s.store.FindUserByID(ctx, value.OwnerUserID)
+	if err != nil {
+		return nil, err
+	}
+	allocations, err := s.store.ListWorkspacePortAllocations(ctx, value.ID)
+	if err != nil {
+		return nil, err
+	}
+	resolved, err := resolveConfiguration(configuration, owner, value.ID, value.Name, allocations, value.TemplateSecrets)
+	if err != nil {
+		return nil, err
+	}
+	shell := "/bin/sh"
+	if resolved.User != nil && resolved.User.Shell != "" {
+		shell = resolved.User.Shell
+	}
+	terminal, err := shellRuntime.OpenShell(ctx, value.RuntimeID, []string{shell, "-l"})
 	if err != nil {
 		return nil, err
 	}
