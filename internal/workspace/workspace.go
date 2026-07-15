@@ -290,6 +290,11 @@ func (s *Service) StartWorkspace(ctx context.Context, actorID, workspaceID strin
 	if err != nil {
 		return err
 	}
+	release, err := s.beginLifecycleChange(ctx, value.ID)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if value.ObservedState != string(runtime.StateRunning) && s.scheduler != nil {
 		if err := s.scheduler.CheckStart(ctx, value.OwnerUserID, domain.ResourceRequest{CPUMillis: value.AllocatedCPUMillis, MemoryBytes: value.AllocatedMemoryBytes}); err != nil {
 			return err
@@ -364,6 +369,11 @@ func (s *Service) StopWorkspace(ctx context.Context, actorID, workspaceID string
 	if err != nil {
 		return err
 	}
+	release, err := s.beginLifecycleChange(ctx, value.ID)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if err := s.store.SetWorkspaceDesiredState(ctx, value.ID, domain.DesiredWorkspaceStopped, s.now().UTC()); err != nil {
 		return err
 	}
@@ -409,18 +419,32 @@ func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID stri
 	if err != nil {
 		return err
 	}
+	release, err := s.beginLifecycleChange(ctx, value.ID)
+	if err != nil {
+		return err
+	}
+	defer release()
 	configuration, err := s.effectiveConfiguration(ctx, value)
 	if err != nil {
 		return err
 	}
+	archiveAction := archiveMountActivityAction(configuration.Mounts)
 	if value.RuntimeID == "" {
+		if err := s.logArchiveActivity(value, "workspace_delete_started", "started", nil); err != nil {
+			return err
+		}
 		if err := archiveMountDirectories(s.mountRoot, s.mountArchiveRoot, value.ID, configuration.Mounts); err != nil {
+			_ = s.logArchiveActivity(value, archiveAction, "failed", err)
+			return err
+		}
+		if err := s.logArchiveActivity(value, archiveAction, "succeeded", nil); err != nil {
 			return err
 		}
 		if err := s.store.DeleteWorkspace(ctx, value.ID); err != nil {
 			return err
 		}
-		s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "workspace.deleted", TargetType: "workspace", TargetID: value.ID})
+		_, archivePath := archiveActivityPaths(s.mountRoot, s.mountArchiveRoot, value.ID)
+		s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "workspace.deleted", TargetType: "workspace", TargetID: value.ID, Metadata: map[string]string{"runtime_id": value.RuntimeID, "archive_path": archivePath}})
 		return nil
 	}
 	if value.ObservedState == string(runtime.StateRunning) {
@@ -430,26 +454,47 @@ func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID stri
 	if err := s.beginOperation(ctx, value.ID, "delete", operationStarted); err != nil {
 		return err
 	}
+	if err := s.logArchiveActivity(value, "workspace_delete_started", "started", nil); err != nil {
+		_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
+		return err
+	}
 	_ = s.updateOperationPhase(ctx, value.ID, "delete:removing")
 	if value.ObservedState != string(runtime.StateRemoved) && value.ObservedState != "missing" {
 		if err := s.runtime.RemoveWorkspace(ctx, value.RuntimeID); err != nil && !errors.Is(err, runtime.ErrNotFound) {
+			_ = s.logArchiveActivity(value, "runtime_container_removed", "failed", err)
+			_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
+			return err
+		}
+		if err := s.logArchiveActivity(value, "runtime_container_removed", "succeeded", nil); err != nil {
 			_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
 			return err
 		}
 	}
 	_ = s.updateOperationPhase(ctx, value.ID, "delete:archiving")
 	if err := archiveMountDirectories(s.mountRoot, s.mountArchiveRoot, value.ID, configuration.Mounts); err != nil {
+		_ = s.logArchiveActivity(value, archiveAction, "failed", err)
+		_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
+		return err
+	}
+	if err := s.logArchiveActivity(value, archiveAction, "succeeded", nil); err != nil {
 		_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
 		return err
 	}
 	// Keep the record when this database delete fails so an administrator can
 	// retry without losing the audit and reconciliation context.
 	retainedVolumes := retainedWorkspaceVolumes(value, configuration.Mounts, s.now().UTC())
+	if len(retainedVolumes) > 0 {
+		if err := s.logArchiveActivity(value, "named_volumes_retained", "succeeded", nil); err != nil {
+			_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
+			return err
+		}
+	}
 	if err := s.store.DeleteWorkspaceRetainingVolumes(ctx, value.ID, retainedVolumes); err != nil {
 		_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
 		return err
 	}
-	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "workspace.deleted", TargetType: "workspace", TargetID: value.ID, Metadata: map[string]string{"retained_volume_count": fmt.Sprintf("%d", len(retainedVolumes))}})
+	_, archivePath := archiveActivityPaths(s.mountRoot, s.mountArchiveRoot, value.ID)
+	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "workspace.deleted", TargetType: "workspace", TargetID: value.ID, Metadata: map[string]string{"retained_volume_count": fmt.Sprintf("%d", len(retainedVolumes)), "runtime_id": value.RuntimeID, "archive_path": archivePath}})
 	return nil
 }
 
@@ -655,15 +700,24 @@ func (s *Service) RunTimeouts(ctx context.Context) error {
 	now := s.now().UTC()
 	for _, value := range values {
 		status := EvaluateTimeouts(value, now)
+		release, lockErr := s.beginLifecycleChange(ctx, value.ID)
+		if lockErr != nil {
+			if errors.Is(lockErr, context.Canceled) || errors.Is(lockErr, context.DeadlineExceeded) {
+				return lockErr
+			}
+			continue
+		}
 		switch status.Action {
 		case TimeoutActionStop:
 			if value.RuntimeID == "" || value.ObservedState != string(runtime.StateRunning) {
+				release()
 				continue
 			}
 			operationStarted := now
 			_ = s.beginOperation(ctx, value.ID, "timeout-stop", operationStarted)
 			if err := s.runtime.StopWorkspace(ctx, value.RuntimeID, 10*time.Second); err != nil {
 				_ = s.finishOperation(ctx, value.ID, "timeout-stop", "failed", err.Error(), operationStarted)
+				release()
 				continue
 			}
 			_ = s.store.SetWorkspaceDesiredState(ctx, value.ID, domain.DesiredWorkspaceStopped, now)
@@ -674,16 +728,19 @@ func (s *Service) RunTimeouts(ctx context.Context) error {
 			s.recordAudit(ctx, domain.AuditEvent{EventType: "workspace.timeout_stopped", TargetType: "workspace", TargetID: value.ID})
 		case TimeoutActionDelete:
 			if value.RuntimeID == "" || (value.ObservedState != string(runtime.StateStopped) && value.ObservedState != string(runtime.StateExited)) {
+				release()
 				continue
 			}
 			operationStarted := now
 			_ = s.beginOperation(ctx, value.ID, "timeout-delete", operationStarted)
 			if err := s.runtime.RemoveWorkspace(ctx, value.RuntimeID); err != nil {
 				_ = s.finishOperation(ctx, value.ID, "timeout-delete", "failed", err.Error(), operationStarted)
+				release()
 				continue
 			}
 			if err := s.store.ReleaseWorkspacePorts(ctx, value.ID); err != nil {
 				_ = s.finishOperation(ctx, value.ID, "timeout-delete", "failed", err.Error(), operationStarted)
+				release()
 				continue
 			}
 			value.ContainerDeletedAt = now
@@ -693,6 +750,7 @@ func (s *Service) RunTimeouts(ctx context.Context) error {
 			_ = s.finishOperation(ctx, value.ID, "timeout-delete", "succeeded", "", operationStarted)
 			s.recordAudit(ctx, domain.AuditEvent{EventType: "workspace.timeout_container_deleted", TargetType: "workspace", TargetID: value.ID})
 		}
+		release()
 	}
 	return nil
 }

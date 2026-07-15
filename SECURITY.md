@@ -140,7 +140,9 @@ checks, bounded uploads, temporary files, and server-side mount selection.
 Rootless Podman operations run through the COWS namespace helper; COWS does not
 weaken ownership mappings to make direct host access work. These controls
 reduce but do not eliminate risk from a malicious workspace process, filesystem
-races, or host misconfiguration.
+races, or host misconfiguration. The helper may access `running`, `stopped`, or
+`exited` workspaces because it operates on storage rather than executing inside
+the container. File operations are serialized with lifecycle changes.
 Directory downloads are streamed as ZIP archives with a 4 GiB uncompressed
 and 100,000-entry bound. Symlinks and non-regular special files are not
 included, and no temporary archive is created. Archive extraction, bulk
@@ -152,6 +154,12 @@ Explicit deletion retains named volumes and records tombstone metadata before
 the workspace row is removed. A retained-volume record is not authorization to
 mount, inspect, restore, or delete that volume. Those actions require a future
 administrator-only workflow with separate authorization and audit events.
+
+Explicit deletion also writes an append-only, permission-restricted
+`archive-activity.jsonl` record containing workspace and runtime/container
+identifiers, source/archive paths, timestamps, and operation status. It never
+contains file contents or secrets and is intended to help administrators locate
+data for manual recovery. Timeout cleanup never archives user data.
 
 ## Registration and email risks
 

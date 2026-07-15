@@ -13,6 +13,8 @@ Resource, storage, rootless-Podman, and group-access changes must follow
 `docs/decisions/0012-rootless-podman-resource-and-group-policy.md`.
 Group quota and administrator-view changes must follow
 `docs/decisions/0013-group-quotas-and-administrator-views.md`.
+Stopped-workspace file access and archive recovery logging must follow
+`docs/decisions/0016-stopped-file-access-and-archive-audit.md`.
 Registration and account-credential changes must follow
 `docs/decisions/0014-self-registration-and-account-credentials.md`.
 Email notification changes must follow

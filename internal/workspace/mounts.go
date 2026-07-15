@@ -2,9 +2,12 @@ package workspace
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/cows-project/cows/internal/domain"
 	"github.com/cows-project/cows/internal/runtime"
@@ -29,7 +32,11 @@ func (s *Service) ListFileMounts(ctx context.Context, actorID, workspaceID strin
 	if err != nil {
 		return nil, err
 	}
-	if value.ObservedState != string(runtime.StateRunning) {
+	switch value.ObservedState {
+	case string(runtime.StateRunning), string(runtime.StateStopped), string(runtime.StateExited):
+		// Rootless Podman file access is storage-backed and does not require a
+		// process inside the workspace to be running.
+	default:
 		return nil, ErrFileManagerNotAvailable
 	}
 	template, err := s.store.FindTemplateByID(ctx, value.TemplateID)
@@ -225,6 +232,82 @@ func archiveMountDirectories(root, archiveRoot, workspaceID string, mounts []dom
 	if err := os.Rename(sourceRoot, destinationRoot); err != nil {
 		// Rename is intentionally used instead of a copy: archive moves must be
 		// atomic and must not duplicate an unbounded workspace directory.
+		return ErrMountUnavailable
+	}
+	return nil
+}
+
+type archiveActivity struct {
+	Timestamp   string `json:"timestamp"`
+	Action      string `json:"action"`
+	WorkspaceID string `json:"workspace_id"`
+	RuntimeID   string `json:"runtime_id,omitempty"`
+	SourcePath  string `json:"source_path,omitempty"`
+	ArchivePath string `json:"archive_path,omitempty"`
+	Status      string `json:"status"`
+	Error       string `json:"error,omitempty"`
+}
+
+func archiveActivityPaths(root, archiveRoot, workspaceID string) (string, string) {
+	source := filepath.Join(root, managedContainerName(workspaceID))
+	destination := filepath.Join(archiveRoot, managedContainerName(workspaceID))
+	if absolute, err := filepath.Abs(source); err == nil {
+		source = absolute
+	}
+	if absolute, err := filepath.Abs(destination); err == nil {
+		destination = absolute
+	}
+	return source, destination
+}
+
+func (s *Service) logArchiveActivity(value domain.Workspace, action, status string, activityErr error) error {
+	source, destination := archiveActivityPaths(s.mountRoot, s.mountArchiveRoot, value.ID)
+	entry := archiveActivity{Action: action, WorkspaceID: value.ID, RuntimeID: value.RuntimeID, SourcePath: source, ArchivePath: destination, Status: status}
+	if activityErr != nil {
+		entry.Error = activityErr.Error()
+	}
+	return recordArchiveActivity(s.mountArchiveRoot, entry)
+}
+
+func archiveMountActivityAction(mounts []domain.TemplateMount) string {
+	for _, mount := range mounts {
+		if normalizedMountType(mount.Type) == domain.TemplateMountDirectory {
+			return "managed_directory_archived"
+		}
+	}
+	return "managed_directory_archive_skipped"
+}
+
+// recordArchiveActivity writes an append-only recovery trail outside the
+// archived workspace directory. It contains identifiers and paths only.
+func recordArchiveActivity(archiveRoot string, activity archiveActivity) error {
+	if archiveRoot == "" {
+		return ErrMountUnavailable
+	}
+	if err := os.MkdirAll(archiveRoot, 0o700); err != nil {
+		return ErrMountUnavailable
+	}
+	if err := os.Chmod(archiveRoot, 0o700); err != nil {
+		return ErrMountUnavailable
+	}
+	activity.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
+	data, err := json.Marshal(activity)
+	if err != nil {
+		return fmt.Errorf("encode archive activity: %w", err)
+	}
+	data = append(data, '\n')
+	file, err := os.OpenFile(filepath.Join(archiveRoot, "archive-activity.jsonl"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		return ErrMountUnavailable
+	}
+	defer file.Close()
+	if err := file.Chmod(0o600); err != nil {
+		return ErrMountUnavailable
+	}
+	if _, err := file.Write(data); err != nil {
+		return ErrMountUnavailable
+	}
+	if err := file.Sync(); err != nil {
 		return ErrMountUnavailable
 	}
 	return nil

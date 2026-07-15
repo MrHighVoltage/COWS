@@ -110,18 +110,23 @@ user or placed in a URL.
 
 The file manager is another server-rendered workspace access tab. Each request
 resolves the workspace through the workspace service, checks ownership or
-administrator permission, requires a running workspace and the template's
-`files` access method, and selects a marked directory or volume mount from the
-stored workspace configuration. The browser supplies only a mount name and
-relative path; it cannot supply a host path, volume name, runtime ID, or
-container address. File operations use the runtime file-access capability.
+administrator permission, requires a `running`, `stopped`, or `exited`
+workspace and the template's `files` access method, and selects a marked
+directory or volume mount from the stored workspace configuration. The browser
+supplies only a mount name and relative path; it cannot supply a host path,
+volume name, runtime ID, or container address. File operations use the runtime
+file-access capability and a per-workspace lock serializes them with start,
+stop, delete, and timeout cleanup. Streamed downloads retain the lock until
+they close.
 Rootless Podman starts the local COWS file helper through `podman unshare`,
 enters the server-selected source directory, drops to the mapped container
 UID/GID, and then operates through rooted filesystem calls. Named volumes are
 resolved through the runtime adapter, never by browser-visible storage paths.
 Directory downloads can be streamed as bounded ZIP archives without
 temporary files; bounded uploads are implemented, while archive extraction and
-file previews are deferred.
+file previews are deferred. Explicit directory archival records workspace and
+runtime IDs and archive paths in the permission-restricted
+`archive-activity.jsonl` file. Timeout cleanup never archives user data.
 
 ## Accounts and registration
 

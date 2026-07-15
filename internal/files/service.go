@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -41,9 +42,14 @@ type MountResolver interface {
 	ListFileMounts(ctx context.Context, actorID, workspaceID string) ([]workspace.FileMount, error)
 }
 
+type AccessCoordinator interface {
+	BeginFileAccess(ctx context.Context, actorID, workspaceID string) (func(), error)
+}
+
 type Service struct {
-	workspaces MountResolver
-	runtime    runtime.FileAccessRuntime
+	workspaces  MountResolver
+	runtime     runtime.FileAccessRuntime
+	coordinator AccessCoordinator
 }
 
 type Entry struct {
@@ -65,7 +71,8 @@ func New(workspaces MountResolver, runtimes ...runtime.FileAccessRuntime) *Servi
 	if len(runtimes) > 0 {
 		runtimeAccess = runtimes[0]
 	}
-	return &Service{workspaces: workspaces, runtime: runtimeAccess}
+	coordinator, _ := workspaces.(AccessCoordinator)
+	return &Service{workspaces: workspaces, runtime: runtimeAccess, coordinator: coordinator}
 }
 
 func (s *Service) Mounts(ctx context.Context, actorID, workspaceID string) ([]workspace.FileMount, error) {
@@ -80,6 +87,11 @@ func (s *Service) List(ctx context.Context, actorID, workspaceID, mountName, rel
 	if err != nil {
 		return Listing{}, err
 	}
+	release, err := s.beginAccess(ctx, actorID, workspaceID)
+	if err != nil {
+		return Listing{}, err
+	}
+	defer release()
 	backend, err := s.openBackend(ctx, mount)
 	if err != nil {
 		return Listing{}, err
@@ -126,8 +138,13 @@ func (s *Service) OpenDownload(ctx context.Context, actorID, workspaceID, mountN
 	if err != nil {
 		return nil, nil, err
 	}
+	release, err := s.beginAccess(ctx, actorID, workspaceID)
+	if err != nil {
+		return nil, nil, err
+	}
 	backend, err := s.openBackend(ctx, mount)
 	if err != nil {
+		release()
 		return nil, nil, err
 	}
 	if backend.access != nil {
@@ -135,32 +152,37 @@ func (s *Service) OpenDownload(ctx context.Context, actorID, workspaceID, mountN
 		file, info, err := access.OpenRead(ctx, relativePath)
 		if err != nil {
 			access.Close()
+			release()
 			return nil, nil, mapRuntimeError(err)
 		}
-		return &accessFile{reader: file, access: access}, info, nil
+		return &accessFile{reader: file, access: access, release: release}, info, nil
 	}
 	root := backend.root
 	file, err := root.Open(relativePath)
 	if err != nil {
 		root.Close()
+		release()
 		return nil, nil, mapPathError(err)
 	}
 	info, err := file.Stat()
 	if err != nil {
 		file.Close()
 		backend.Close()
+		release()
 		return nil, nil, mapPathError(err)
 	}
 	if !info.Mode().IsRegular() {
 		file.Close()
 		backend.Close()
+		release()
 		return nil, nil, ErrNotRegular
 	}
 	if err := backend.Close(); err != nil {
 		file.Close()
+		release()
 		return nil, nil, err
 	}
-	return file, info, nil
+	return &releaseFile{ReadCloser: file, release: release}, info, nil
 }
 
 // OpenZip starts a bounded, streamed ZIP response for an approved directory.
@@ -171,12 +193,17 @@ func (s *Service) OpenZip(ctx context.Context, actorID, workspaceID, mountName, 
 	if err != nil {
 		return nil, "", err
 	}
+	release, err := s.beginAccess(ctx, actorID, workspaceID)
+	if err != nil {
+		return nil, "", err
+	}
 	name := mount.Name
 	if relativePath != "." {
 		name = path.Base(relativePath)
 	}
 	backend, err := s.openBackend(ctx, mount)
 	if err != nil {
+		release()
 		return nil, "", err
 	}
 	if backend.access != nil {
@@ -184,26 +211,31 @@ func (s *Service) OpenZip(ctx context.Context, actorID, workspaceID, mountName, 
 		archive, err := access.OpenZip(ctx, relativePath)
 		if err != nil {
 			access.Close()
+			release()
 			return nil, "", mapRuntimeError(err)
 		}
-		return &accessFile{reader: archive, access: access}, name + ".zip", nil
+		return &accessFile{reader: archive, access: access, release: release}, name + ".zip", nil
 	}
 	root := backend.root
 	info, err := root.Lstat(relativePath)
 	if err != nil {
 		backend.Close()
+		release()
 		return nil, "", mapPathError(err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
 		backend.Close()
+		release()
 		return nil, "", ErrInvalidPath
 	}
 	if !info.IsDir() {
 		root.Close()
+		release()
 		return nil, "", ErrNotDirectory
 	}
 	reader, writer := io.Pipe()
 	go func() {
+		defer release()
 		defer backend.Close()
 		archive := zip.NewWriter(writer)
 		state := archiveState{}
@@ -326,6 +358,11 @@ func (s *Service) CreateDirectory(ctx context.Context, actorID, workspaceID, mou
 	if err != nil {
 		return err
 	}
+	release, err := s.beginAccess(ctx, actorID, workspaceID)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if mount.ReadOnly {
 		return ErrReadOnly
 	}
@@ -364,6 +401,11 @@ func (s *Service) Delete(ctx context.Context, actorID, workspaceID, mountName, r
 	if err != nil {
 		return err
 	}
+	release, err := s.beginAccess(ctx, actorID, workspaceID)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if mount.ReadOnly || relativePath == "." {
 		if relativePath == "." {
 			return ErrInvalidPath
@@ -398,6 +440,11 @@ func (s *Service) Rename(ctx context.Context, actorID, workspaceID, mountName, r
 	if err != nil {
 		return err
 	}
+	release, err := s.beginAccess(ctx, actorID, workspaceID)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if mount.ReadOnly {
 		return ErrReadOnly
 	}
@@ -444,6 +491,11 @@ func (s *Service) Upload(ctx context.Context, actorID, workspaceID, mountName, r
 	if err != nil {
 		return err
 	}
+	release, err := s.beginAccess(ctx, actorID, workspaceID)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if mount.ReadOnly {
 		return ErrReadOnly
 	}
@@ -585,15 +637,42 @@ func (s *Service) openBackend(ctx context.Context, mount workspace.FileMount) (*
 	return &fileBackend{root: root}, nil
 }
 
+func (s *Service) beginAccess(ctx context.Context, actorID, workspaceID string) (func(), error) {
+	if s.coordinator == nil {
+		return func() {}, nil
+	}
+	return s.coordinator.BeginFileAccess(ctx, actorID, workspaceID)
+}
+
 type accessFile struct {
-	reader io.ReadCloser
-	access runtime.FileAccess
+	reader  io.ReadCloser
+	access  runtime.FileAccess
+	release func()
+	once    sync.Once
 }
 
 func (f *accessFile) Read(value []byte) (int, error) { return f.reader.Read(value) }
 
 func (f *accessFile) Close() error {
-	return firstError(f.reader.Close(), f.access.Close())
+	err := firstError(f.reader.Close(), f.access.Close())
+	if f.release != nil {
+		f.once.Do(f.release)
+	}
+	return err
+}
+
+type releaseFile struct {
+	io.ReadCloser
+	release func()
+	once    sync.Once
+}
+
+func (f *releaseFile) Close() error {
+	err := f.ReadCloser.Close()
+	if f.release != nil {
+		f.once.Do(f.release)
+	}
+	return err
 }
 
 func cleanRelativePath(value string) (string, error) {

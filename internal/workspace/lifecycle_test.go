@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -225,6 +226,10 @@ func TestManualDeleteRemovesWorkspaceRecordAfterContainer(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(mountRoot+"-archive", managedContainerName(value.ID), "designs")); err != nil {
 		t.Fatalf("archived mount directory: %v", err)
+	}
+	activity, err := os.ReadFile(filepath.Join(mountRoot+"-archive", "archive-activity.jsonl"))
+	if err != nil || !strings.Contains(string(activity), value.ID) || !strings.Contains(string(activity), "runtime-123") {
+		t.Fatalf("archive activity log = %q, error = %v", activity, err)
 	}
 	if fake.removed != 1 {
 		t.Fatalf("runtime remove calls = %d, want 1", fake.removed)

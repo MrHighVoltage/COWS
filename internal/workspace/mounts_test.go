@@ -1,8 +1,10 @@
 package workspace
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cows-project/cows/internal/domain"
@@ -78,5 +80,29 @@ func TestArchiveMountDirectoriesPreservesManagedNames(t *testing.T) {
 func TestRemoveMountDirectoriesIgnoresMissingVolumeOnlyRoot(t *testing.T) {
 	if err := removeMountDirectories(filepath.Join(t.TempDir(), "missing"), "workspace-123", []domain.TemplateMount{{Name: "data", Type: domain.TemplateMountVolume, ContainerPath: "/data"}}); err != nil {
 		t.Fatalf("remove volume-only mounts: %v", err)
+	}
+}
+
+func TestRecordArchiveActivityIncludesRecoveryIdentifiers(t *testing.T) {
+	archiveRoot := t.TempDir()
+	if err := recordArchiveActivity(archiveRoot, archiveActivity{
+		Action:      "managed_directory_archived",
+		WorkspaceID: "workspace-123",
+		RuntimeID:   "container-456",
+		ArchivePath: "/srv/cows-mounts-archive/cows-workspace-123",
+		Status:      "succeeded",
+	}); err != nil {
+		t.Fatalf("record archive activity: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(archiveRoot, "archive-activity.jsonl"))
+	if err != nil {
+		t.Fatalf("read archive activity: %v", err)
+	}
+	var entry archiveActivity
+	if err := json.Unmarshal([]byte(strings.TrimSpace(string(data))), &entry); err != nil {
+		t.Fatalf("decode archive activity: %v", err)
+	}
+	if entry.WorkspaceID != "workspace-123" || entry.RuntimeID != "container-456" || entry.Status != "succeeded" || entry.Timestamp == "" {
+		t.Fatalf("archive activity = %+v", entry)
 	}
 }
