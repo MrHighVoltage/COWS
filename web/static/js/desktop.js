@@ -1,12 +1,15 @@
 import RFB from "/static/vendor/novnc/core/rfb.js";
 
-const root = document.querySelector("[data-desktop]");
-if (root) {
+export function initDesktop(root) {
+  if (!root || root.dataset.desktopInitialized === "true") return;
+  root.dataset.desktopInitialized = "true";
+
   const display = root.querySelector("#desktop-display");
   const status = root.querySelector("#desktop-status");
   const error = root.querySelector("#desktop-error");
   const fitButton = root.querySelector("[data-desktop-fit]");
   const fullscreenButton = root.querySelector("[data-desktop-fullscreen]");
+  const fullscreenRoot = document.getElementById(root.dataset.fullscreenTarget) || root;
   const scheme = window.location.protocol === "https:" ? "wss:" : "ws:";
   const url = scheme + "//" + window.location.host + root.dataset.desktopUrl;
   const rfb = new RFB(display, url);
@@ -21,15 +24,15 @@ if (root) {
   }
 
   function updateFullscreenLabel() {
-    if (fullscreenButton) fullscreenButton.textContent = document.fullscreenElement === root ? "Exit full screen" : "Full screen";
+    if (fullscreenButton) fullscreenButton.textContent = document.fullscreenElement === fullscreenRoot ? "Exit full screen" : "Full screen";
   }
 
   async function toggleFullscreen() {
     try {
-      if (document.fullscreenElement === root) {
+      if (document.fullscreenElement === fullscreenRoot) {
         await document.exitFullscreen();
       } else {
-        await root.requestFullscreen();
+        await fullscreenRoot.requestFullscreen();
       }
     } catch (requestError) {
       error.hidden = false;
@@ -61,13 +64,9 @@ if (root) {
         credentials: "same-origin",
         headers: { "Accept": "application/json" }
       });
-      if (!response.ok) {
-        throw new Error("credentials request failed");
-      }
+      if (!response.ok) throw new Error("credentials request failed");
       const credentials = await response.json();
-      if (typeof credentials.password !== "string" || credentials.password.length === 0) {
-        throw new Error("credentials response was invalid");
-      }
+      if (typeof credentials.password !== "string" || credentials.password.length === 0) throw new Error("credentials response was invalid");
       rfb.sendCredentials({ password: credentials.password });
     } catch (requestError) {
       status.textContent = "Unavailable";
@@ -81,3 +80,6 @@ if (root) {
     error.textContent = "The VNC server rejected the desktop session.";
   });
 }
+
+const standaloneRoot = document.querySelector("[data-access]") ? null : document.querySelector("[data-desktop]");
+if (standaloneRoot) initDesktop(standaloneRoot);

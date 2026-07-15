@@ -40,9 +40,9 @@
         {{ else }}
           <form method="post" action="/workspaces/{{ .WorkspaceID }}/start"><input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}"><button class="table-action" type="submit">Start</button></form>
         {{ end }}
-        {{ if and .RuntimePresent .Access.Terminal }}<a class="table-action button-link" href="/workspaces/{{ .WorkspaceID }}/terminal">Terminal</a>{{ end }}
-        {{ if and .RuntimePresent .Access.Desktop }}<a class="table-action button-link" href="/workspaces/{{ .WorkspaceID }}/desktop">Desktop</a>{{ end }}
-        {{ if and .RuntimePresent .Access.Files }}<a class="table-action button-link" href="/workspaces/{{ .WorkspaceID }}/files">Files</a>{{ end }}
+        {{ if and .RuntimePresent .Access.Terminal }}<a class="table-action button-link" href="{{ accessURL .WorkspaceID "terminal" }}">Terminal</a>{{ end }}
+        {{ if and .RuntimePresent .Access.Desktop }}<a class="table-action button-link" href="{{ accessURL .WorkspaceID "desktop" }}">Desktop</a>{{ end }}
+        {{ if and .RuntimePresent .Access.Files }}<a class="table-action button-link" href="{{ accessURL .WorkspaceID "files" }}">Files</a>{{ end }}
       </div>
       {{ else }}<span class="muted">No matching COWS record</span>{{ end }}
     </td>

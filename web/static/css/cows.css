@@ -110,6 +110,28 @@ code { color: #465866; font-size: .82rem; }
 .desktop-display { width: 100%; height: min(72vh, 50rem); min-height: 32rem; overflow: hidden; border: 1px solid #263746; border-radius: .35rem; background: #101820; }
 .desktop-display canvas { display: block; max-width: 100%; height: auto; margin: 0 auto; }
 .desktop-panel .alert { margin-bottom: 0; }
+.workspace-access-shell { min-width: 0; }
+.access-tabs { display: flex; flex-wrap: wrap; gap: .35rem; margin-bottom: 1rem; border-bottom: 1px solid #c8d1d8; }
+.access-tab { min-height: 2.25rem; margin-bottom: -.1rem; padding: .45rem .85rem; border: 1px solid transparent; border-bottom: 2px solid transparent; color: #52616f; background: transparent; font: inherit; font-weight: 700; cursor: pointer; }
+.access-tab:hover, .access-tab.active { border-color: #c8d1d8; border-bottom-color: #176b8f; color: #176b8f; background: #ffffff; }
+.access-tab:focus-visible { outline: .2rem solid rgb(23 107 143 / 25%); outline-offset: .1rem; }
+.access-panel[hidden] { display: none; }
+.access-service-panel { min-width: 0; padding: .75rem; border: 1px solid #d7dee5; border-radius: .45rem; background: #ffffff; box-shadow: 0 .35rem 1rem rgb(23 33 43 / 6%); }
+.access-control-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; min-height: 2.25rem; }
+.access-control-bar h2 { margin: 0 .35rem 0 0; font-size: 1rem; }
+.access-control-bar .badge { margin-right: auto; }
+.access-control-bar button { min-height: 1.95rem; padding: .3rem .6rem; font-size: .82rem; }
+.access-session-note { margin: .2rem 0 .65rem; color: #647482; font-size: .78rem; }
+.access-placeholder { margin: 0; }
+.workspace-access-shell:fullscreen { display: flex; flex-direction: column; width: 100vw; height: 100vh; padding: .5rem; overflow: hidden; background: #f5f7f9; }
+.workspace-access-shell:fullscreen .access-tabs { flex: 0 0 auto; margin-bottom: .5rem; }
+.workspace-access-shell:fullscreen .access-panels, .workspace-access-shell:fullscreen .access-panel:not([hidden]) { flex: 1; min-height: 0; }
+.workspace-access-shell:fullscreen .access-service-panel { display: flex; flex-direction: column; height: 100%; padding: .5rem; }
+.workspace-access-shell:fullscreen .terminal, .workspace-access-shell:fullscreen .desktop-display { flex: 1; height: auto; min-height: 0; }
+.workspace-details summary { cursor: pointer; color: #176b8f; font-weight: 700; }
+.workspace-details dl { display: grid; grid-template-columns: max-content minmax(8rem, 1fr); gap: .25rem .75rem; margin: .65rem 0 0; font-size: .8rem; }
+.workspace-details dt { color: #647482; font-weight: 700; }
+.workspace-details dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
 .file-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; margin-bottom: 1rem; }
 .file-toolbar label { color: #52616f; font-size: .9rem; font-weight: 700; }
 .file-toolbar select { min-height: 2.4rem; padding: .45rem .6rem; border: 1px solid #9fb0bd; border-radius: .3rem; font: inherit; }
@@ -165,6 +187,7 @@ code { color: #465866; font-size: .82rem; }
   .resource-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .quota-form { min-width: 24rem; }
   .quota-form-grid { grid-template-columns: 1fr; }
+  .access-control-bar .badge { margin-right: 0; }
   .file-actions, .file-actions form { align-items: stretch; flex-direction: column; }
   .file-actions form > * { width: 100%; }
 }

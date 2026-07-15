@@ -108,6 +108,7 @@ type Workspace struct {
 	ID                     string
 	OwnerUserID            string
 	TemplateID             string
+	TemplateName           string
 	TemplateRevision       int64
 	TemplateImageReference string
 	TemplateImageDigest    string
