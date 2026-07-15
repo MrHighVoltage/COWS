@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/mail"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -31,6 +32,15 @@ type Config struct {
 	RegistrationEnabled    bool
 	RegistrationGroups     []string
 	RegistrationQuota      quota.Input
+	EmailEnabled           bool
+	SMTPHost               string
+	SMTPPort               int
+	SMTPFrom               string
+	SMTPUsername           string
+	SMTPPassword           string
+	SMTPRequireTLS         bool
+	EmailWarningLeadTime   time.Duration
+	EmailRetryInterval     time.Duration
 }
 
 func Load(args []string) (Config, error) {
@@ -58,6 +68,15 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	registrationStorageValue := envOr(lookup, "COWS_REGISTRATION_DEFAULT_STORAGE_BYTES", "21474836480")
 	registrationWorkspacesValue := envOr(lookup, "COWS_REGISTRATION_DEFAULT_MAX_WORKSPACES", "2")
 	registrationRunningValue := envOr(lookup, "COWS_REGISTRATION_DEFAULT_MAX_RUNNING_WORKSPACES", "1")
+	emailEnabledValue := envOr(lookup, "COWS_EMAIL_ENABLED", "false")
+	smtpHost := envOr(lookup, "COWS_SMTP_HOST", "")
+	smtpPortValue := envOr(lookup, "COWS_SMTP_PORT", "587")
+	smtpFrom := envOr(lookup, "COWS_SMTP_FROM", "")
+	smtpUsername := envOr(lookup, "COWS_SMTP_USERNAME", "")
+	smtpPassword := envOr(lookup, "COWS_SMTP_PASSWORD", "")
+	smtpRequireTLSValue := envOr(lookup, "COWS_SMTP_REQUIRE_TLS", "true")
+	emailWarningLeadValue := envOr(lookup, "COWS_EMAIL_WARNING_LEAD_TIME", "24h")
+	emailRetryIntervalValue := envOr(lookup, "COWS_EMAIL_RETRY_INTERVAL", "15m")
 	cookieSecure, err := strconv.ParseBool(cookieSecureValue)
 	if err != nil {
 		return Config{}, fmt.Errorf("cookie secure must be true or false: %q", cookieSecureValue)
@@ -65,6 +84,14 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	registrationEnabled, err := strconv.ParseBool(registrationEnabledValue)
 	if err != nil {
 		return Config{}, fmt.Errorf("registration enabled must be true or false: %q", registrationEnabledValue)
+	}
+	emailEnabled, err := strconv.ParseBool(emailEnabledValue)
+	if err != nil {
+		return Config{}, fmt.Errorf("email enabled must be true or false: %q", emailEnabledValue)
+	}
+	smtpRequireTLS, err := strconv.ParseBool(smtpRequireTLSValue)
+	if err != nil {
+		return Config{}, fmt.Errorf("SMTP require TLS must be true or false: %q", smtpRequireTLSValue)
 	}
 
 	flags := flag.NewFlagSet("cows", flag.ContinueOnError)
@@ -88,6 +115,15 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	flags.StringVar(&registrationStorageValue, "registration-default-storage-bytes", registrationStorageValue, "default registered-user storage quota")
 	flags.StringVar(&registrationWorkspacesValue, "registration-default-max-workspaces", registrationWorkspacesValue, "default registered-user workspace quota")
 	flags.StringVar(&registrationRunningValue, "registration-default-max-running-workspaces", registrationRunningValue, "default registered-user running-workspace quota")
+	flags.BoolVar(&emailEnabled, "email-enabled", emailEnabled, "enable lifecycle email notifications")
+	flags.StringVar(&smtpHost, "smtp-host", smtpHost, "SMTP server hostname")
+	flags.StringVar(&smtpPortValue, "smtp-port", smtpPortValue, "SMTP server port")
+	flags.StringVar(&smtpFrom, "smtp-from", smtpFrom, "SMTP sender address")
+	flags.StringVar(&smtpUsername, "smtp-username", smtpUsername, "SMTP username")
+	flags.StringVar(&smtpPassword, "smtp-password", smtpPassword, "SMTP password")
+	flags.BoolVar(&smtpRequireTLS, "smtp-require-tls", smtpRequireTLS, "require STARTTLS for email delivery")
+	flags.StringVar(&emailWarningLeadValue, "email-warning-lead-time", emailWarningLeadValue, "lead time for lifecycle warning emails")
+	flags.StringVar(&emailRetryIntervalValue, "email-retry-interval", emailRetryIntervalValue, "retry interval for failed warning emails")
 	if err := flags.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -141,6 +177,30 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	if (bootstrapUsername == "") != (bootstrapPassword == "") {
 		return Config{}, errors.New("bootstrap administrator username and password must be provided together")
 	}
+	smtpPort, err := strconv.Atoi(strings.TrimSpace(smtpPortValue))
+	if err != nil || smtpPort < 1 || smtpPort > 65535 {
+		return Config{}, fmt.Errorf("SMTP port must be between 1 and 65535: %q", smtpPortValue)
+	}
+	emailWarningLeadTime, err := time.ParseDuration(emailWarningLeadValue)
+	if err != nil || emailWarningLeadTime <= 0 {
+		return Config{}, fmt.Errorf("email warning lead time must be positive: %q", emailWarningLeadValue)
+	}
+	emailRetryInterval, err := time.ParseDuration(emailRetryIntervalValue)
+	if err != nil || emailRetryInterval <= 0 {
+		return Config{}, fmt.Errorf("email retry interval must be positive: %q", emailRetryIntervalValue)
+	}
+	if emailEnabled {
+		if strings.TrimSpace(smtpHost) == "" || strings.TrimSpace(smtpFrom) == "" {
+			return Config{}, errors.New("SMTP host and sender are required when email is enabled")
+		}
+		parsedFrom, parseErr := mail.ParseAddress(strings.TrimSpace(smtpFrom))
+		if parseErr != nil || parsedFrom.Address != strings.TrimSpace(smtpFrom) {
+			return Config{}, errors.New("SMTP sender address is invalid")
+		}
+	}
+	if (smtpUsername == "") != (smtpPassword == "") {
+		return Config{}, errors.New("SMTP username and password must be provided together")
+	}
 	registrationQuota, err := parseRegistrationQuota(registrationCPUValue, registrationMemoryValue, registrationStorageValue, registrationWorkspacesValue, registrationRunningValue)
 	if err != nil {
 		return Config{}, err
@@ -169,6 +229,15 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 		RegistrationEnabled:    registrationEnabled,
 		RegistrationGroups:     registrationGroups,
 		RegistrationQuota:      registrationQuota,
+		EmailEnabled:           emailEnabled,
+		SMTPHost:               strings.TrimSpace(smtpHost),
+		SMTPPort:               smtpPort,
+		SMTPFrom:               strings.TrimSpace(smtpFrom),
+		SMTPUsername:           smtpUsername,
+		SMTPPassword:           smtpPassword,
+		SMTPRequireTLS:         smtpRequireTLS,
+		EmailWarningLeadTime:   emailWarningLeadTime,
+		EmailRetryInterval:     emailRetryInterval,
 	}, nil
 }
 

@@ -8,14 +8,16 @@ environments through one authenticated HTTPS endpoint.
 ## Project status
 
 COWS has completed the initial **Milestone 8: restricted file manager** checkpoint. The
-current code provides local administrator bootstrap, password authentication,
+current code provides local administrator bootstrap, optional self-registration,
+password authentication,
 server-side sessions, CSRF-protected forms, basic user management,
 administrator-managed workspace templates, rootless Podman inspection and lifecycle
 operations, workspace persistence, quotas, fail-closed capacity checks, and
 template-controlled timeout processing, an authenticated browser terminal, and
 an authenticated noVNC desktop gateway through the Podman runtime
-adapter, and a restricted file manager for approved directory and named-volume
-mounts. Rootless Podman file access uses the local namespace helper described
+adapter, a restricted file manager for approved directory and named-volume
+mounts, and optional lifecycle email warnings. Rootless Podman file access uses
+the local namespace helper described
 in [ADR 0011](docs/decisions/0011-runtime-file-access.md). It does not provide
 generic proxied application access, archive extraction, or automatic retention
 archival. It is not production-ready.
@@ -59,6 +61,18 @@ The server defaults to `127.0.0.1:8080` and creates its SQLite database at
 `COWS_BOOTSTRAP_ADMIN_USERNAME` and `COWS_BOOTSTRAP_ADMIN_PASSWORD` together;
 the bootstrap is attempted only when no users exist. Use
 `COWS_COOKIE_SECURE=true` when serving through HTTPS.
+Self-registration is disabled by default. To enable it, set
+`COWS_REGISTRATION_ENABLED=true`; configure
+`COWS_REGISTRATION_DEFAULT_GROUPS` with comma-separated existing group names
+and adjust the `COWS_REGISTRATION_DEFAULT_*` quota variables as needed. The
+defaults are finite and are applied server-side; registrants cannot choose
+their role, groups, or quota.
+Email warnings are disabled by default. To enable them, set
+`COWS_EMAIL_ENABLED=true`, configure `COWS_SMTP_HOST`, `COWS_SMTP_PORT`, and
+`COWS_SMTP_FROM`, and provide SMTP credentials when required. STARTTLS is
+required by default and can only be relaxed explicitly for a trusted local
+relay. Warning lead time and retry interval use
+`COWS_EMAIL_WARNING_LEAD_TIME` and `COWS_EMAIL_RETRY_INTERVAL`.
 COWS uses the rootless Podman service socket at
 `/run/user/<uid>/podman/podman.sock` by default. Set `COWS_PODMAN_SOCKET` or
 `-podman-socket` to select another rootless Podman socket. Rootful Podman and

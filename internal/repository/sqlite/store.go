@@ -868,6 +868,95 @@ func (s *Store) UpsertHostSettings(ctx context.Context, settings domain.HostSett
 	return nil
 }
 
+func (s *Store) UpsertEmailNotification(ctx context.Context, notification domain.EmailNotification) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO email_notifications
+		(workspace_id, owner_user_id, recipient, kind, deadline, subject, body, status, attempts, next_attempt_at, last_error_code, created_at, sent_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, '', ?, 0)
+		ON CONFLICT(workspace_id, kind) DO UPDATE SET owner_user_id = excluded.owner_user_id,
+		recipient = excluded.recipient, deadline = excluded.deadline, subject = excluded.subject, body = excluded.body,
+		status = CASE WHEN email_notifications.deadline != excluded.deadline OR email_notifications.recipient != excluded.recipient THEN 'pending' ELSE email_notifications.status END,
+		attempts = CASE WHEN email_notifications.deadline != excluded.deadline OR email_notifications.recipient != excluded.recipient THEN 0 ELSE email_notifications.attempts END,
+		next_attempt_at = CASE WHEN email_notifications.deadline != excluded.deadline OR email_notifications.recipient != excluded.recipient THEN excluded.next_attempt_at ELSE email_notifications.next_attempt_at END,
+		last_error_code = CASE WHEN email_notifications.deadline != excluded.deadline OR email_notifications.recipient != excluded.recipient THEN '' ELSE email_notifications.last_error_code END,
+		sent_at = CASE WHEN email_notifications.deadline != excluded.deadline OR email_notifications.recipient != excluded.recipient THEN 0 ELSE email_notifications.sent_at END`,
+		notification.WorkspaceID, notification.OwnerUserID, notification.Recipient, notification.Kind,
+		unixOrZero(notification.Deadline), notification.Subject, notification.Body, unixOrZero(notification.NextAttemptAt), unixOrZero(notification.CreatedAt))
+	if err != nil {
+		return fmt.Errorf("upsert email notification: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ListPendingEmailNotifications(ctx context.Context, now time.Time, limit int) ([]domain.EmailNotification, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id, workspace_id, owner_user_id, recipient, kind, deadline,
+		subject, body, status, attempts, next_attempt_at, last_error_code, created_at, sent_at
+		FROM email_notifications WHERE status = 'pending' AND next_attempt_at <= ?
+		ORDER BY next_attempt_at, id LIMIT ?`, now.Unix(), limit)
+	if err != nil {
+		return nil, fmt.Errorf("list pending email notifications: %w", err)
+	}
+	defer rows.Close()
+	result := make([]domain.EmailNotification, 0)
+	for rows.Next() {
+		var notification domain.EmailNotification
+		var deadlineUnix, nextAttemptUnix, createdUnix, sentUnix int64
+		if err := rows.Scan(&notification.ID, &notification.WorkspaceID, &notification.OwnerUserID, &notification.Recipient, &notification.Kind, &deadlineUnix, &notification.Subject, &notification.Body, &notification.Status, &notification.Attempts, &nextAttemptUnix, &notification.LastErrorCode, &createdUnix, &sentUnix); err != nil {
+			return nil, fmt.Errorf("scan email notification: %w", err)
+		}
+		notification.Deadline = timeFromUnix(deadlineUnix)
+		notification.NextAttemptAt = timeFromUnix(nextAttemptUnix)
+		notification.CreatedAt = timeFromUnix(createdUnix)
+		notification.SentAt = timeFromUnix(sentUnix)
+		result = append(result, notification)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate email notifications: %w", err)
+	}
+	return result, nil
+}
+
+func (s *Store) MarkEmailNotificationSent(ctx context.Context, id int64, sentAt time.Time) error {
+	result, err := s.db.ExecContext(ctx, "UPDATE email_notifications SET status = 'sent', sent_at = ?, last_error_code = '' WHERE id = ?", unixOrZero(sentAt), id)
+	if err != nil {
+		return fmt.Errorf("mark email notification sent: %w", err)
+	}
+	if count, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("check email notification sent: %w", err)
+	} else if count == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) MarkEmailNotificationFailed(ctx context.Context, id int64, attempts int, nextAttemptAt time.Time, errorCode string) error {
+	result, err := s.db.ExecContext(ctx, "UPDATE email_notifications SET attempts = ?, next_attempt_at = ?, last_error_code = ? WHERE id = ?", attempts, unixOrZero(nextAttemptAt), errorCode, id)
+	if err != nil {
+		return fmt.Errorf("mark email notification failed: %w", err)
+	}
+	if count, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("check email notification failure: %w", err)
+	} else if count == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) MarkEmailNotificationCanceled(ctx context.Context, id int64) error {
+	result, err := s.db.ExecContext(ctx, "UPDATE email_notifications SET status = 'canceled' WHERE id = ? AND status = 'pending'", id)
+	if err != nil {
+		return fmt.Errorf("cancel email notification: %w", err)
+	}
+	if count, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("check email notification cancellation: %w", err)
+	} else if count == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
 const workspaceSelect = `SELECT id, owner_user_id, template_id, name, desired_state, observed_state, runtime_id,
 	template_revision, template_configuration_json, template_secrets_json, template_image_reference, template_image_digest, observed_error_code, observed_error, allocated_cpu_millis, allocated_memory_bytes, allocated_storage_bytes, created_at, updated_at,
 	observed_at, initial_connection_timeout_seconds, stopped_retention_seconds, data_retention_seconds,

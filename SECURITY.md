@@ -46,9 +46,11 @@ partial operations, and compromised or misconfigured images.
   must not be rendered to workspace owners.
 - Login failures are rate-limited per source by the single COWS process. A
   multi-instance deployment must move this control to shared infrastructure.
-- Newly created users must change their initial password before administrator
-  operations are available. Email is stored for future notifications but is
-  not yet used for recovery or delivery.
+- Administrator-created users must change their initial password before
+  administrator operations are available. Self-registered users choose their
+  password during registration. Email is used only for optional lifecycle
+  warnings; it is not an identity proof, recovery mechanism, or authorization
+  factor.
 - Runtime capabilities are least privilege. Privileged mode, host networking,
   unrestricted host mounts, arbitrary capabilities, and direct devices are not
   user-selectable.

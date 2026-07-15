@@ -51,6 +51,14 @@ type AuditRepository interface {
 	RecordAuditEvent(ctx context.Context, event domain.AuditEvent) error
 }
 
+type NotificationRepository interface {
+	UpsertEmailNotification(ctx context.Context, notification domain.EmailNotification) error
+	ListPendingEmailNotifications(ctx context.Context, now time.Time, limit int) ([]domain.EmailNotification, error)
+	MarkEmailNotificationSent(ctx context.Context, id int64, sentAt time.Time) error
+	MarkEmailNotificationFailed(ctx context.Context, id int64, attempts int, nextAttemptAt time.Time, errorCode string) error
+	MarkEmailNotificationCanceled(ctx context.Context, id int64) error
+}
+
 type TemplateRepository interface {
 	ListTemplates(ctx context.Context) ([]domain.WorkspaceTemplate, error)
 	FindTemplateByID(ctx context.Context, id string) (domain.WorkspaceTemplate, error)
@@ -110,4 +118,5 @@ type Store interface {
 	WorkspaceRepository
 	QuotaRepository
 	HostSettingsRepository
+	NotificationRepository
 }
