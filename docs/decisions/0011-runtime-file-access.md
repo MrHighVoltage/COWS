@@ -68,8 +68,10 @@ without changing browser routes or authorization rules.
   execution requires a future host-agent boundary.
 - Non-rootless directory and named-volume mounts are outside the supported
   deployment and require a separately reviewed privilege boundary.
-- File operations require a running workspace, as do terminal and desktop
-  sessions in this milestone.
+- File operations may use a running, stopped, or exited workspace. Terminal
+  and desktop sessions still require a running workspace. Lifecycle changes
+  are serialized with file operations, and explicit directory archival writes
+  recovery identifiers to `archive-activity.jsonl`.
 - File contents and terminal contents are not written to audit logs.
 
 ## Consequences

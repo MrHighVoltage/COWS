@@ -137,7 +137,9 @@ access helper in ADR 0011, preserving the mapped container identity. Explicit
 workspace deletion archives managed directory mounts while timeout cleanup
 leaves data in place. Explicit deletion retains named volumes with durable
 control-plane tombstones for later administrator recovery or cleanup. Remaining
-exit work is stronger temporary storage and
+file access is available for running, stopped, and exited workspaces and is
+serialized with lifecycle operations. Explicit archive activity is recorded in
+a permission-restricted JSONL recovery log. Remaining exit work is stronger temporary storage and
 file-count policy, symlink-race
 hardening, audit events for every file mutation, and broader browser
 accessibility review.

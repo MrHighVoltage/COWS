@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -56,6 +57,7 @@ type Service struct {
 	mountArchiveRoot string
 	storageUsage     *StorageUsageProvider
 	resourceUsage    runtime.ResourceUsageRuntime
+	fileAccessLocks  sync.Map
 	now              func() time.Time
 }
 
