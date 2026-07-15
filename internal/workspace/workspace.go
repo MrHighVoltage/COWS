@@ -145,7 +145,11 @@ func (s *Service) ListWorkspaces(ctx context.Context, actorID string) ([]domain.
 	if err != nil {
 		return nil, err
 	}
-	return s.withStorageUsage(ctx, values)
+	values, err = s.withStorageUsage(ctx, values)
+	if err != nil {
+		return nil, err
+	}
+	return s.withResourceUsage(ctx, values), nil
 }
 
 func (s *Service) withTemplateNames(ctx context.Context, values []domain.Workspace) ([]domain.Workspace, error) {
@@ -211,6 +215,27 @@ func (s *Service) withStorageUsage(ctx context.Context, values []domain.Workspac
 		values[index].StorageUsageKnown = true
 	}
 	return values, nil
+}
+
+func (s *Service) withResourceUsage(ctx context.Context, values []domain.Workspace) []domain.Workspace {
+	if s.resourceUsage == nil {
+		return values
+	}
+	for index := range values {
+		value := &values[index]
+		if value.ObservedState != string(runtime.StateRunning) || value.RuntimeID == "" {
+			continue
+		}
+		usage, err := s.resourceUsage.WorkspaceResourceUsage(ctx, value.RuntimeID)
+		if err != nil {
+			continue
+		}
+		value.CPUUsagePercentMilli = usage.CPUPercentMilli
+		value.MemoryUsageBytes = usage.MemoryBytes
+		value.PIDsUsage = usage.PIDs
+		value.ResourceUsageKnown = true
+	}
+	return values
 }
 
 func (s *Service) GetWorkspace(ctx context.Context, actorID, workspaceID string) (domain.Workspace, error) {
@@ -281,6 +306,7 @@ func (s *Service) StartWorkspace(ctx context.Context, actorID, workspaceID strin
 		return s.finishOperation(ctx, value.ID, "start", "succeeded", "", operationStarted)
 	}
 	if value.RuntimeID == "" || value.ObservedState == string(runtime.StateRemoved) || value.ObservedState == "missing" {
+		_ = s.updateOperationPhase(ctx, value.ID, "start:preparing")
 		configuration, err := s.effectiveConfiguration(ctx, value)
 		if err != nil {
 			return err
@@ -291,6 +317,7 @@ func (s *Service) StartWorkspace(ctx context.Context, actorID, workspaceID strin
 		if err := ensureMountDirectories(s.mountRoot, value.ID, configuration.Mounts); err != nil {
 			return err
 		}
+		_ = s.updateOperationPhase(ctx, value.ID, "start:creating")
 		spec, err := s.runtimeSpec(ctx, value)
 		if err != nil {
 			return err
@@ -306,6 +333,7 @@ func (s *Service) StartWorkspace(ctx context.Context, actorID, workspaceID strin
 			return err
 		}
 	}
+	_ = s.updateOperationPhase(ctx, value.ID, "start:starting")
 	if err := s.runtime.StartWorkspace(ctx, value.RuntimeID); err != nil {
 		_ = s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateCreated), value.RuntimeID, "runtime_start_failed", err.Error(), s.now().UTC(), s.now().UTC())
 		_ = s.finishOperation(ctx, value.ID, "start", "failed", err.Error(), operationStarted)
@@ -343,6 +371,7 @@ func (s *Service) StopWorkspace(ctx context.Context, actorID, workspaceID string
 	if err := s.beginOperation(ctx, value.ID, "stop", operationStarted); err != nil {
 		return err
 	}
+	_ = s.updateOperationPhase(ctx, value.ID, "stop:stopping")
 	if value.RuntimeID == "" || value.ObservedState == string(runtime.StateStopped) || value.ObservedState == string(runtime.StateExited) || value.ObservedState == "missing" {
 		return s.finishOperation(ctx, value.ID, "stop", "succeeded", "", operationStarted)
 	}
@@ -401,12 +430,14 @@ func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID stri
 	if err := s.beginOperation(ctx, value.ID, "delete", operationStarted); err != nil {
 		return err
 	}
+	_ = s.updateOperationPhase(ctx, value.ID, "delete:removing")
 	if value.ObservedState != string(runtime.StateRemoved) && value.ObservedState != "missing" {
 		if err := s.runtime.RemoveWorkspace(ctx, value.RuntimeID); err != nil && !errors.Is(err, runtime.ErrNotFound) {
 			_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
 			return err
 		}
 	}
+	_ = s.updateOperationPhase(ctx, value.ID, "delete:archiving")
 	if err := archiveMountDirectories(s.mountRoot, s.mountArchiveRoot, value.ID, configuration.Mounts); err != nil {
 		_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
 		return err
@@ -672,6 +703,10 @@ func (s *Service) beginOperation(ctx context.Context, workspaceID, operation str
 
 func (s *Service) finishOperation(ctx context.Context, workspaceID, operation, status, operationError string, startedAt time.Time) error {
 	return s.store.UpdateWorkspaceOperation(ctx, workspaceID, operation, status, operationError, startedAt, s.now().UTC())
+}
+
+func (s *Service) updateOperationPhase(ctx context.Context, workspaceID, phase string) error {
+	return s.store.UpdateWorkspaceOperation(ctx, workspaceID, phase, "running", "", time.Time{}, s.now().UTC())
 }
 
 // Reconcile persists runtime truth without changing desired state. A missing

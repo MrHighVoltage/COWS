@@ -95,6 +95,11 @@ code { color: #465866; font-size: .82rem; }
 .danger-action { color: #8c2d1a; border-color: #d39a8c; }
 .allocation-summary { margin: 1rem 0 1.5rem; padding: 1rem 0 0; border-top: 1px solid #e3e8ed; }
 .allocation-summary h3 { margin: 0; font-size: 1rem; }
+.live-usage { margin: 1rem 0 1.5rem; padding: 1rem 0 0; border-top: 1px solid #e3e8ed; }
+.live-usage h3 { margin: 0; font-size: 1rem; }
+.live-usage-list { display: grid; gap: .5rem; }
+.live-usage-item { display: flex; flex-wrap: wrap; gap: .75rem; align-items: baseline; padding: .65rem .75rem; border: 1px solid #e3e8ed; background: #fbfcfd; }
+.live-usage-item strong { min-width: 12rem; }
 .resource-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; }
 .resource-item { display: grid; gap: .35rem; }
 .resource-item strong { font-size: .95rem; }

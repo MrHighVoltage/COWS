@@ -230,6 +230,25 @@ func TestOpenShellUsesPodmanExecUpgradeAndResize(t *testing.T) {
 	}
 }
 
+func TestWorkspaceResourceUsageReadsNonStreamingStats(t *testing.T) {
+	adapter := &Adapter{client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path == "/version" {
+			return podmanResponse(http.StatusOK, `{"ApiVersion":"1.45"}`), nil
+		}
+		if request.URL.Path != "/v1.45/containers/abcdef0123456789/stats" || request.URL.Query().Get("stream") != "false" {
+			t.Fatalf("unexpected stats request: %s", request.URL.String())
+		}
+		return podmanResponse(http.StatusOK, `{"cpu_stats":{"cpu_usage":{"total_usage":300},"system_cpu_usage":1200,"online_cpus":2},"precpu_stats":{"cpu_usage":{"total_usage":100},"system_cpu_usage":1000},"memory_stats":{"usage":4096},"pids_stats":{"current":7}}`), nil
+	})}}
+	usage, err := adapter.WorkspaceResourceUsage(context.Background(), "abcdef0123456789")
+	if err != nil {
+		t.Fatalf("workspace resource usage: %v", err)
+	}
+	if usage.CPUPercentMilli != 200000 || usage.MemoryBytes != 4096 || usage.PIDs != 7 || usage.ObservedAt.IsZero() {
+		t.Fatalf("unexpected resource usage: %+v", usage)
+	}
+}
+
 func TestCreateWorkspaceMapsTypedConfiguration(t *testing.T) {
 	adapter := &Adapter{client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		switch request.URL.Path {
