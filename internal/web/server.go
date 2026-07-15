@@ -49,15 +49,16 @@ type Options struct {
 }
 
 type Server struct {
-	db        *sql.DB
-	auth      *auth.Service
-	workspace *workspace.Service
-	quota     *quota.Service
-	runtime   runtime.Runtime
-	files     *files.Service
-	options   Options
-	templates *template.Template
-	static    fs.FS
+	db          *sql.DB
+	auth        *auth.Service
+	workspace   *workspace.Service
+	quota       *quota.Service
+	runtime     runtime.Runtime
+	files       *files.Service
+	options     Options
+	templates   *template.Template
+	static      fs.FS
+	userImports *userImportStore
 }
 
 type healthSnapshot struct {
@@ -183,6 +184,7 @@ type pageData struct {
 	GroupQuota          quotaFormData
 	GroupQuotaAssigned  bool
 	RuntimeWorkspaces   []runtimeWorkspaceView
+	UserImport          *userImportPageData
 }
 
 type workspaceAccess struct {
@@ -269,7 +271,7 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 		return nil, fmt.Errorf("open static assets: %w", err)
 	}
 	fileAccessRuntime, _ := runtimeAdapter.(runtime.FileAccessRuntime)
-	return &Server{db: db, auth: authService, workspace: templateService, quota: quotaService, runtime: runtimeAdapter, files: files.New(templateService, fileAccessRuntime), options: options, templates: templates, static: static}, nil
+	return &Server{db: db, auth: authService, workspace: templateService, quota: quotaService, runtime: runtimeAdapter, files: files.New(templateService, fileAccessRuntime), options: options, templates: templates, static: static, userImports: newUserImportStore()}, nil
 }
 
 func quotaProgressClass(current, limit int64) string {
@@ -325,6 +327,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /workspaces/{id}/files/rename", s.workspaceFileRename)
 	mux.HandleFunc("POST /workspaces/{id}/files/upload", s.workspaceFileUpload)
 	mux.HandleFunc("GET /admin/users", s.adminUsers)
+	mux.HandleFunc("GET /admin/users/import", s.adminUsersImport)
+	mux.HandleFunc("POST /admin/users/import/preview", s.adminUsersImportPreview)
+	mux.HandleFunc("POST /admin/users/import/commit", s.adminUsersImportCommit)
+	mux.HandleFunc("GET /admin/users/import/download/{token}", s.adminUsersImportDownload)
 	mux.HandleFunc("GET /admin/users/new", s.adminUsersNew)
 	mux.HandleFunc("GET /admin/users/{id}/edit", s.adminUserEdit)
 	mux.HandleFunc("POST /admin/users", s.adminUsersCreate)

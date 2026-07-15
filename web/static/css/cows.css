@@ -100,6 +100,8 @@ code { color: #465866; font-size: .82rem; }
 .live-usage-list { display: grid; gap: .5rem; }
 .live-usage-item { display: flex; flex-wrap: wrap; gap: .75rem; align-items: baseline; padding: .65rem .75rem; border: 1px solid #e3e8ed; background: #fbfcfd; }
 .live-usage-item strong { min-width: 12rem; }
+.title-actions { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; }
+.checkbox-row { display: flex; gap: .5rem; align-items: center; margin: .45rem 0; }
 .resource-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; }
 .resource-item { display: grid; gap: .35rem; }
 .resource-item strong { font-size: .95rem; }

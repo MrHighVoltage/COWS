@@ -135,6 +135,16 @@ resolves configured default group names; role, quota, and group selection are
 never accepted from the browser. SQLite persists the complete registration in
 one transaction so a failed default assignment cannot leave a partial account.
 
+Administrators can import up to 1000 local users from a bounded CSV upload with
+the fixed `username,email,display_name` columns. COWS stores the parsed preview
+only in a short-lived administrator-bound in-memory draft. Existing usernames
+are marked before commit; a commit updates only a supplied non-empty email and
+adds selected groups without removing memberships. New accounts receive a
+cryptographically generated temporary password and mandatory first-login
+change. The commit is transactional. A credential CSV containing imported
+fields and new passwords is retained only in memory for a short download
+window and is never logged or persisted in SQLite.
+
 There is no email verification or password-reset flow yet. Those flows need
 short-lived single-use tokens and a recovery policy before they are enabled.
 

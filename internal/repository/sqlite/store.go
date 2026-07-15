@@ -91,6 +91,48 @@ func (s *Store) CreateUser(ctx context.Context, user domain.User, passwordHash s
 	return nil
 }
 
+func (s *Store) ImportUsers(ctx context.Context, entries []repository.UserImportEntry) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin user import: %w", err)
+	}
+	defer tx.Rollback()
+	for _, entry := range entries {
+		user := entry.User
+		if !entry.Existing {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO users
+				(id, username, email, display_name, password_hash, role, disabled, must_change_password, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, user.ID, user.Username, user.Email, user.DisplayName,
+				entry.PasswordHash, user.Role, boolInt(user.Disabled), boolInt(user.MustChangePassword),
+				user.CreatedAt.Unix(), user.UpdatedAt.Unix()); err != nil {
+				return fmt.Errorf("create imported user: %w", err)
+			}
+		} else {
+			result, err := tx.ExecContext(ctx, `UPDATE users SET email = CASE WHEN ? <> '' THEN ? ELSE email END, updated_at = ? WHERE id = ?`,
+				user.Email, user.Email, user.UpdatedAt.Unix(), user.ID)
+			if err != nil {
+				return fmt.Errorf("update imported user: %w", err)
+			}
+			count, err := result.RowsAffected()
+			if err != nil {
+				return fmt.Errorf("check imported user update: %w", err)
+			}
+			if count == 0 {
+				return repository.ErrNotFound
+			}
+		}
+		for _, groupID := range entry.GroupIDs {
+			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO user_groups (user_id, group_id, created_at) VALUES (?, ?, ?)`, user.ID, groupID, user.UpdatedAt.Unix()); err != nil {
+				return fmt.Errorf("assign imported user group: %w", err)
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit user import: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) RegisterUser(ctx context.Context, user domain.User, passwordHash string, groupIDs []string, userQuota domain.UserQuota) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
