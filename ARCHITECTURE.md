@@ -80,9 +80,11 @@ They are not generic reverse proxies.
 
 The terminal gateway is the first implemented access gateway. After checking
 the session, workspace ownership or administrator permission, observed running
-state, and the template's terminal access method, it asks the runtime adapter
-for a fixed `/bin/sh -l` session. The browser receives only terminal input and
-output over a COWS WebSocket; it never supplies a runtime ID or command.
+state, and the template's terminal access method, it resolves the configured
+container-user shell from the workspace template snapshot and asks the runtime
+adapter for that fixed shell with the `-l` argument. Templates without a
+container-user override use `/bin/sh`. The browser receives only terminal input
+and output over a COWS WebSocket; it never supplies a runtime ID or command.
 Terminal sessions have a 15-minute idle timeout, a one-hour maximum lifetime,
 resize forwarding, and start/end audit events. The Podman adapter
 uses the runtime exec API's upgraded stream and keeps the runtime-specific

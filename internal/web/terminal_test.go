@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -66,6 +67,9 @@ func TestTerminalWebSocketAuthorizesAndBridgesShell(t *testing.T) {
 		DefaultStorageBytes: 10 << 30, InitialConnectionTimeoutSeconds: 3600,
 		StoppedRetentionSeconds: 3600,
 		AccessMethods:           []domain.AccessMethod{domain.AccessTerminal}, AllowedRoles: []domain.Role{domain.RoleUser}, Enabled: true,
+		Configuration: domain.TemplateConfiguration{ContainerUser: &domain.TemplateContainerUser{
+			UID: int64Pointer(1000), GID: int64Pointer(1000), Shell: "/bin/bash",
+		}},
 	})
 	if err != nil {
 		t.Fatalf("create terminal template: %v", err)
@@ -99,6 +103,9 @@ func TestTerminalWebSocketAuthorizesAndBridgesShell(t *testing.T) {
 	if err != nil || messageType != websocket.MessageBinary || string(data) != "$ " {
 		t.Fatalf("initial terminal output: type=%v data=%q err=%v", messageType, data, err)
 	}
+	if got, want := fake.lastCommand, []string{"/bin/bash", "-l"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("terminal command = %#v, want %#v", got, want)
+	}
 	if err := connection.Write(ctx, websocket.MessageText, []byte("echo hello\n")); err != nil {
 		t.Fatalf("write terminal input: %v", err)
 	}
@@ -115,7 +122,8 @@ func TestTerminalWebSocketAuthorizesAndBridgesShell(t *testing.T) {
 }
 
 type terminalRuntime struct {
-	terminal *fakeTerminal
+	terminal    *fakeTerminal
+	lastCommand []string
 }
 
 func newTerminalRuntime() *terminalRuntime { return &terminalRuntime{terminal: newFakeTerminal()} }
@@ -143,7 +151,8 @@ func (r *terminalRuntime) RemoveWorkspace(context.Context, string) error {
 func (r *terminalRuntime) InspectWorkspace(context.Context, string) (runtime.ObservedWorkspace, error) {
 	return runtime.ObservedWorkspace{}, runtime.ErrNotSupported
 }
-func (r *terminalRuntime) OpenShell(context.Context, string, []string) (runtime.Terminal, error) {
+func (r *terminalRuntime) OpenShell(_ context.Context, _ string, command []string) (runtime.Terminal, error) {
+	r.lastCommand = append([]string(nil), command...)
 	return r.terminal, nil
 }
 func (r *terminalRuntime) waitForResize(cols, rows int) bool {
@@ -225,3 +234,5 @@ func (t *fakeTerminal) waitForResize(cols, rows int) bool {
 var _ runtime.Runtime = (*terminalRuntime)(nil)
 var _ runtime.ShellRuntime = (*terminalRuntime)(nil)
 var _ runtime.Terminal = (*fakeTerminal)(nil)
+
+func int64Pointer(value int64) *int64 { return &value }
