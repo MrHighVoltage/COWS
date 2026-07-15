@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/cows-project/cows/internal/quota"
 )
 
 type Config struct {
@@ -26,6 +28,9 @@ type Config struct {
 	CookieSecure           bool
 	BootstrapAdminUsername string
 	BootstrapAdminPassword string
+	RegistrationEnabled    bool
+	RegistrationGroups     []string
+	RegistrationQuota      quota.Input
 }
 
 func Load(args []string) (Config, error) {
@@ -46,9 +51,20 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	cookieSecureValue := envOr(lookup, "COWS_COOKIE_SECURE", "false")
 	bootstrapUsername := envOr(lookup, "COWS_BOOTSTRAP_ADMIN_USERNAME", "")
 	bootstrapPassword := envOr(lookup, "COWS_BOOTSTRAP_ADMIN_PASSWORD", "")
+	registrationEnabledValue := envOr(lookup, "COWS_REGISTRATION_ENABLED", "false")
+	registrationGroupsValue := envOr(lookup, "COWS_REGISTRATION_DEFAULT_GROUPS", "")
+	registrationCPUValue := envOr(lookup, "COWS_REGISTRATION_DEFAULT_CPU_MILLIS", "2000")
+	registrationMemoryValue := envOr(lookup, "COWS_REGISTRATION_DEFAULT_MEMORY_BYTES", "4294967296")
+	registrationStorageValue := envOr(lookup, "COWS_REGISTRATION_DEFAULT_STORAGE_BYTES", "21474836480")
+	registrationWorkspacesValue := envOr(lookup, "COWS_REGISTRATION_DEFAULT_MAX_WORKSPACES", "2")
+	registrationRunningValue := envOr(lookup, "COWS_REGISTRATION_DEFAULT_MAX_RUNNING_WORKSPACES", "1")
 	cookieSecure, err := strconv.ParseBool(cookieSecureValue)
 	if err != nil {
 		return Config{}, fmt.Errorf("cookie secure must be true or false: %q", cookieSecureValue)
+	}
+	registrationEnabled, err := strconv.ParseBool(registrationEnabledValue)
+	if err != nil {
+		return Config{}, fmt.Errorf("registration enabled must be true or false: %q", registrationEnabledValue)
 	}
 
 	flags := flag.NewFlagSet("cows", flag.ContinueOnError)
@@ -65,6 +81,13 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	flags.BoolVar(&cookieSecure, "cookie-secure", cookieSecure, "mark browser cookies Secure")
 	flags.StringVar(&bootstrapUsername, "bootstrap-admin-username", bootstrapUsername, "initial administrator username")
 	flags.StringVar(&bootstrapPassword, "bootstrap-admin-password", bootstrapPassword, "initial administrator password")
+	flags.BoolVar(&registrationEnabled, "registration-enabled", registrationEnabled, "enable public local-account registration")
+	flags.StringVar(&registrationGroupsValue, "registration-default-groups", registrationGroupsValue, "comma-separated default group names for self-registered users")
+	flags.StringVar(&registrationCPUValue, "registration-default-cpu-millis", registrationCPUValue, "default registered-user CPU quota")
+	flags.StringVar(&registrationMemoryValue, "registration-default-memory-bytes", registrationMemoryValue, "default registered-user memory quota")
+	flags.StringVar(&registrationStorageValue, "registration-default-storage-bytes", registrationStorageValue, "default registered-user storage quota")
+	flags.StringVar(&registrationWorkspacesValue, "registration-default-max-workspaces", registrationWorkspacesValue, "default registered-user workspace quota")
+	flags.StringVar(&registrationRunningValue, "registration-default-max-running-workspaces", registrationRunningValue, "default registered-user running-workspace quota")
 	if err := flags.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -118,6 +141,17 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	if (bootstrapUsername == "") != (bootstrapPassword == "") {
 		return Config{}, errors.New("bootstrap administrator username and password must be provided together")
 	}
+	registrationQuota, err := parseRegistrationQuota(registrationCPUValue, registrationMemoryValue, registrationStorageValue, registrationWorkspacesValue, registrationRunningValue)
+	if err != nil {
+		return Config{}, err
+	}
+	if err := quota.ValidateInput(registrationQuota); err != nil {
+		return Config{}, fmt.Errorf("registration default quota: %w", err)
+	}
+	registrationGroups, err := parseNames(registrationGroupsValue)
+	if err != nil {
+		return Config{}, fmt.Errorf("registration default groups: %w", err)
+	}
 
 	return Config{
 		ListenAddr:             listenAddr,
@@ -132,7 +166,50 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 		CookieSecure:           cookieSecure,
 		BootstrapAdminUsername: bootstrapUsername,
 		BootstrapAdminPassword: bootstrapPassword,
+		RegistrationEnabled:    registrationEnabled,
+		RegistrationGroups:     registrationGroups,
+		RegistrationQuota:      registrationQuota,
 	}, nil
+}
+
+func parseRegistrationQuota(values ...string) (quota.Input, error) {
+	parsed := make([]int64, len(values))
+	for index, value := range values {
+		integer, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		if err != nil {
+			return quota.Input{}, fmt.Errorf("registration default quota value is invalid: %q", value)
+		}
+		parsed[index] = integer
+	}
+	return quota.Input{
+		MaxCPUMillis:         parsed[0],
+		MaxMemoryBytes:       parsed[1],
+		MaxStorageBytes:      parsed[2],
+		MaxWorkspaces:        parsed[3],
+		MaxRunningWorkspaces: parsed[4],
+	}, nil
+}
+
+func parseNames(value string) ([]string, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		name := strings.TrimSpace(part)
+		if name == "" {
+			return nil, errors.New("group names must not be empty")
+		}
+		key := strings.ToLower(name)
+		if _, exists := seen[key]; exists {
+			return nil, fmt.Errorf("group %q is repeated", name)
+		}
+		seen[key] = struct{}{}
+		result = append(result, name)
+	}
+	return result, nil
 }
 
 func pathContains(parent, child string) bool {

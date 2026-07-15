@@ -14,6 +14,7 @@ import (
 	"github.com/cows-project/cows/internal/auth"
 	"github.com/cows-project/cows/internal/config"
 	"github.com/cows-project/cows/internal/database"
+	"github.com/cows-project/cows/internal/domain"
 	"github.com/cows-project/cows/internal/fileagent"
 	"github.com/cows-project/cows/internal/quota"
 	"github.com/cows-project/cows/internal/repository/sqlite"
@@ -53,7 +54,17 @@ func run(ctx context.Context, args []string) error {
 	defer db.Close()
 	store := sqlite.New(db)
 
-	authService, err := auth.New(store, cfg.SessionLifetime)
+	authService, err := auth.New(store, cfg.SessionLifetime, auth.RegistrationPolicy{
+		Enabled:           cfg.RegistrationEnabled,
+		DefaultGroupNames: cfg.RegistrationGroups,
+		DefaultQuota: domain.UserQuota{
+			MaxCPUMillis:         cfg.RegistrationQuota.MaxCPUMillis,
+			MaxMemoryBytes:       cfg.RegistrationQuota.MaxMemoryBytes,
+			MaxStorageBytes:      cfg.RegistrationQuota.MaxStorageBytes,
+			MaxWorkspaces:        cfg.RegistrationQuota.MaxWorkspaces,
+			MaxRunningWorkspaces: cfg.RegistrationQuota.MaxRunningWorkspaces,
+		},
+	})
 	if err != nil {
 		return fmt.Errorf("initialize authentication: %w", err)
 	}
@@ -81,7 +92,7 @@ func run(ctx context.Context, args []string) error {
 	storageProvider := workspace.NewStorageUsageProvider(podmanRuntime, cfg.MountRoot)
 	scheduler := quota.NewScheduler(store, podmanRuntime, storageProvider)
 	templateService := workspace.NewWithRuntimeAndMountRoots(store, podmanRuntime, cfg.MountRoot, cfg.MountArchiveRoot, scheduler)
-	webServer, err := web.New(db, authService, templateService, quotaService, podmanRuntime, web.Options{CookieSecure: cfg.CookieSecure, SessionLifetime: cfg.SessionLifetime})
+	webServer, err := web.New(db, authService, templateService, quotaService, podmanRuntime, web.Options{CookieSecure: cfg.CookieSecure, SessionLifetime: cfg.SessionLifetime, RegistrationEnabled: cfg.RegistrationEnabled})
 	if err != nil {
 		return fmt.Errorf("initialize web server: %w", err)
 	}

@@ -98,6 +98,41 @@ func TestHomeRendersLocalServerDrivenPage(t *testing.T) {
 	}
 }
 
+func TestEnabledRegistrationRendersAndCreatesUser(t *testing.T) {
+	db, err := database.Open(context.Background(), filepath.Join(t.TempDir(), "cows.db"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	store := sqlite.New(db)
+	authService, err := auth.New(store, time.Hour, auth.RegistrationPolicy{Enabled: true, DefaultQuota: domain.UserQuota{MaxWorkspaces: 2, MaxRunningWorkspaces: 1}})
+	if err != nil {
+		t.Fatalf("create auth service: %v", err)
+	}
+	server, err := New(db, authService, workspace.New(store), quota.New(store), nil, Options{SessionLifetime: time.Hour, RegistrationEnabled: true})
+	if err != nil {
+		t.Fatalf("create web server: %v", err)
+	}
+	pageRecorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(pageRecorder, httptest.NewRequest(http.MethodGet, "/register", nil))
+	csrfCookie := cookieByName(pageRecorder.Result().Cookies(), "cows_csrf")
+	if pageRecorder.Code != http.StatusOK || csrfCookie == nil || !strings.Contains(pageRecorder.Body.String(), "Create account") {
+		t.Fatalf("registration page: status=%d csrf=%#v body=%s", pageRecorder.Code, csrfCookie, pageRecorder.Body.String())
+	}
+	form := url.Values{"csrf_token": {csrfCookie.Value}, "username": {"new-user"}, "email": {"new@example.test"}, "display_name": {"New User"}, "password": {"a correct registration password"}, "confirm_password": {"a correct registration password"}}
+	request := httptest.NewRequest(http.MethodPost, "/register", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(csrfCookie)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "Your account was created") {
+		t.Fatalf("registration response: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if _, _, err := authService.Authenticate(context.Background(), "new-user", "a correct registration password"); err != nil {
+		t.Fatalf("authenticate registered user: %v", err)
+	}
+}
+
 func TestHealthEndpoint(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)

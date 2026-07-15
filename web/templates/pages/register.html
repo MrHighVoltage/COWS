@@ -1,0 +1,27 @@
+{{ define "register-page" }}
+{{ template "base-start" . }}
+<section class="narrow-section" aria-labelledby="register-title">
+  <p class="eyebrow">COWS access</p>
+  <h1 id="register-title">Register</h1>
+  <p class="lede">Your account receives the administrator-configured default quota and groups.</p>
+  {{ if .Registration.Error }}<p class="alert alert-error" role="alert">{{ .Registration.Error }}</p>{{ end }}
+  <form class="form-panel" method="post" action="/register">
+    <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
+    <label for="username">Username</label>
+    <input id="username" name="username" type="text" value="{{ .Registration.Username }}" pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,63}" maxlength="64" autocomplete="username" required autofocus>
+    <label for="email">Email address</label>
+    <input id="email" name="email" type="email" value="{{ .Registration.Email }}" maxlength="254" autocomplete="email" required>
+    <label for="display-name">Display name</label>
+    <input id="display-name" name="display_name" type="text" value="{{ .Registration.DisplayName }}" maxlength="120" autocomplete="name">
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" minlength="12" maxlength="72" autocomplete="new-password" required>
+    <label for="confirm-password">Confirm password</label>
+    <input id="confirm-password" name="confirm_password" type="password" minlength="12" maxlength="72" autocomplete="new-password" required>
+    <div class="form-actions">
+      <a class="secondary-button button-link" href="/login">Cancel</a>
+      <button class="primary-button" type="submit">Create account</button>
+    </div>
+  </form>
+</section>
+{{ template "base-end" . }}
+{{ end }}

@@ -284,6 +284,15 @@ func validInput(input Input) bool {
 	return input.MaxCPUMillis >= 0 && input.MaxCPUMillis <= 1_000_000 && input.MaxMemoryBytes >= 0 && input.MaxMemoryBytes <= 1<<50 && input.MaxStorageBytes >= 0 && input.MaxStorageBytes <= 1<<60 && input.MaxWorkspaces >= 0 && input.MaxWorkspaces <= 1_000_000 && input.MaxRunningWorkspaces >= 0 && input.MaxRunningWorkspaces <= 1_000_000
 }
 
+// ValidateInput exposes the same bounds used by administrator quota changes
+// to validate server-side registration defaults during configuration loading.
+func ValidateInput(input Input) error {
+	if !validInput(input) {
+		return ErrInvalidQuota
+	}
+	return nil
+}
+
 type Scheduler struct {
 	store    repository.Store
 	capacity runtime.CapacityProvider
