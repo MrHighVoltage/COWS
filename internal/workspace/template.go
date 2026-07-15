@@ -55,6 +55,7 @@ type Service struct {
 	mountRoot        string
 	mountArchiveRoot string
 	storageUsage     *StorageUsageProvider
+	resourceUsage    runtime.ResourceUsageRuntime
 	now              func() time.Time
 }
 
@@ -76,6 +77,9 @@ func NewWithRuntimeAndMountRoots(store repository.Store, runtimeAdapter runtime.
 	service.mountArchiveRoot = mountArchiveRoot
 	if storageRuntime, ok := runtimeAdapter.(runtime.StorageUsageRuntime); ok {
 		service.storageUsage = NewStorageUsageProvider(storageRuntime, mountRoot)
+	}
+	if usageRuntime, ok := runtimeAdapter.(runtime.ResourceUsageRuntime); ok {
+		service.resourceUsage = usageRuntime
 	}
 	return service
 }

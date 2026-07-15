@@ -229,6 +229,9 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 			return observedErrorText(value)
 		},
 		"fileSize": formatFileSize,
+		"cpuPercent": func(value int64) string {
+			return fmt.Sprintf("%.1f%%", float64(value)/1000)
+		},
 		"hasID": func(values []string, wanted string) bool {
 			for _, value := range values {
 				if value == wanted {
@@ -2126,6 +2129,18 @@ func operationText(operation string) string {
 		return "Automatic stop"
 	case "timeout-delete":
 		return "Automatic deletion"
+	case "start:preparing":
+		return "Preparing"
+	case "start:creating":
+		return "Creating container"
+	case "start:starting":
+		return "Starting container"
+	case "stop:stopping":
+		return "Stopping container"
+	case "delete:removing":
+		return "Removing container"
+	case "delete:archiving":
+		return "Archiving workspace data"
 	default:
 		return "Workspace operation"
 	}

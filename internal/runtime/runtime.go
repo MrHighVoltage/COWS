@@ -64,6 +64,15 @@ type ResourceLimits struct {
 	StorageBytes int64
 }
 
+// ResourceUsage is a point-in-time runtime observation. CPUPercentMilli uses
+// thousandths of one percent, so 100000 means 100.000 percent.
+type ResourceUsage struct {
+	CPUPercentMilli int64
+	MemoryBytes     int64
+	PIDs            int64
+	ObservedAt      time.Time
+}
+
 type Image struct {
 	Reference string
 	Digest    string
@@ -207,6 +216,12 @@ type StorageUsageSpec struct {
 
 type StorageUsageRuntime interface {
 	WorkspaceStorageUsage(ctx context.Context, spec StorageUsageSpec) (int64, error)
+}
+
+// ResourceUsageRuntime is optional so lifecycle-only test runtimes and future
+// adapters can be used without pretending to provide live statistics.
+type ResourceUsageRuntime interface {
+	WorkspaceResourceUsage(ctx context.Context, runtimeID string) (ResourceUsage, error)
 }
 
 type Runtime interface {

@@ -127,6 +127,10 @@ type Workspace struct {
 	AllocatedStorageBytes           int64
 	StorageUsageBytes               int64
 	StorageUsageKnown               bool
+	CPUUsagePercentMilli            int64
+	MemoryUsageBytes                int64
+	PIDsUsage                       int64
+	ResourceUsageKnown              bool
 	InitialConnectionTimeoutSeconds int64
 	StoppedRetentionSeconds         int64
 	DataRetentionSeconds            int64

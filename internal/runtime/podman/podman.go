@@ -144,6 +144,36 @@ func (a *Adapter) InspectWorkspace(ctx context.Context, runtimeID string) (runti
 	}, nil
 }
 
+func (a *Adapter) WorkspaceResourceUsage(ctx context.Context, runtimeID string) (runtime.ResourceUsage, error) {
+	if !validRuntimeID(runtimeID) {
+		return runtime.ResourceUsage{}, runtime.ErrNotFound
+	}
+	var stats containerStats
+	if err := a.get(ctx, "/containers/"+url.PathEscape(runtimeID)+"/stats?stream=false", &stats); err != nil {
+		return runtime.ResourceUsage{}, err
+	}
+	if stats.Memory.Usage > uint64(^uint64(0)>>1) || stats.PIDs.Current > uint64(^uint64(0)>>1) {
+		return runtime.ResourceUsage{}, fmt.Errorf("%w: Podman returned oversized resource usage", runtime.ErrInvalidObservation)
+	}
+	usage := runtime.ResourceUsage{MemoryBytes: int64(stats.Memory.Usage), PIDs: int64(stats.PIDs.Current), ObservedAt: time.Now().UTC()}
+	if stats.CPU.Usage.Total < stats.PreCPU.Usage.Total || stats.CPU.System < stats.PreCPU.System {
+		return runtime.ResourceUsage{}, fmt.Errorf("%w: Podman returned decreasing CPU counters", runtime.ErrInvalidObservation)
+	}
+	systemDelta := stats.CPU.System - stats.PreCPU.System
+	if systemDelta > 0 {
+		onlineCPUs := stats.CPU.OnlineCPUs
+		if onlineCPUs == 0 {
+			onlineCPUs = 1
+		}
+		percentMilli := float64(stats.CPU.Usage.Total-stats.PreCPU.Usage.Total) / float64(systemDelta) * float64(onlineCPUs) * 100000
+		if percentMilli < 0 || percentMilli > float64(^uint64(0)>>1) {
+			return runtime.ResourceUsage{}, fmt.Errorf("%w: Podman returned invalid CPU usage", runtime.ErrInvalidObservation)
+		}
+		usage.CPUPercentMilli = int64(percentMilli)
+	}
+	return usage, nil
+}
+
 func (a *Adapter) CreateWorkspace(ctx context.Context, spec runtime.WorkspaceSpec) (runtime.WorkspaceHandle, error) {
 	if !validWorkspaceID(spec.WorkspaceID) || !validImage(spec.Image) {
 		return runtime.WorkspaceHandle{}, runtime.ErrConflict
@@ -605,6 +635,28 @@ type containerInspect struct {
 			HostPort string `json:"HostPort"`
 		} `json:"Ports"`
 	} `json:"NetworkSettings"`
+}
+
+type containerStats struct {
+	CPU struct {
+		Usage struct {
+			Total uint64 `json:"total_usage"`
+		} `json:"cpu_usage"`
+		System     uint64 `json:"system_cpu_usage"`
+		OnlineCPUs uint64 `json:"online_cpus"`
+	} `json:"cpu_stats"`
+	PreCPU struct {
+		Usage struct {
+			Total uint64 `json:"total_usage"`
+		} `json:"cpu_usage"`
+		System uint64 `json:"system_cpu_usage"`
+	} `json:"precpu_stats"`
+	Memory struct {
+		Usage uint64 `json:"usage"`
+	} `json:"memory_stats"`
+	PIDs struct {
+		Current uint64 `json:"current"`
+	} `json:"pids_stats"`
 }
 
 func (a *Adapter) WorkspaceStorageUsage(ctx context.Context, spec runtime.StorageUsageSpec) (int64, error) {
