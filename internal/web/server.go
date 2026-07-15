@@ -41,9 +41,11 @@ const (
 )
 
 type Options struct {
-	CookieSecure    bool
-	SessionLifetime time.Duration
-	LoginLimiter    *auth.LoginLimiter
+	CookieSecure        bool
+	SessionLifetime     time.Duration
+	LoginLimiter        *auth.LoginLimiter
+	RegistrationEnabled bool
+	RegistrationLimiter *auth.LoginLimiter
 }
 
 type Server struct {
@@ -74,6 +76,13 @@ type userFormData struct {
 
 type passwordFormData struct {
 	Error string
+}
+
+type registrationFormData struct {
+	Username    string
+	Email       string
+	DisplayName string
+	Error       string
 }
 
 type workspaceFormData struct {
@@ -147,37 +156,40 @@ type templateFormData struct {
 }
 
 type pageData struct {
-	Title             string
-	User              *domain.User
-	Health            healthSnapshot
-	CSRFToken         string
-	Error             string
-	Users             []domain.User
-	Form              userFormData
-	Templates         []domain.WorkspaceTemplate
-	Template          templateFormData
-	Password          passwordFormData
-	Inspection        *runtime.Inspection
-	RuntimeError      string
-	Workspaces        []domain.Workspace
-	Workspace         workspaceFormData
-	Quotas            []quotaView
-	Quota             quotaFormData
-	Settings          *domain.HostSettings
-	SettingsForm      settingsFormData
-	Allocation        *allocationView
-	ActiveWorkspace   *domain.Workspace
-	WorkspaceAccess   map[string]workspaceAccess
-	FileListing       *files.Listing
-	FileMounts        []workspace.FileMount
-	FileError         string
-	Groups            []domain.Group
-	UserGroupIDs      map[string][]string
-	UserGroups        map[string][]domain.Group
-	EditUser          *domain.User
-	EditUserGroups    []string
-	GroupQuotas       []groupQuotaView
-	RuntimeWorkspaces []runtimeWorkspaceView
+	Title               string
+	User                *domain.User
+	Health              healthSnapshot
+	CSRFToken           string
+	Error               string
+	Notice              string
+	Users               []domain.User
+	Form                userFormData
+	Templates           []domain.WorkspaceTemplate
+	Template            templateFormData
+	Password            passwordFormData
+	Registration        registrationFormData
+	RegistrationEnabled bool
+	Inspection          *runtime.Inspection
+	RuntimeError        string
+	Workspaces          []domain.Workspace
+	Workspace           workspaceFormData
+	Quotas              []quotaView
+	Quota               quotaFormData
+	Settings            *domain.HostSettings
+	SettingsForm        settingsFormData
+	Allocation          *allocationView
+	ActiveWorkspace     *domain.Workspace
+	WorkspaceAccess     map[string]workspaceAccess
+	FileListing         *files.Listing
+	FileMounts          []workspace.FileMount
+	FileError           string
+	Groups              []domain.Group
+	UserGroupIDs        map[string][]string
+	UserGroups          map[string][]domain.Group
+	EditUser            *domain.User
+	EditUserGroups      []string
+	GroupQuotas         []groupQuotaView
+	RuntimeWorkspaces   []runtimeWorkspaceView
 }
 
 type workspaceAccess struct {
@@ -203,6 +215,9 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 	}
 	if options.LoginLimiter == nil {
 		options.LoginLimiter, _ = auth.NewLoginLimiter(auth.DefaultLoginFailureLimit, auth.DefaultLoginFailureWindow)
+	}
+	if options.RegistrationLimiter == nil {
+		options.RegistrationLimiter, _ = auth.NewLoginLimiter(auth.DefaultLoginFailureLimit, auth.DefaultLoginFailureWindow)
 	}
 	templates, err := template.New("cows").Funcs(template.FuncMap{
 		"mib":        func(bytes int64) int64 { return bytes / (1 << 20) },
@@ -282,6 +297,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /fragments/health", s.healthFragment)
 	mux.HandleFunc("GET /login", s.loginGet)
 	mux.HandleFunc("POST /login", s.loginPost)
+	mux.HandleFunc("GET /register", s.registerGet)
+	mux.HandleFunc("POST /register", s.registerPost)
 	mux.HandleFunc("POST /logout", s.logoutPost)
 	mux.HandleFunc("GET /account/password", s.passwordGet)
 	mux.HandleFunc("POST /account/password", s.passwordPost)
@@ -358,7 +375,7 @@ func (s *Server) loginGet(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
-	s.render(w, http.StatusOK, "login-page", pageData{Title: "Sign in | COWS", CSRFToken: s.ensureCSRF(w, r)})
+	s.render(w, http.StatusOK, "login-page", pageData{Title: "Sign in | COWS", CSRFToken: s.ensureCSRF(w, r), RegistrationEnabled: s.options.RegistrationEnabled})
 }
 
 func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
@@ -379,9 +396,8 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
 		s.render(w, http.StatusTooManyRequests, "login-page", pageData{
-			Title:     "Sign in | COWS",
-			CSRFToken: s.ensureCSRF(w, r),
-			Error:     "Too many sign-in attempts. Try again later.",
+			Title: "Sign in | COWS", CSRFToken: s.ensureCSRF(w, r), RegistrationEnabled: s.options.RegistrationEnabled,
+			Error: "Too many sign-in attempts. Try again later.",
 		})
 		return
 	}
@@ -389,9 +405,8 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.options.LoginLimiter.Failure(key)
 		s.render(w, http.StatusUnauthorized, "login-page", pageData{
-			Title:     "Sign in | COWS",
-			CSRFToken: s.ensureCSRF(w, r),
-			Error:     "Invalid username or password.",
+			Title: "Sign in | COWS", CSRFToken: s.ensureCSRF(w, r), RegistrationEnabled: s.options.RegistrationEnabled,
+			Error: "Invalid username or password.",
 		})
 		return
 	}
@@ -402,6 +417,59 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) registerGet(w http.ResponseWriter, r *http.Request) {
+	if !s.options.RegistrationEnabled {
+		http.NotFound(w, r)
+		return
+	}
+	user, err := s.currentUser(r)
+	if err != nil {
+		http.Error(w, "failed to load session", http.StatusInternalServerError)
+		return
+	}
+	if user != nil {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	s.render(w, http.StatusOK, "register-page", pageData{Title: "Register | COWS", CSRFToken: s.ensureCSRF(w, r), RegistrationEnabled: true})
+}
+
+func (s *Server) registerPost(w http.ResponseWriter, r *http.Request) {
+	if !s.options.RegistrationEnabled {
+		http.NotFound(w, r)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if !s.validCSRF(r) {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	key := "registration:" + loginRateLimitKey(r)
+	if !s.options.RegistrationLimiter.Allow(key) {
+		retryAfter := int(s.options.RegistrationLimiter.RetryAfter(key).Seconds())
+		if retryAfter < 1 {
+			retryAfter = 1
+		}
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+		s.render(w, http.StatusTooManyRequests, "register-page", pageData{Title: "Register | COWS", CSRFToken: s.ensureCSRF(w, r), RegistrationEnabled: true, Registration: registrationFormData{Error: "Too many registration attempts. Try again later."}})
+		return
+	}
+	form := registrationFormData{Username: r.FormValue("username"), Email: r.FormValue("email"), DisplayName: r.FormValue("display_name")}
+	_, err := s.auth.Register(r.Context(), auth.RegisterUserInput{Username: form.Username, Email: form.Email, DisplayName: form.DisplayName, Password: r.FormValue("password"), PasswordConfirmation: r.FormValue("confirm_password")})
+	if err != nil {
+		s.options.RegistrationLimiter.Failure(key)
+		form.Error = registrationFormError(err)
+		s.render(w, http.StatusBadRequest, "register-page", pageData{Title: "Register | COWS", CSRFToken: s.ensureCSRF(w, r), RegistrationEnabled: true, Registration: form})
+		return
+	}
+	s.options.RegistrationLimiter.Success(key)
+	s.render(w, http.StatusOK, "login-page", pageData{Title: "Sign in | COWS", CSRFToken: s.ensureCSRF(w, r), RegistrationEnabled: true, Notice: "Your account was created. You can now sign in."})
 }
 
 func (s *Server) passwordGet(w http.ResponseWriter, r *http.Request) {
@@ -2136,6 +2204,19 @@ func userFormError(err error) string {
 		return "A user with that username already exists."
 	default:
 		return "The user could not be created."
+	}
+}
+
+func registrationFormError(err error) string {
+	switch {
+	case errors.Is(err, auth.ErrInvalidInput):
+		return "Use a valid username, email address, display name, and matching password of 12 to 72 characters."
+	case errors.Is(err, repository.ErrConflict):
+		return "Registration could not be completed with those details."
+	case errors.Is(err, auth.ErrRegistrationUnavailable):
+		return "Registration is temporarily unavailable. Try again later."
+	default:
+		return "Registration could not be completed."
 	}
 }
 

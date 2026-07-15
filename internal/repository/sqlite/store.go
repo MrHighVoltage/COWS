@@ -91,6 +91,36 @@ func (s *Store) CreateUser(ctx context.Context, user domain.User, passwordHash s
 	return nil
 }
 
+func (s *Store) RegisterUser(ctx context.Context, user domain.User, passwordHash string, groupIDs []string, userQuota domain.UserQuota) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin user registration: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO users
+		(id, username, email, display_name, password_hash, role, disabled, must_change_password, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, user.ID, user.Username, user.Email, user.DisplayName, passwordHash,
+		user.Role, boolInt(user.Disabled), boolInt(user.MustChangePassword), user.CreatedAt.Unix(), user.UpdatedAt.Unix()); err != nil {
+		return fmt.Errorf("create registered user: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO user_quotas
+		(user_id, max_cpu_millis, max_memory_bytes, max_storage_bytes, max_workspaces, max_running_workspaces, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, user.ID, userQuota.MaxCPUMillis, userQuota.MaxMemoryBytes,
+		userQuota.MaxStorageBytes, userQuota.MaxWorkspaces, userQuota.MaxRunningWorkspaces,
+		unixOrZero(userQuota.CreatedAt), unixOrZero(userQuota.UpdatedAt)); err != nil {
+		return fmt.Errorf("assign registered user quota: %w", err)
+	}
+	for _, groupID := range groupIDs {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO user_groups (user_id, group_id, created_at) VALUES (?, ?, ?)", user.ID, groupID, user.CreatedAt.Unix()); err != nil {
+			return fmt.Errorf("assign registered user group: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit user registration: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) UpdateUserPassword(ctx context.Context, id, passwordHash string, mustChangePassword bool) error {
 	result, err := s.db.ExecContext(ctx, "UPDATE users SET password_hash = ?, must_change_password = ?, updated_at = ? WHERE id = ?", passwordHash, boolInt(mustChangePassword), time.Now().UTC().Unix(), id)
 	if err != nil {
@@ -193,6 +223,21 @@ func (s *Store) FindGroupByID(ctx context.Context, id string) (domain.Group, err
 	}
 	if err != nil {
 		return domain.Group{}, fmt.Errorf("find group: %w", err)
+	}
+	group.CreatedAt = time.Unix(created, 0).UTC()
+	group.UpdatedAt = time.Unix(updated, 0).UTC()
+	return group, nil
+}
+
+func (s *Store) FindGroupByName(ctx context.Context, name string) (domain.Group, error) {
+	var group domain.Group
+	var created, updated int64
+	err := s.db.QueryRowContext(ctx, "SELECT id, name, description, created_at, updated_at FROM groups WHERE name = ?", name).Scan(&group.ID, &group.Name, &group.Description, &created, &updated)
+	if err == sql.ErrNoRows {
+		return domain.Group{}, repository.ErrNotFound
+	}
+	if err != nil {
+		return domain.Group{}, fmt.Errorf("find group by name: %w", err)
 	}
 	group.CreatedAt = time.Unix(created, 0).UTC()
 	group.UpdatedAt = time.Unix(updated, 0).UTC()

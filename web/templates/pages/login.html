@@ -3,6 +3,7 @@
 <section class="narrow-section" aria-labelledby="login-title">
   <p class="eyebrow">COWS access</p>
   <h1 id="login-title">Sign in</h1>
+  {{ if .Notice }}<p class="alert" role="status">{{ .Notice }}</p>{{ end }}
   {{ if .Error }}<p class="alert alert-error" role="alert">{{ .Error }}</p>{{ end }}
   <form class="form-panel" method="post" action="/login">
     <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
@@ -12,6 +13,7 @@
     <input id="password" name="password" type="password" autocomplete="current-password" required>
     <button class="primary-button" type="submit">Sign in</button>
   </form>
+  {{ if .RegistrationEnabled }}<p class="form-note">Need an account? <a href="/register">Register</a></p>{{ end }}
 </section>
 {{ template "base-end" . }}
 {{ end }}

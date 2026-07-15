@@ -19,12 +19,14 @@ import (
 )
 
 var (
-	ErrInvalidCredentials     = errors.New("invalid credentials")
-	ErrInvalidInput           = errors.New("invalid user input")
-	ErrPasswordChangeRequired = errors.New("password change required")
-	ErrLastAdministrator      = errors.New("cannot disable the last active administrator")
-	ErrSelfDisable            = errors.New("administrator cannot disable their own account")
-	ErrInvalidGroup           = errors.New("invalid group")
+	ErrInvalidCredentials      = errors.New("invalid credentials")
+	ErrInvalidInput            = errors.New("invalid user input")
+	ErrPasswordChangeRequired  = errors.New("password change required")
+	ErrLastAdministrator       = errors.New("cannot disable the last active administrator")
+	ErrSelfDisable             = errors.New("administrator cannot disable their own account")
+	ErrInvalidGroup            = errors.New("invalid group")
+	ErrRegistrationDisabled    = errors.New("registration is disabled")
+	ErrRegistrationUnavailable = errors.New("registration is unavailable")
 )
 
 const (
@@ -38,7 +40,14 @@ const (
 type Service struct {
 	store           repository.Store
 	sessionLifetime time.Duration
+	registration    RegistrationPolicy
 	now             func() time.Time
+}
+
+type RegistrationPolicy struct {
+	Enabled           bool
+	DefaultGroupNames []string
+	DefaultQuota      domain.UserQuota
 }
 
 type CreateUserInput struct {
@@ -49,11 +58,39 @@ type CreateUserInput struct {
 	Role        domain.Role
 }
 
-func New(store repository.Store, sessionLifetime time.Duration) (*Service, error) {
+type RegisterUserInput struct {
+	Username             string
+	Email                string
+	DisplayName          string
+	Password             string
+	PasswordConfirmation string
+}
+
+func New(store repository.Store, sessionLifetime time.Duration, policies ...RegistrationPolicy) (*Service, error) {
 	if sessionLifetime <= 0 {
 		return nil, errors.New("session lifetime must be positive")
 	}
-	return &Service{store: store, sessionLifetime: sessionLifetime, now: time.Now}, nil
+	policy := RegistrationPolicy{}
+	if len(policies) > 1 {
+		return nil, errors.New("at most one registration policy is supported")
+	}
+	if len(policies) == 1 {
+		policy = policies[0]
+	}
+	seenGroups := make(map[string]struct{}, len(policy.DefaultGroupNames))
+	for _, name := range policy.DefaultGroupNames {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return nil, errors.New("registration default group names must not be empty")
+		}
+		key := strings.ToLower(name)
+		if _, exists := seenGroups[key]; exists {
+			return nil, fmt.Errorf("registration default group %q is repeated", name)
+		}
+		seenGroups[key] = struct{}{}
+	}
+	policy.DefaultGroupNames = append([]string(nil), policy.DefaultGroupNames...)
+	return &Service{store: store, sessionLifetime: sessionLifetime, registration: policy, now: time.Now}, nil
 }
 
 func (s *Service) BootstrapAdministrator(ctx context.Context, input CreateUserInput) (bool, error) {
@@ -131,6 +168,46 @@ func (s *Service) ChangePassword(ctx context.Context, userID, currentPassword, n
 	}
 	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: userID, EventType: "password.changed", TargetType: "user", TargetID: userID})
 	return nil
+}
+
+func (s *Service) Register(ctx context.Context, input RegisterUserInput) (domain.User, error) {
+	if !s.registration.Enabled {
+		return domain.User{}, ErrRegistrationDisabled
+	}
+	if input.Password != input.PasswordConfirmation || strings.TrimSpace(input.Email) == "" {
+		return domain.User{}, ErrInvalidInput
+	}
+	user, passwordHash, err := s.prepareUser(ctx, CreateUserInput{
+		Username: input.Username, Email: input.Email, DisplayName: input.DisplayName,
+		Password: input.Password, Role: domain.RoleUser,
+	}, false)
+	if err != nil {
+		return domain.User{}, err
+	}
+	groupIDs := make([]string, 0, len(s.registration.DefaultGroupNames))
+	for _, name := range s.registration.DefaultGroupNames {
+		group, err := s.store.FindGroupByName(ctx, name)
+		if errors.Is(err, repository.ErrNotFound) {
+			return domain.User{}, ErrRegistrationUnavailable
+		}
+		if err != nil {
+			return domain.User{}, ErrRegistrationUnavailable
+		}
+		groupIDs = append(groupIDs, group.ID)
+	}
+	now := s.now().UTC()
+	userQuota := s.registration.DefaultQuota
+	userQuota.UserID = user.ID
+	userQuota.CreatedAt = now
+	userQuota.UpdatedAt = now
+	if err := s.store.RegisterUser(ctx, user, passwordHash, groupIDs, userQuota); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+			return domain.User{}, repository.ErrConflict
+		}
+		return domain.User{}, err
+	}
+	s.recordAudit(ctx, domain.AuditEvent{EventType: "user.registered", TargetType: "user", TargetID: user.ID})
+	return user, nil
 }
 
 func (s *Service) ListUsers(ctx context.Context, actorID string) ([]domain.User, error) {
@@ -276,32 +353,40 @@ func (s *Service) requireAdministrator(ctx context.Context, actorID string) (dom
 }
 
 func (s *Service) createUser(ctx context.Context, input CreateUserInput) (domain.User, error) {
+	user, hash, err := s.prepareUser(ctx, input, true)
+	if err != nil {
+		return domain.User{}, err
+	}
+	if err := s.store.CreateUser(ctx, user, hash); err != nil {
+		return domain.User{}, err
+	}
+	return user, nil
+}
+
+func (s *Service) prepareUser(ctx context.Context, input CreateUserInput, mustChangePassword bool) (domain.User, string, error) {
 	username := normalizeUsername(input.Username)
 	if !validUsername(username) || !validEmail(input.Email) || !validDisplayName(input.DisplayName) || !validPassword(input.Password) || !input.Role.Valid() {
-		return domain.User{}, ErrInvalidInput
+		return domain.User{}, "", ErrInvalidInput
 	}
 	if input.DisplayName == "" {
 		input.DisplayName = username
 	}
 	if _, err := s.store.FindUserByUsername(ctx, username); err == nil {
-		return domain.User{}, repository.ErrConflict
+		return domain.User{}, "", repository.ErrConflict
 	} else if !errors.Is(err, repository.ErrNotFound) {
-		return domain.User{}, err
+		return domain.User{}, "", err
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
 	if err != nil {
-		return domain.User{}, fmt.Errorf("hash password: %w", err)
+		return domain.User{}, "", fmt.Errorf("hash password: %w", err)
 	}
 	id, err := randomToken()
 	if err != nil {
-		return domain.User{}, fmt.Errorf("create user ID: %w", err)
+		return domain.User{}, "", fmt.Errorf("create user ID: %w", err)
 	}
 	now := s.now().UTC()
-	user := domain.User{ID: id, Username: username, Email: strings.TrimSpace(input.Email), DisplayName: input.DisplayName, Role: input.Role, MustChangePassword: true, CreatedAt: now, UpdatedAt: now}
-	if err := s.store.CreateUser(ctx, user, string(hash)); err != nil {
-		return domain.User{}, err
-	}
-	return user, nil
+	user := domain.User{ID: id, Username: username, Email: strings.TrimSpace(input.Email), DisplayName: input.DisplayName, Role: input.Role, MustChangePassword: mustChangePassword, CreatedAt: now, UpdatedAt: now}
+	return user, string(hash), nil
 }
 
 func (s *Service) recordAudit(ctx context.Context, event domain.AuditEvent) {

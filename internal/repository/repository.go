@@ -26,6 +26,7 @@ type UserRepository interface {
 	FindUserCredentialsByID(ctx context.Context, id string) (UserRecord, error)
 	ListUsers(ctx context.Context) ([]domain.User, error)
 	CreateUser(ctx context.Context, user domain.User, passwordHash string) error
+	RegisterUser(ctx context.Context, user domain.User, passwordHash string, groupIDs []string, userQuota domain.UserQuota) error
 	UpdateUserPassword(ctx context.Context, id, passwordHash string, mustChangePassword bool) error
 	SetUserDisabled(ctx context.Context, id string, disabled bool) error
 	ListUserGroupIDs(ctx context.Context, userID string) ([]string, error)
@@ -35,6 +36,7 @@ type UserRepository interface {
 type GroupRepository interface {
 	ListGroups(ctx context.Context) ([]domain.Group, error)
 	FindGroupByID(ctx context.Context, id string) (domain.Group, error)
+	FindGroupByName(ctx context.Context, name string) (domain.Group, error)
 	CreateGroup(ctx context.Context, group domain.Group) error
 }
 
