@@ -18,6 +18,35 @@
       <button class="primary-button" type="submit">Save group membership</button>
     </div>
   </form>
+
+  <section class="form-panel quota-editor" aria-labelledby="user-quota-title">
+    <h2 id="user-quota-title">User quota</h2>
+    {{ if .QuotaAssigned }}
+      <p class="muted">This explicit quota overrides all group quotas for this user. Set a value to 0 for unlimited.</p>
+    {{ else }}
+      <p class="muted">No explicit quota is assigned. The user receives the sum of their group quotas. Without group quotas, workspace creation is disabled.</p>
+    {{ end }}
+    {{ if .Quota.Error }}<p class="alert alert-error" role="alert">{{ .Quota.Error }}</p>{{ end }}
+    <form method="post" action="/admin/users/{{ .EditUser.ID }}/quota">
+      <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
+      <div class="quota-form-grid">
+        <label>CPU while running <input name="max_cpu_millis" type="number" min="0" max="1000000" placeholder="mCPU" value="{{ .Quota.MaxCPUMillis }}" required><span>mCPU; 0 = unlimited</span></label>
+        <label>Memory while running <input name="max_memory_mib" type="number" min="0" placeholder="MiB" value="{{ .Quota.MaxMemoryMiB }}" required><span>MiB; 0 = unlimited</span></label>
+        <label>Storage allocated <input name="max_storage_gib" type="number" min="0" placeholder="GiB" value="{{ .Quota.MaxStorageGiB }}" required><span>GiB; 0 = unlimited</span></label>
+        <label>Total workspaces <input name="max_workspaces" type="number" min="0" max="1000000" placeholder="Count" value="{{ .Quota.MaxWorkspaces }}" required><span>Count; 0 = unlimited</span></label>
+        <label>Running workspaces <input name="max_running_workspaces" type="number" min="0" max="1000000" placeholder="Count" value="{{ .Quota.MaxRunningWorkspaces }}" required><span>Count; 0 = unlimited</span></label>
+      </div>
+      <div class="form-actions">
+        <button class="primary-button" type="submit">Save user quota</button>
+      </div>
+    </form>
+    {{ if .QuotaAssigned }}
+      <form method="post" action="/admin/users/{{ .EditUser.ID }}/quota/delete" x-on:submit="if (!confirm('Remove this explicit quota and return to group-derived limits?')) $event.preventDefault()">
+        <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
+        <button class="danger-button" type="submit">Use group quotas</button>
+      </form>
+    {{ end }}
+  </section>
 </section>
 {{ template "base-end" . }}
 {{ end }}

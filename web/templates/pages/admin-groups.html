@@ -20,8 +20,8 @@
 
 <section class="panel table-panel" aria-labelledby="group-list-title">
   <h2 id="group-list-title">Existing groups</h2>
-  <div class="table-scroll"><table><thead><tr><th>Name</th><th>Description</th></tr></thead><tbody>
-  {{ range .Groups }}<tr><td><strong>{{ .Name }}</strong></td><td>{{ if .Description }}{{ .Description }}{{ else }}<span class="muted">No description</span>{{ end }}</td></tr>{{ else }}<tr><td colspan="2" class="muted">No groups have been created.</td></tr>{{ end }}
+  <div class="table-scroll"><table><thead><tr><th>Name</th><th>Description</th><th>Actions</th></tr></thead><tbody>
+  {{ range .Groups }}<tr><td><strong>{{ .Name }}</strong></td><td>{{ if .Description }}{{ .Description }}{{ else }}<span class="muted">No description</span>{{ end }}</td><td><a class="table-action" href="/admin/groups/{{ .ID }}/edit">Edit</a></td></tr>{{ else }}<tr><td colspan="3" class="muted">No groups have been created.</td></tr>{{ end }}
   </tbody></table></div>
 </section>
 {{ template "base-end" . }}

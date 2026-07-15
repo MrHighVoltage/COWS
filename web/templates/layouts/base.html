@@ -21,7 +21,6 @@
         {{ if not .User.MustChangePassword }}<a class="nav-tab" href="/account/password">Account</a>{{ end }}
         {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a class="nav-tab" href="/admin/users">Users</a>{{ end }}
         {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a class="nav-tab" href="/admin/groups">Groups</a>{{ end }}
-        {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a class="nav-tab" href="/admin/quotas">Quotas</a>{{ end }}
         {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a class="nav-tab" href="/admin/settings">Settings</a>{{ end }}
         {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a class="nav-tab" href="/admin/templates">Templates</a>{{ end }}
         {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a class="nav-tab" href="/admin/runtime">Runtime</a>{{ end }}

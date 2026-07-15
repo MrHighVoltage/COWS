@@ -1,0 +1,40 @@
+{{ define "admin-group-edit-page" }}
+{{ template "base-start" . }}
+<section class="narrow-section" aria-labelledby="edit-group-title">
+  <p class="eyebrow">Administration</p>
+  <h1 id="edit-group-title">Edit group</h1>
+  <p class="lede"><strong>{{ .EditGroup.Name }}</strong>{{ if .EditGroup.Description }} · {{ .EditGroup.Description }}{{ end }}</p>
+  {{ if .Error }}<p class="alert alert-error" role="alert">{{ .Error }}</p>{{ end }}
+
+  <section class="form-panel quota-editor" aria-labelledby="group-quota-title">
+    <h2 id="group-quota-title">Group quota</h2>
+    {{ if .GroupQuotaAssigned }}
+      <p class="muted">This quota contributes to the effective quota of every member. Group quotas add together; a zero value makes that resource unlimited.</p>
+    {{ else }}
+      <p class="muted">No quota is assigned to this group. Set a value to 0 for unlimited.</p>
+    {{ end }}
+    {{ if .GroupQuota.Error }}<p class="alert alert-error" role="alert">{{ .GroupQuota.Error }}</p>{{ end }}
+    <form method="post" action="/admin/groups/{{ .EditGroup.ID }}/quota">
+      <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
+      <div class="quota-form-grid">
+        <label>CPU while running <input name="max_cpu_millis" type="number" min="0" max="1000000" placeholder="mCPU" value="{{ .GroupQuota.MaxCPUMillis }}" required><span>mCPU; 0 = unlimited</span></label>
+        <label>Memory while running <input name="max_memory_mib" type="number" min="0" placeholder="MiB" value="{{ .GroupQuota.MaxMemoryMiB }}" required><span>MiB; 0 = unlimited</span></label>
+        <label>Storage allocated <input name="max_storage_gib" type="number" min="0" placeholder="GiB" value="{{ .GroupQuota.MaxStorageGiB }}" required><span>GiB; 0 = unlimited</span></label>
+        <label>Total workspaces <input name="max_workspaces" type="number" min="0" max="1000000" placeholder="Count" value="{{ .GroupQuota.MaxWorkspaces }}" required><span>Count; 0 = unlimited</span></label>
+        <label>Running workspaces <input name="max_running_workspaces" type="number" min="0" max="1000000" placeholder="Count" value="{{ .GroupQuota.MaxRunningWorkspaces }}" required><span>Count; 0 = unlimited</span></label>
+      </div>
+      <div class="form-actions">
+        <a class="secondary-button button-link" href="/admin/groups">Cancel</a>
+        <button class="primary-button" type="submit">Save group quota</button>
+      </div>
+    </form>
+    {{ if .GroupQuotaAssigned }}
+      <form method="post" action="/admin/groups/{{ .EditGroup.ID }}/quota/delete" x-on:submit="if (!confirm('Remove this group quota assignment?')) $event.preventDefault()">
+        <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
+        <button class="danger-button" type="submit">Remove quota assignment</button>
+      </form>
+    {{ end }}
+  </section>
+</section>
+{{ template "base-end" . }}
+{{ end }}
