@@ -16,6 +16,7 @@ import (
 	"github.com/cows-project/cows/internal/database"
 	"github.com/cows-project/cows/internal/domain"
 	"github.com/cows-project/cows/internal/fileagent"
+	"github.com/cows-project/cows/internal/notifications"
 	"github.com/cows-project/cows/internal/quota"
 	"github.com/cows-project/cows/internal/repository/sqlite"
 	"github.com/cows-project/cows/internal/runtime/podman"
@@ -109,6 +110,17 @@ func run(ctx context.Context, args []string) error {
 		serverErrors <- server.ListenAndServe()
 	}()
 	go runTimeoutLoop(ctx, templateService, logger)
+	if cfg.EmailEnabled {
+		sender, err := notifications.NewSMTPSender(notifications.SMTPConfig{Host: cfg.SMTPHost, Port: cfg.SMTPPort, From: cfg.SMTPFrom, Username: cfg.SMTPUsername, Password: cfg.SMTPPassword, RequireTLS: cfg.SMTPRequireTLS})
+		if err != nil {
+			return fmt.Errorf("initialize email sender: %w", err)
+		}
+		notificationService, err := notifications.New(store, sender, cfg.EmailWarningLeadTime, cfg.EmailRetryInterval)
+		if err != nil {
+			return fmt.Errorf("initialize notification service: %w", err)
+		}
+		go runNotificationLoop(ctx, notificationService, logger)
+	}
 
 	select {
 	case err := <-serverErrors:
@@ -150,5 +162,29 @@ func processWorkspaceRuntime(ctx context.Context, service *workspace.Service, lo
 	}
 	if err := service.RunTimeouts(ctx); err != nil && !errors.Is(err, workspace.ErrRuntimeUnavailable) {
 		logger.Error("workspace timeout processing failed", "error", err)
+	}
+}
+
+func runNotificationLoop(ctx context.Context, service *notifications.Service, logger *slog.Logger) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	processNotifications(ctx, service, logger)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			processNotifications(ctx, service, logger)
+		}
+	}
+}
+
+func processNotifications(ctx context.Context, service *notifications.Service, logger *slog.Logger) {
+	if err := service.EnqueueTimeoutWarnings(ctx); err != nil {
+		logger.Error("email notification enqueue failed", "error", err)
+		return
+	}
+	if err := service.Deliver(ctx); err != nil {
+		logger.Warn("email notification delivery deferred", "error", err)
 	}
 }

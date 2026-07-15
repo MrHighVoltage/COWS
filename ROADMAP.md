@@ -25,16 +25,16 @@ Exit criteria:
 ## Milestone 1: Local users, registration, and authorization foundation (in progress)
 
 Implemented so far: administrator bootstrap, bcrypt password hashing,
-login/logout, mandatory first-login password changes, stored user email
-addresses, opaque server-side sessions, CSRF protection, user and administrator
-roles, basic user management, and the first audit events. The next
-implementation adds disabled-by-default self-registration with required email,
-server-assigned default quotas, server-assigned default groups, and
-registration rate limiting. Remaining exit work includes authorization
-coverage for every state-changing handler, operational audit review, a
-documented recovery procedure, and tests for registration abuse and atomic
-default assignment. Login and registration rate limiting are process-local and
-must move to shared infrastructure if COWS ever runs multiple active instances.
+login/logout, mandatory first-login password changes, authenticated password
+changes, stored user email addresses, opaque server-side sessions, CSRF
+protection, user and administrator roles, basic user management, and the first
+audit events. Disabled-by-default self-registration now requires email and
+password confirmation, applies server-assigned default quotas and groups
+atomically, and has registration rate limiting. Remaining exit work includes
+authorization coverage for every state-changing handler, operational audit
+review, a documented recovery procedure, and broader registration-abuse tests.
+Login and registration rate limiting are process-local and must move to shared
+infrastructure if COWS ever runs multiple active instances.
 
 ## Milestone 2: Templates and runtime inspection (in progress)
 
@@ -59,8 +59,7 @@ host capacity and reserved-resource settings. Administrator-defined initial
 connection and stopped-container retention timeouts, user-visible policy
 details, rootless Podman lifecycle operations, and a
 reconciler-driven timeout worker are now present. Warning-event hooks exist in
-the lifecycle model, but email and automatic retention archival remain
-disabled. Each start resets the initial-connection observation period, and
+the lifecycle model. Each start resets the initial-connection observation period, and
 explicit deletion records retained named-volume metadata before removing the
 workspace record. Remaining
 exit work includes reconciliation handling for orphaned and partially-created
@@ -96,12 +95,13 @@ limits. Do not create a generic reverse proxy.
 
 ## Milestone 7: Resource policies and email notifications
 
-Add live resource display, host capacity views, idle shutdown, expiration,
-cleanup policies, administrator capacity inspection, and optional email
-warnings for upcoming automatic stop and deletion. Keep high-frequency samples
-out of the main SQLite control-plane tables. Email delivery must use a small
-internal boundary, persisted deduplication and retries, and the standard
-library SMTP client; it must never block or decide lifecycle operations.
+The initial optional email implementation now warns about upcoming automatic
+stop and deletion using the standard library SMTP client, persisted
+deduplication, bounded retries, and a separate worker. Remaining work includes
+live resource display, richer host capacity views, idle shutdown, expiration,
+cleanup policies, and administrator capacity inspection. Keep high-frequency
+samples out of the main SQLite control-plane tables. Email must never block or
+decide lifecycle operations.
 
 Timeout policy execution belongs to Milestone 3. Milestone 7 may add richer
 idle detection and resource-driven policies, but must not replace the explicit
@@ -112,7 +112,7 @@ Email warning exit criteria:
 - SMTP is disabled unless explicitly configured.
 - Upcoming stop and deletion warnings are deduplicated per workspace deadline.
 - Delivery retries are persisted and bounded without blocking reconciliation.
-- Messages contain only the workspace name, action, deadline, and safe links.
+- Messages contain only the workspace name, action, and deadline.
 - SMTP credentials and message contents are absent from logs and audit events.
 
 ## Milestone 8: Restricted file manager
