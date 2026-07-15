@@ -649,6 +649,7 @@ func (s *Server) workspaceAction(w http.ResponseWriter, r *http.Request, action 
 	if !ok {
 		return
 	}
+	returnPath := workspaceActionReturnPath(r, user)
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if !s.validCSRF(r) {
 		http.Error(w, "invalid request", http.StatusForbidden)
@@ -663,7 +664,17 @@ func (s *Server) workspaceAction(w http.ResponseWriter, r *http.Request, action 
 		s.render(w, http.StatusBadRequest, "workspaces-page", data)
 		return
 	}
-	http.Redirect(w, r, "/workspaces", http.StatusSeeOther)
+	http.Redirect(w, r, returnPath, http.StatusSeeOther)
+}
+
+// workspaceActionReturnPath accepts only the one internal administrator view
+// that needs to retain its context. Browser-supplied paths are never used as
+// arbitrary redirects.
+func workspaceActionReturnPath(r *http.Request, user *domain.User) string {
+	if user != nil && user.IsAdministrator() && r.FormValue("return_to") == "/admin/runtime" {
+		return "/admin/runtime"
+	}
+	return "/workspaces"
 }
 
 func (s *Server) workspaceTerminalPage(w http.ResponseWriter, r *http.Request) {
