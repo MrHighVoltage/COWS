@@ -100,16 +100,26 @@ func (s *Service) Deliver(ctx context.Context) error {
 	}
 	failed := false
 	for _, notification := range notifications {
-		if !s.notificationIsCurrent(ctx, notification, now) {
-			_ = s.store.MarkEmailNotificationCanceled(ctx, notification.ID)
+		current, err := s.notificationIsCurrent(ctx, notification, now)
+		if err != nil {
+			return err
+		}
+		if !current {
+			if err := s.store.MarkEmailNotificationCanceled(ctx, notification.ID); err != nil && !errors.Is(err, repository.ErrNotFound) {
+				return err
+			}
 			continue
 		}
 		if err := s.sender.Send(ctx, notification); err != nil {
 			failed = true
 			attempts := notification.Attempts + 1
-			_ = s.store.MarkEmailNotificationFailed(ctx, notification.ID, attempts, now.Add(s.retryInterval), "smtp_send_failed")
+			if err := s.store.MarkEmailNotificationFailed(ctx, notification.ID, attempts, now.Add(s.retryInterval), "smtp_send_failed"); err != nil {
+				return err
+			}
 			if attempts >= maxDeliveryAttempts {
-				_ = s.store.MarkEmailNotificationCanceled(ctx, notification.ID)
+				if err := s.store.MarkEmailNotificationCanceled(ctx, notification.ID); err != nil && !errors.Is(err, repository.ErrNotFound) {
+					return err
+				}
 			}
 			continue
 		}
@@ -123,17 +133,30 @@ func (s *Service) Deliver(ctx context.Context) error {
 	return nil
 }
 
-func (s *Service) notificationIsCurrent(ctx context.Context, notification domain.EmailNotification, now time.Time) bool {
+func (s *Service) notificationIsCurrent(ctx context.Context, notification domain.EmailNotification, now time.Time) (bool, error) {
 	value, err := s.store.FindWorkspaceByID(ctx, notification.WorkspaceID)
-	if errors.Is(err, repository.ErrNotFound) || err != nil {
-		return false
+	if errors.Is(err, repository.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	owner, err := s.store.FindUserByID(ctx, value.OwnerUserID)
+	if errors.Is(err, repository.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if owner.Disabled || owner.Email == "" || owner.Email != notification.Recipient {
+		return false, nil
 	}
 	status := workspace.EvaluateTimeouts(value, now)
 	if status.Deadline.IsZero() || status.Deadline.Unix() != notification.Deadline.Unix() {
-		return false
+		return false, nil
 	}
 	if notification.Kind == domain.NotificationTimeoutStop {
-		return status.Phase == workspace.TimeoutPhaseAwaitingConnection && value.ObservedState == string(runtime.StateRunning)
+		return status.Phase == workspace.TimeoutPhaseAwaitingConnection && value.ObservedState == string(runtime.StateRunning), nil
 	}
-	return notification.Kind == domain.NotificationTimeoutDelete && status.Phase == workspace.TimeoutPhaseStoppedRetention && value.RuntimeID != ""
+	return notification.Kind == domain.NotificationTimeoutDelete && status.Phase == workspace.TimeoutPhaseStoppedRetention && value.RuntimeID != "", nil
 }
