@@ -19,6 +19,8 @@ Registration and account-credential changes must follow
 `docs/decisions/0014-self-registration-and-account-credentials.md`.
 Email notification changes must follow
 `docs/decisions/0015-email-notifications.md`.
+User disable/delete and group lifecycle changes must follow
+`docs/decisions/0017-user-and-group-lifecycle.md`.
 
 ## Technology constraints
 

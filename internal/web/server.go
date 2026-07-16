@@ -215,9 +215,11 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 		options.RegistrationLimiter, _ = auth.NewLoginLimiter(auth.DefaultLoginFailureLimit, auth.DefaultLoginFailureWindow)
 	}
 	templates, err := template.New("cows").Funcs(template.FuncMap{
-		"mib":        func(bytes int64) int64 { return bytes / (1 << 20) },
-		"gib":        func(bytes int64) int64 { return bytes / (1 << 30) },
-		"quotaClass": quotaProgressClass,
+		"mib":           func(bytes int64) int64 { return bytes / (1 << 20) },
+		"gib":           func(bytes int64) int64 { return bytes / (1 << 30) },
+		"quotaClass":    quotaProgressClass,
+		"quotaOver":     quotaOver,
+		"quotaExceeded": quotaExceeded,
 		"timeoutPhase": func(value domain.Workspace) workspace.TimeoutStatus {
 			return workspace.EvaluateTimeouts(value, time.Now())
 		},
@@ -292,6 +294,18 @@ func quotaProgressClass(current, limit int64) string {
 	return ""
 }
 
+func quotaOver(current, limit int64) bool {
+	return limit > 0 && current > limit
+}
+
+func quotaExceeded(summary domain.AllocationSummary, limit domain.UserQuota) bool {
+	return quotaOver(summary.Resources.CPUMillis, limit.MaxCPUMillis) ||
+		quotaOver(summary.Resources.MemoryBytes, limit.MaxMemoryBytes) ||
+		quotaOver(summary.Resources.StorageBytes, limit.MaxStorageBytes) ||
+		quotaOver(summary.WorkspaceCount, limit.MaxWorkspaces) ||
+		quotaOver(summary.RunningWorkspaceCount, limit.MaxRunningWorkspaces)
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(s.static))))
@@ -335,12 +349,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/users/{id}/edit", s.adminUserEdit)
 	mux.HandleFunc("POST /admin/users", s.adminUsersCreate)
 	mux.HandleFunc("POST /admin/users/{id}/disabled", s.adminUserDisabled)
+	mux.HandleFunc("POST /admin/users/{id}/delete", s.adminUserDelete)
 	mux.HandleFunc("POST /admin/users/{id}/groups", s.adminUserGroups)
 	mux.HandleFunc("GET /admin/groups", s.adminGroups)
 	mux.HandleFunc("POST /admin/groups", s.adminGroupsCreate)
 	mux.HandleFunc("POST /admin/users/{id}/quota", s.adminQuotaUpdate)
 	mux.HandleFunc("POST /admin/users/{id}/quota/delete", s.adminQuotaDelete)
 	mux.HandleFunc("GET /admin/groups/{id}/edit", s.adminGroupEdit)
+	mux.HandleFunc("POST /admin/groups/{id}/delete", s.adminGroupDelete)
 	mux.HandleFunc("POST /admin/groups/{id}/quota", s.adminGroupQuotaUpdate)
 	mux.HandleFunc("POST /admin/groups/{id}/quota/delete", s.adminGroupQuotaDelete)
 	mux.HandleFunc("GET /admin/settings", s.adminSettings)
@@ -1331,12 +1347,55 @@ func (s *Server) adminUserDisabled(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	if err := s.auth.SetUserDisabled(r.Context(), user.ID, r.PathValue("id"), disabled); err != nil {
+	targetID := r.PathValue("id")
+	if err := s.auth.SetUserDisabled(r.Context(), user.ID, targetID, disabled); err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, repository.ErrNotFound) {
 			status = http.StatusNotFound
 		}
 		http.Error(w, userActionError(err), status)
+		return
+	}
+	if disabled {
+		if err := s.workspace.StopUserWorkspaces(r.Context(), user.ID, targetID); err != nil {
+			http.Error(w, "The user was disabled and all sessions were invalidated, but one or more workspaces could not be stopped. Check Runtime and retry.", http.StatusServiceUnavailable)
+			return
+		}
+	}
+	http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
+}
+
+func (s *Server) adminUserDelete(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if !s.validCSRF(r) {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	targetID := r.PathValue("id")
+	if err := s.workspace.DeleteUserWorkspaces(r.Context(), user.ID, targetID); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, repository.ErrNotFound) {
+			status = http.StatusNotFound
+		} else if errors.Is(err, workspace.ErrRuntimeUnavailable) || errors.Is(err, workspace.ErrWorkspaceCleanupIncomplete) {
+			status = http.StatusServiceUnavailable
+		}
+		http.Error(w, userDeleteError(err), status)
+		return
+	}
+	if err := s.auth.DeleteUser(r.Context(), user.ID, targetID); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, repository.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		http.Error(w, userDeleteError(err), status)
 		return
 	}
 	http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
@@ -1397,6 +1456,31 @@ func (s *Server) adminGroupsCreate(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.auth.CreateGroup(r.Context(), user.ID, r.FormValue("name"), r.FormValue("description")); err != nil {
 		groups, _ := s.auth.ListGroups(r.Context(), user.ID)
 		s.render(w, http.StatusBadRequest, "admin-groups-page", pageData{Title: "Groups | COWS", User: &user, Groups: groups, CSRFToken: s.ensureCSRF(w, r), Error: "The group could not be created. Check the name and try again."})
+		return
+	}
+	http.Redirect(w, r, "/admin/groups", http.StatusSeeOther)
+}
+
+func (s *Server) adminGroupDelete(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if !s.validCSRF(r) {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if err := s.auth.DeleteGroup(r.Context(), user.ID, r.PathValue("id")); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, repository.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		http.Error(w, groupActionError(err), status)
 		return
 	}
 	http.Redirect(w, r, "/admin/groups", http.StatusSeeOther)
@@ -2421,8 +2505,34 @@ func userActionError(err error) string {
 		return "You cannot disable your own administrator account."
 	case errors.Is(err, auth.ErrLastAdministrator):
 		return "The last active administrator cannot be disabled."
+	case errors.Is(err, workspace.ErrWorkspaceCleanupIncomplete):
+		return "The user could not be fully cleaned up. Check Runtime and retry."
 	default:
 		return "The user state could not be changed."
+	}
+}
+
+func userDeleteError(err error) string {
+	switch {
+	case errors.Is(err, auth.ErrSelfDelete):
+		return "You cannot delete your own administrator account."
+	case errors.Is(err, auth.ErrUserMustBeDisabled), errors.Is(err, workspace.ErrUserCleanupRequiresDisabled):
+		return "The user must be disabled before deletion."
+	case errors.Is(err, workspace.ErrWorkspaceCleanupIncomplete):
+		return "One or more workspaces could not be deleted. The user remains disabled; check Runtime and retry."
+	case errors.Is(err, workspace.ErrRuntimeUnavailable):
+		return "The rootless Podman runtime is unavailable. User deletion is paused until it is available."
+	default:
+		return "The user could not be deleted."
+	}
+}
+
+func groupActionError(err error) string {
+	switch {
+	case errors.Is(err, auth.ErrGroupInUse):
+		return "This group is still referenced by a workspace template. Remove it from those templates first."
+	default:
+		return "The group could not be deleted."
 	}
 }
 

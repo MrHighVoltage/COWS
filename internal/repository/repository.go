@@ -37,6 +37,7 @@ type UserRepository interface {
 	CreateUser(ctx context.Context, user domain.User, passwordHash string) error
 	ImportUsers(ctx context.Context, entries []UserImportEntry) error
 	RegisterUser(ctx context.Context, user domain.User, passwordHash string, groupIDs []string, userQuota domain.UserQuota) error
+	DeleteUser(ctx context.Context, id string) error
 	UpdateUserPassword(ctx context.Context, id, passwordHash string, mustChangePassword bool) error
 	SetUserDisabled(ctx context.Context, id string, disabled bool) error
 	ListUserGroupIDs(ctx context.Context, userID string) ([]string, error)
@@ -48,12 +49,14 @@ type GroupRepository interface {
 	FindGroupByID(ctx context.Context, id string) (domain.Group, error)
 	FindGroupByName(ctx context.Context, name string) (domain.Group, error)
 	CreateGroup(ctx context.Context, group domain.Group) error
+	DeleteGroup(ctx context.Context, id string) error
 }
 
 type SessionRepository interface {
 	CreateSession(ctx context.Context, session domain.Session) error
 	FindSessionUser(ctx context.Context, tokenHash string, nowUnix int64) (domain.User, error)
 	DeleteSession(ctx context.Context, tokenHash string) error
+	DeleteSessionsForUser(ctx context.Context, userID string) error
 	DeleteExpiredSessions(ctx context.Context, nowUnix int64) error
 }
 
@@ -67,6 +70,8 @@ type NotificationRepository interface {
 	MarkEmailNotificationSent(ctx context.Context, id int64, sentAt time.Time) error
 	MarkEmailNotificationFailed(ctx context.Context, id int64, attempts int, nextAttemptAt time.Time, errorCode string) error
 	MarkEmailNotificationCanceled(ctx context.Context, id int64) error
+	CancelEmailNotificationsForWorkspace(ctx context.Context, workspaceID string) error
+	CancelEmailNotificationsForUser(ctx context.Context, userID string) error
 }
 
 type TemplateRepository interface {

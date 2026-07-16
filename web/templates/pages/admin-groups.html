@@ -21,7 +21,7 @@
 <section class="panel table-panel" aria-labelledby="group-list-title">
   <h2 id="group-list-title">Existing groups</h2>
   <div class="table-scroll"><table><thead><tr><th>Name</th><th>Description</th><th>Actions</th></tr></thead><tbody>
-  {{ range .Groups }}<tr><td><strong>{{ .Name }}</strong></td><td>{{ if .Description }}{{ .Description }}{{ else }}<span class="muted">No description</span>{{ end }}</td><td><a class="table-action" href="/admin/groups/{{ .ID }}/edit">Edit</a></td></tr>{{ else }}<tr><td colspan="3" class="muted">No groups have been created.</td></tr>{{ end }}
+  {{ range .Groups }}<tr><td><strong>{{ .Name }}</strong></td><td>{{ if .Description }}{{ .Description }}{{ else }}<span class="muted">No description</span>{{ end }}</td><td><a class="table-action" href="/admin/groups/{{ .ID }}/edit">Edit</a><form class="inline-form" method="post" action="/admin/groups/{{ .ID }}/delete" x-on:submit="if (!confirm('Delete this group? Users will lose its membership and quota, but their existing workspaces will remain. Templates using this group must be updated first.')) $event.preventDefault()"><input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}"><button class="table-action danger-action" type="submit">Delete</button></form></td></tr>{{ else }}<tr><td colspan="3" class="muted">No groups have been created.</td></tr>{{ end }}
   </tbody></table></div>
 </section>
 {{ template "base-end" . }}

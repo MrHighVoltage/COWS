@@ -153,6 +153,23 @@ window and is never logged or persisted in SQLite.
 There is no email verification or password-reset flow yet. Those flows need
 short-lived single-use tokens and a recovery policy before they are enabled.
 
+Account disablement is an administrative lifecycle operation. The database
+transaction marks the account disabled and invalidates all of its sessions
+before COWS reconciles and stops its running workspaces. A runtime failure does
+not re-enable the account; it is reported so the administrator can retry.
+Account deletion is allowed only for a disabled user. COWS first deletes all
+of that user's workspaces through the ordinary explicit deletion path,
+including directory archival, named-volume tombstones, audit records, and
+pending-notification cancellation, and deletes the user only after cleanup
+succeeds.
+
+Group membership changes preserve existing workspaces. Removing membership can
+remove future template access and quota allowance. If existing allocations
+temporarily exceed the resulting quota, COWS keeps those workspaces but blocks
+new allocations and marks the usage over quota. Group deletion removes
+memberships and group quotas but is rejected while a template references the
+group, avoiding stale access-policy interpretation.
+
 ## Email notification boundary
 
 Timeout evaluation and reconciliation remain authoritative. A separate

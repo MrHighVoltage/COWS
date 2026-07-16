@@ -38,7 +38,22 @@ infrastructure if COWS ever runs multiple active instances.
 Administrator CSV user import now provides bounded preview, existing-user
 matching, additive group assignment, transactional commit, generated temporary
 passwords, and a short-lived credential export. Password reset and email
-verification remain intentionally deferred.
+verification remain intentionally deferred. Disabling an account immediately
+invalidates its sessions and stops its running workspaces. Deletion requires a
+disabled account, archives/deletes its workspaces first, and then removes the
+user. Group membership removal and deletion are available; existing workspaces
+are retained, group deletion rejects template references, and quota reductions
+show temporary over-quota usage while blocking new allocations.
+
+Exit additions for this checkpoint:
+
+- Disabled users cannot authenticate with existing sessions.
+- Disablement reports runtime cleanup failures without re-enabling the user.
+- User deletion is blocked until disabled and does not remove data when
+  workspace cleanup fails.
+- Group membership and group deletion preserve existing workspaces.
+- Quota reductions are visible as over-quota rather than falsely presented as
+  within quota.
 
 ## Milestone 2: Templates and runtime inspection (in progress)
 
