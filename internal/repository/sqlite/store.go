@@ -179,13 +179,41 @@ func (s *Store) UpdateUserPassword(ctx context.Context, id, passwordHash string,
 }
 
 func (s *Store) SetUserDisabled(ctx context.Context, id string, disabled bool) error {
-	result, err := s.db.ExecContext(ctx, "UPDATE users SET disabled = ?, updated_at = ? WHERE id = ?", boolInt(disabled), time.Now().UTC().Unix(), id)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin user status update: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, "UPDATE users SET disabled = ?, updated_at = ? WHERE id = ?", boolInt(disabled), time.Now().UTC().Unix(), id)
 	if err != nil {
 		return fmt.Errorf("set user disabled: %w", err)
 	}
 	count, err := result.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("check disabled user update: %w", err)
+	}
+	if count == 0 {
+		return repository.ErrNotFound
+	}
+	if disabled {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE user_id = ?", id); err != nil {
+			return fmt.Errorf("invalidate disabled user sessions: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit user status update: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) DeleteUser(ctx context.Context, id string) error {
+	result, err := s.db.ExecContext(ctx, "DELETE FROM users WHERE id = ?", id)
+	if err != nil {
+		return fmt.Errorf("delete user: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check user deletion: %w", err)
 	}
 	if count == 0 {
 		return repository.ErrNotFound
@@ -294,6 +322,21 @@ func (s *Store) CreateGroup(ctx context.Context, group domain.Group) error {
 	return nil
 }
 
+func (s *Store) DeleteGroup(ctx context.Context, id string) error {
+	result, err := s.db.ExecContext(ctx, "DELETE FROM groups WHERE id = ?", id)
+	if err != nil {
+		return fmt.Errorf("delete group: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check group deletion: %w", err)
+	}
+	if count == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) CreateSession(ctx context.Context, session domain.Session) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO sessions
 		(token_hash, user_id, created_at, expires_at, last_seen_at) VALUES (?, ?, ?, ?, ?)`,
@@ -321,6 +364,13 @@ func (s *Store) FindSessionUser(ctx context.Context, tokenHash string, nowUnix i
 func (s *Store) DeleteSession(ctx context.Context, tokenHash string) error {
 	if _, err := s.db.ExecContext(ctx, "DELETE FROM sessions WHERE token_hash = ?", tokenHash); err != nil {
 		return fmt.Errorf("delete session: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) DeleteSessionsForUser(ctx context.Context, userID string) error {
+	if _, err := s.db.ExecContext(ctx, "DELETE FROM sessions WHERE user_id = ?", userID); err != nil {
+		return fmt.Errorf("delete user sessions: %w", err)
 	}
 	return nil
 }
@@ -995,6 +1045,20 @@ func (s *Store) MarkEmailNotificationCanceled(ctx context.Context, id int64) err
 		return fmt.Errorf("check email notification cancellation: %w", err)
 	} else if count == 0 {
 		return repository.ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) CancelEmailNotificationsForWorkspace(ctx context.Context, workspaceID string) error {
+	if _, err := s.db.ExecContext(ctx, "UPDATE email_notifications SET status = 'canceled' WHERE workspace_id = ? AND status = 'pending'", workspaceID); err != nil {
+		return fmt.Errorf("cancel workspace email notifications: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) CancelEmailNotificationsForUser(ctx context.Context, userID string) error {
+	if _, err := s.db.ExecContext(ctx, "UPDATE email_notifications SET status = 'canceled' WHERE owner_user_id = ? AND status = 'pending'", userID); err != nil {
+		return fmt.Errorf("cancel user email notifications: %w", err)
 	}
 	return nil
 }

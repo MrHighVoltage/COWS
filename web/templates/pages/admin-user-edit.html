@@ -9,6 +9,7 @@
     <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
     <fieldset>
       <legend>Group membership</legend>
+      <p class="muted">Uncheck a group to remove the user from it. Existing workspaces are not deleted, but template access and effective group quotas may change.</p>
       {{ range .Groups }}
         <label class="check-row"><input type="checkbox" name="group_ids" value="{{ .ID }}"{{ if hasID $.EditUserGroups .ID }} checked{{ end }}> {{ .Name }}{{ if .Description }} <span class="muted">{{ .Description }}</span>{{ end }}</label>
       {{ else }}<p class="muted">No groups have been created yet.</p>{{ end }}

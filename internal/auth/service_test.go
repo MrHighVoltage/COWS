@@ -86,8 +86,15 @@ func TestAdministratorCanManageUsersWithSafetyChecks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
+	_, userToken, err := service.Authenticate(ctx, "student", "another correct password")
+	if err != nil {
+		t.Fatalf("authenticate student session: %v", err)
+	}
 	if err := service.SetUserDisabled(ctx, admin.ID, user.ID, true); err != nil {
 		t.Fatalf("disable user: %v", err)
+	}
+	if _, err := service.UserForSession(ctx, userToken); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("disabled user session = %v, want not found", err)
 	}
 	if _, _, err := service.Authenticate(ctx, "student", "another correct password"); !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("disabled user authentication error = %v", err)
@@ -108,6 +115,83 @@ func TestValidation(t *testing.T) {
 	_, err := service.BootstrapAdministrator(context.Background(), CreateUserInput{Username: "ab", Password: "short"})
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("validation error = %v", err)
+	}
+}
+
+func TestAdministratorCanRemoveMembershipAndDeleteGroup(t *testing.T) {
+	service := testService(t)
+	ctx := context.Background()
+	if _, err := service.BootstrapAdministrator(ctx, CreateUserInput{Username: "admin", Password: "correct horse battery staple"}); err != nil {
+		t.Fatalf("bootstrap administrator: %v", err)
+	}
+	adminBeforeChange, _, err := service.Authenticate(ctx, "admin", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate administrator: %v", err)
+	}
+	if err := service.ChangePassword(ctx, adminBeforeChange.ID, "correct horse battery staple", "changed correct horse battery staple"); err != nil {
+		t.Fatalf("change administrator password: %v", err)
+	}
+	admin, _, err := service.Authenticate(ctx, "admin", "changed correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate changed administrator: %v", err)
+	}
+	group, err := service.CreateGroup(ctx, admin.ID, "Research", "research users")
+	if err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+	second, err := service.CreateGroup(ctx, admin.ID, "Other", "other users")
+	if err != nil {
+		t.Fatalf("create second group: %v", err)
+	}
+	user, err := service.CreateUser(ctx, admin.ID, CreateUserInput{Username: "student", Password: "another correct password", Role: domain.RoleUser})
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if err := service.SetUserGroups(ctx, admin.ID, user.ID, []string{group.ID, second.ID}); err != nil {
+		t.Fatalf("set user groups: %v", err)
+	}
+	if err := service.RemoveUserFromGroup(ctx, admin.ID, user.ID, group.ID); err != nil {
+		t.Fatalf("remove user group: %v", err)
+	}
+	groupIDs, err := service.UserGroupIDs(ctx, admin.ID, user.ID)
+	if err != nil || len(groupIDs) != 1 || groupIDs[0] != second.ID {
+		t.Fatalf("remaining user groups = %v, error = %v", groupIDs, err)
+	}
+	if err := service.DeleteGroup(ctx, admin.ID, group.ID); err != nil {
+		t.Fatalf("delete group: %v", err)
+	}
+	if _, err := service.FindGroupForAdmin(ctx, admin.ID, group.ID); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("deleted group lookup = %v", err)
+	}
+}
+
+func TestGroupDeletionRejectsTemplateReferences(t *testing.T) {
+	service := testService(t)
+	ctx := context.Background()
+	if _, err := service.BootstrapAdministrator(ctx, CreateUserInput{Username: "admin", Password: "correct horse battery staple"}); err != nil {
+		t.Fatalf("bootstrap administrator: %v", err)
+	}
+	adminBeforeChange, _, err := service.Authenticate(ctx, "admin", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate administrator: %v", err)
+	}
+	if err := service.ChangePassword(ctx, adminBeforeChange.ID, "correct horse battery staple", "changed correct horse battery staple"); err != nil {
+		t.Fatalf("change administrator password: %v", err)
+	}
+	admin, _, err := service.Authenticate(ctx, "admin", "changed correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate changed administrator: %v", err)
+	}
+	group, err := service.CreateGroup(ctx, admin.ID, "Restricted", "restricted users")
+	if err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := service.store.CreateTemplate(ctx, domain.WorkspaceTemplate{ID: "template-1", Name: "Restricted template", GroupAccessMode: domain.GroupAccessInclude, AllowedGroupIDs: []string{group.ID}, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+	if err := service.DeleteGroup(ctx, admin.ID, group.ID); !errors.Is(err, ErrGroupInUse) {
+		t.Fatalf("delete referenced group = %v, want group-in-use", err)
 	}
 }
 

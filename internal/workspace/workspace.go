@@ -17,15 +17,28 @@ import (
 )
 
 var (
-	ErrInvalidWorkspace        = errors.New("invalid workspace")
-	ErrTemplateNotAvailable    = errors.New("workspace template is not available")
-	ErrWorkspaceNotAuthorized  = errors.New("workspace access is not authorized")
-	ErrRuntimeUnavailable      = errors.New("workspace runtime unavailable")
-	ErrWorkspaceStateConflict  = errors.New("workspace state conflict")
-	ErrTerminalNotAvailable    = errors.New("workspace terminal is not available")
-	ErrDesktopNotAvailable     = errors.New("workspace desktop is not available")
-	ErrFileManagerNotAvailable = errors.New("workspace file manager is not available")
+	ErrInvalidWorkspace            = errors.New("invalid workspace")
+	ErrTemplateNotAvailable        = errors.New("workspace template is not available")
+	ErrWorkspaceNotAuthorized      = errors.New("workspace access is not authorized")
+	ErrRuntimeUnavailable          = errors.New("workspace runtime unavailable")
+	ErrWorkspaceStateConflict      = errors.New("workspace state conflict")
+	ErrTerminalNotAvailable        = errors.New("workspace terminal is not available")
+	ErrDesktopNotAvailable         = errors.New("workspace desktop is not available")
+	ErrFileManagerNotAvailable     = errors.New("workspace file manager is not available")
+	ErrWorkspaceCleanupIncomplete  = errors.New("workspace cleanup incomplete")
+	ErrUserCleanupRequiresDisabled = errors.New("user must be disabled before workspace cleanup")
 )
+
+type WorkspaceCleanupError struct {
+	Operation string
+	Failed    int
+}
+
+func (e *WorkspaceCleanupError) Error() string {
+	return fmt.Sprintf("%s failed for %d workspace(s)", e.Operation, e.Failed)
+}
+
+func (e *WorkspaceCleanupError) Unwrap() error { return ErrWorkspaceCleanupIncomplete }
 
 type CreateWorkspaceInput struct {
 	Name       string
@@ -150,6 +163,80 @@ func (s *Service) ListWorkspaces(ctx context.Context, actorID string) ([]domain.
 		return nil, err
 	}
 	return s.withResourceUsage(ctx, values), nil
+}
+
+// StopUserWorkspaces reconciles runtime state and stops every currently
+// running workspace owned by targetUserID. It is used after account sessions
+// have been invalidated, so a failed runtime operation cannot leave the user
+// with an active session.
+func (s *Service) StopUserWorkspaces(ctx context.Context, actorID, targetUserID string) error {
+	if err := s.requireAdministratorActor(ctx, actorID); err != nil {
+		return err
+	}
+	if _, err := s.store.FindUserByID(ctx, targetUserID); err != nil {
+		return err
+	}
+	if err := s.Reconcile(ctx); err != nil {
+		return err
+	}
+	values, err := s.store.ListWorkspacesForUser(ctx, targetUserID)
+	if err != nil {
+		return err
+	}
+	failed := 0
+	for _, value := range values {
+		if value.RuntimeID == "" || value.ObservedState != string(runtime.StateRunning) {
+			continue
+		}
+		if err := s.StopWorkspace(ctx, actorID, value.ID); err != nil {
+			failed++
+		}
+	}
+	if failed > 0 {
+		return &WorkspaceCleanupError{Operation: "stopping user workspaces", Failed: failed}
+	}
+	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "user.workspaces_stopped", TargetType: "user", TargetID: targetUserID, Metadata: map[string]string{"workspace_count": fmt.Sprintf("%d", len(values))}})
+	return nil
+}
+
+// DeleteUserWorkspaces stops any still-running workspace and then performs
+// the ordinary explicit deletion path, including directory archival and named
+// volume tombstones. The user record must be deleted separately afterwards.
+func (s *Service) DeleteUserWorkspaces(ctx context.Context, actorID, targetUserID string) error {
+	if err := s.requireAdministratorActor(ctx, actorID); err != nil {
+		return err
+	}
+	target, err := s.store.FindUserByID(ctx, targetUserID)
+	if err != nil {
+		return err
+	}
+	if !target.Disabled {
+		return ErrUserCleanupRequiresDisabled
+	}
+	if err := s.Reconcile(ctx); err != nil {
+		return err
+	}
+	values, err := s.store.ListWorkspacesForUser(ctx, targetUserID)
+	if err != nil {
+		return err
+	}
+	failed := 0
+	for _, value := range values {
+		if value.RuntimeID != "" && value.ObservedState == string(runtime.StateRunning) {
+			if err := s.StopWorkspace(ctx, actorID, value.ID); err != nil {
+				failed++
+				continue
+			}
+		}
+		if err := s.DeleteWorkspace(ctx, actorID, value.ID); err != nil {
+			failed++
+		}
+	}
+	if failed > 0 {
+		return &WorkspaceCleanupError{Operation: "deleting user workspaces", Failed: failed}
+	}
+	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "user.workspaces_deleted", TargetType: "user", TargetID: targetUserID, Metadata: map[string]string{"workspace_count": fmt.Sprintf("%d", len(values))}})
+	return nil
 }
 
 func (s *Service) withTemplateNames(ctx context.Context, values []domain.Workspace) ([]domain.Workspace, error) {
@@ -440,6 +527,9 @@ func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID stri
 		if err := s.logArchiveActivity(value, archiveAction, "succeeded", nil); err != nil {
 			return err
 		}
+		if err := s.store.CancelEmailNotificationsForWorkspace(ctx, value.ID); err != nil {
+			return err
+		}
 		if err := s.store.DeleteWorkspace(ctx, value.ID); err != nil {
 			return err
 		}
@@ -488,6 +578,10 @@ func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID stri
 			_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
 			return err
 		}
+	}
+	if err := s.store.CancelEmailNotificationsForWorkspace(ctx, value.ID); err != nil {
+		_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
+		return err
 	}
 	if err := s.store.DeleteWorkspaceRetainingVolumes(ctx, value.ID, retainedVolumes); err != nil {
 		_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
@@ -738,6 +832,11 @@ func (s *Service) RunTimeouts(ctx context.Context) error {
 				release()
 				continue
 			}
+			if err := s.store.CancelEmailNotificationsForWorkspace(ctx, value.ID); err != nil {
+				_ = s.finishOperation(ctx, value.ID, "timeout-delete", "failed", err.Error(), operationStarted)
+				release()
+				continue
+			}
 			if err := s.store.ReleaseWorkspacePorts(ctx, value.ID); err != nil {
 				_ = s.finishOperation(ctx, value.ID, "timeout-delete", "failed", err.Error(), operationStarted)
 				release()
@@ -922,6 +1021,17 @@ func (s *Service) requireActor(ctx context.Context, actorID string) (domain.User
 		return domain.User{}, ErrPasswordChangeRequired
 	}
 	return user, nil
+}
+
+func (s *Service) requireAdministratorActor(ctx context.Context, actorID string) error {
+	user, err := s.store.FindUserByID(ctx, actorID)
+	if err != nil {
+		return err
+	}
+	if !user.IsAdministrator() || user.MustChangePassword {
+		return ErrWorkspaceNotAuthorized
+	}
+	return nil
 }
 
 func roleAllowed(roles []domain.Role, role domain.Role) bool {

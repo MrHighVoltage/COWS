@@ -29,11 +29,15 @@
           <td>
             <a class="table-action button-link" href="/admin/users/{{ .ID }}/edit">Edit user</a>
             {{ if ne .ID $.User.ID }}
-            <form method="post" action="/admin/users/{{ .ID }}/disabled" x-on:submit="if (!confirm('Change this user status?')) $event.preventDefault()">
+            <form method="post" action="/admin/users/{{ .ID }}/disabled" x-on:submit="if (!confirm('{{ if .Disabled }}Enable this user?{{ else }}Disabling this user immediately ends all sessions and stops all of their workspaces. Unsaved work may be lost. Continue?{{ end }}')) $event.preventDefault()">
               <input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}">
               <input type="hidden" name="disabled" value="{{ if .Disabled }}false{{ else }}true{{ end }}">
               <button class="table-action" type="submit">{{ if .Disabled }}Enable{{ else }}Disable{{ end }}</button>
             </form>
+            {{ if .Disabled }}<form method="post" action="/admin/users/{{ .ID }}/delete" x-on:submit="if (!confirm('Delete this disabled user and all remaining workspaces? Managed directories will be archived and named volumes retained for administrator recovery. This cannot be undone.')) $event.preventDefault()">
+              <input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}">
+              <button class="table-action danger-action" type="submit">Delete</button>
+            </form>{{ end }}
             {{ else }}<span class="muted">Current account</span>{{ end }}
           </td>
         </tr>

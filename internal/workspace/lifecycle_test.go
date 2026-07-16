@@ -253,6 +253,55 @@ func TestManualDeleteRemovesWorkspaceRecordAfterContainer(t *testing.T) {
 	}
 }
 
+func TestDisabledUserWorkspaceCleanupStopsArchivesAndPermitsDeletion(t *testing.T) {
+	service, authService, adminID, store := testService(t)
+	fake := &lifecycleRuntime{}
+	mountRoot := t.TempDir()
+	service = NewWithRuntimeAndMountRoot(store, fake, mountRoot)
+	templateInput := validTemplateInput()
+	templateInput.Configuration.Mounts = []domain.TemplateMount{{Name: "designs", Type: domain.TemplateMountDirectory, ContainerPath: "/designs"}}
+	template, err := service.CreateTemplate(context.Background(), adminID, templateInput)
+	if err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+	if _, err := authService.CreateUser(context.Background(), adminID, auth.CreateUserInput{Username: "cleanup-user", Password: "another correct password", Role: domain.RoleUser}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	user, _, err := authService.Authenticate(context.Background(), "cleanup-user", "another correct password")
+	if err != nil {
+		t.Fatalf("authenticate user: %v", err)
+	}
+	if err := authService.ChangePassword(context.Background(), user.ID, "another correct password", "changed cleanup password"); err != nil {
+		t.Fatalf("change password: %v", err)
+	}
+	value, err := service.CreateWorkspace(context.Background(), user.ID, CreateWorkspaceInput{Name: "Cleanup workspace", TemplateID: template.ID})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := service.StartWorkspace(context.Background(), user.ID, value.ID); err != nil {
+		t.Fatalf("start workspace: %v", err)
+	}
+	fake.observed = []runtime.ObservedWorkspace{{RuntimeID: fake.lastID, WorkspaceID: value.ID, State: runtime.StateRunning, ObservedAt: time.Now().UTC()}}
+	if err := authService.SetUserDisabled(context.Background(), adminID, user.ID, true); err != nil {
+		t.Fatalf("disable user: %v", err)
+	}
+	if err := service.DeleteUserWorkspaces(context.Background(), adminID, user.ID); err != nil {
+		t.Fatalf("delete user workspaces: %v", err)
+	}
+	if fake.stopped != 1 || fake.removed != 1 {
+		t.Fatalf("runtime cleanup calls = stop %d remove %d", fake.stopped, fake.removed)
+	}
+	if _, err := os.Stat(filepath.Join(mountRoot+"-archive", managedContainerName(value.ID), "designs")); err != nil {
+		t.Fatalf("archived directory: %v", err)
+	}
+	if err := authService.DeleteUser(context.Background(), adminID, user.ID); err != nil {
+		t.Fatalf("delete user: %v", err)
+	}
+	if _, err := store.FindUserByID(context.Background(), user.ID); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("deleted user lookup = %v", err)
+	}
+}
+
 func TestOpenDesktopUsesApprovedAllocatedService(t *testing.T) {
 	service, authService, adminID, store := testService(t)
 	input := validTemplateInput()

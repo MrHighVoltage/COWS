@@ -24,7 +24,10 @@ var (
 	ErrPasswordChangeRequired  = errors.New("password change required")
 	ErrLastAdministrator       = errors.New("cannot disable the last active administrator")
 	ErrSelfDisable             = errors.New("administrator cannot disable their own account")
+	ErrSelfDelete              = errors.New("administrator cannot delete their own account")
 	ErrInvalidGroup            = errors.New("invalid group")
+	ErrGroupInUse              = errors.New("group is still referenced by a workspace template")
+	ErrUserMustBeDisabled      = errors.New("user must be disabled before deletion")
 	ErrRegistrationDisabled    = errors.New("registration is disabled")
 	ErrRegistrationUnavailable = errors.New("registration is unavailable")
 )
@@ -287,6 +290,10 @@ func (s *Service) SetUserGroups(ctx context.Context, actorID, userID string, gro
 	if _, err := s.store.FindUserByID(ctx, userID); err != nil {
 		return err
 	}
+	current, err := s.store.ListUserGroupIDs(ctx, userID)
+	if err != nil {
+		return err
+	}
 	seen := make(map[string]struct{}, len(groupIDs))
 	for _, groupID := range groupIDs {
 		if _, ok := seen[groupID]; ok {
@@ -300,8 +307,36 @@ func (s *Service) SetUserGroups(ctx context.Context, actorID, userID string, gro
 	if err := s.store.SetUserGroups(ctx, userID, groupIDs); err != nil {
 		return err
 	}
-	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "user.groups_updated", TargetType: "user", TargetID: userID})
+	removed := difference(current, groupIDs)
+	added := difference(groupIDs, current)
+	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "user.groups_updated", TargetType: "user", TargetID: userID, Metadata: map[string]string{"added_group_ids": strings.Join(added, ","), "removed_group_ids": strings.Join(removed, ",")}})
 	return nil
+}
+
+// RemoveUserFromGroup is the explicit single-membership operation used by
+// administrator workflows. It preserves all other memberships and existing
+// workspaces.
+func (s *Service) RemoveUserFromGroup(ctx context.Context, actorID, userID, groupID string) error {
+	if _, err := s.requireAdministrator(ctx, actorID); err != nil {
+		return err
+	}
+	if _, err := s.store.FindUserByID(ctx, userID); err != nil {
+		return err
+	}
+	if _, err := s.store.FindGroupByID(ctx, groupID); err != nil {
+		return err
+	}
+	groupIDs, err := s.store.ListUserGroupIDs(ctx, userID)
+	if err != nil {
+		return err
+	}
+	filtered := make([]string, 0, len(groupIDs))
+	for _, value := range groupIDs {
+		if value != groupID {
+			filtered = append(filtered, value)
+		}
+	}
+	return s.SetUserGroups(ctx, actorID, userID, filtered)
 }
 
 func (s *Service) CreateUser(ctx context.Context, actorID string, input CreateUserInput) (domain.User, error) {
@@ -345,6 +380,69 @@ func (s *Service) SetUserDisabled(ctx context.Context, actorID, targetID string,
 	}
 	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: eventType, TargetType: "user", TargetID: targetID})
 	return nil
+}
+
+func (s *Service) DeleteUser(ctx context.Context, actorID, targetID string) error {
+	if _, err := s.requireAdministrator(ctx, actorID); err != nil {
+		return err
+	}
+	if actorID == targetID {
+		return ErrSelfDelete
+	}
+	target, err := s.store.FindUserByID(ctx, targetID)
+	if err != nil {
+		return err
+	}
+	if !target.Disabled {
+		return ErrUserMustBeDisabled
+	}
+	if err := s.store.CancelEmailNotificationsForUser(ctx, targetID); err != nil {
+		return err
+	}
+	if err := s.store.DeleteUser(ctx, targetID); err != nil {
+		return err
+	}
+	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "user.deleted", TargetType: "user", TargetID: targetID})
+	return nil
+}
+
+func (s *Service) DeleteGroup(ctx context.Context, actorID, groupID string) error {
+	if _, err := s.requireAdministrator(ctx, actorID); err != nil {
+		return err
+	}
+	if _, err := s.store.FindGroupByID(ctx, groupID); err != nil {
+		return err
+	}
+	templates, err := s.store.ListTemplates(ctx)
+	if err != nil {
+		return err
+	}
+	for _, value := range templates {
+		for _, allowedGroupID := range value.AllowedGroupIDs {
+			if allowedGroupID == groupID {
+				return ErrGroupInUse
+			}
+		}
+	}
+	if err := s.store.DeleteGroup(ctx, groupID); err != nil {
+		return err
+	}
+	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "group.deleted", TargetType: "group", TargetID: groupID})
+	return nil
+}
+
+func difference(left, right []string) []string {
+	other := make(map[string]struct{}, len(right))
+	for _, value := range right {
+		other[value] = struct{}{}
+	}
+	result := make([]string, 0)
+	for _, value := range left {
+		if _, ok := other[value]; !ok {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func (s *Service) requireAdministrator(ctx context.Context, actorID string) (domain.User, error) {

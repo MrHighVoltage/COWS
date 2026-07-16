@@ -92,6 +92,7 @@ code { color: #465866; font-size: .82rem; }
 .workspace-actions { display: flex; flex-wrap: nowrap; align-items: center; gap: .5rem; min-width: max-content; }
 .workspace-actions form { margin: 0; }
 .workspace-actions .table-action { width: auto; }
+.inline-form { display: inline; margin: 0; }
 .danger-action { color: #8c2d1a; border-color: #d39a8c; }
 .allocation-summary { margin: 1rem 0 1.5rem; padding: 1rem 0 0; border-top: 1px solid #e3e8ed; }
 .allocation-summary h3 { margin: 0; font-size: 1rem; }
@@ -108,6 +109,7 @@ code { color: #465866; font-size: .82rem; }
 .resource-item progress { width: 100%; height: .65rem; accent-color: #176b8f; }
 .resource-item progress.quota-progress-warning { accent-color: #c87516; }
 .resource-item progress.quota-progress-danger { accent-color: #b54a2f; }
+.quota-over { display: block; color: #8c2d1a; font-size: .82rem; font-weight: 700; }
 .operation-progress { width: 7rem; height: .6rem; accent-color: #db9b27; }
 .terminal-panel { padding-bottom: 1rem; }
 .terminal { height: min(65vh, 42rem); min-height: 28rem; padding: .75rem; overflow: hidden; border: 1px solid #263746; border-radius: .35rem; color: #f4f6f8; background: #101820; }

@@ -35,6 +35,14 @@
       </form>
     {{ end }}
   </section>
+  <section class="form-panel" aria-labelledby="delete-group-title">
+    <h2 id="delete-group-title">Delete group</h2>
+    <p class="muted">Deleting this group removes its memberships and quota. Existing workspaces are not deleted. Templates using this group must be updated first.</p>
+    <form method="post" action="/admin/groups/{{ .EditGroup.ID }}/delete" x-on:submit="if (!confirm('Delete this group? This cannot be undone.')) $event.preventDefault()">
+      <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
+      <button class="danger-button" type="submit">Delete group</button>
+    </form>
+  </section>
 </section>
 {{ template "base-end" . }}
 {{ end }}

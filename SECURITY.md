@@ -163,6 +163,21 @@ data for manual recovery. Timeout cleanup never archives user data.
 
 ## Registration and email risks
 
+Disabling a user invalidates all of that user's sessions in the same database
+transaction as the disabled flag, before runtime stop operations begin. A
+runtime outage can therefore prevent container cleanup but cannot leave the
+account enabled or its existing sessions usable. User deletion requires a
+previously disabled account and succeeds only after all workspaces have been
+stopped and explicitly deleted through the normal archive and named-volume
+tombstone path. Cleanup failures leave the disabled account and remaining
+workspace records for an administrator retry.
+
+Group removal does not delete existing workspaces. It can reduce template
+access and effective quotas, so over-quota existing allocations are retained
+but new allocations are denied until usage falls below the new limit. Group
+deletion is blocked while a template references that group, preventing stale
+policy references from being interpreted in a fail-open way.
+
 Self-registration is disabled by default. Enabling it permits unauthenticated
 account creation and therefore requires conservative default quotas, rate
 limiting, monitoring, and an operator decision that email addresses do not
@@ -181,7 +196,8 @@ terminal contents, runtime identifiers, host paths, and internal addresses.
 Local username/password authentication, mandatory first-login password change,
 stored email fields, server-side opaque sessions, CSRF protected forms,
 administrator checks, login rate limiting, and basic audit persistence now
-exist. The implementation has no password recovery, account deletion workflow,
+exist. Account disablement, safe user deletion, and group lifecycle controls
+are implemented. The implementation has no password recovery,
 generic application proxy, or production HTTPS configuration. The initial file
 manager supports approved directory and named-volume listing, bounded upload,
 individual file download, streamed directory ZIP download, folder creation,
