@@ -115,6 +115,7 @@ type allocationView struct {
 	Summary       domain.AllocationSummary
 	Quota         domain.UserQuota
 	QuotaAssigned bool
+	StorageKnown  bool
 }
 
 type templateFormData struct {
@@ -298,10 +299,10 @@ func quotaOver(current, limit int64) bool {
 	return limit > 0 && current > limit
 }
 
-func quotaExceeded(summary domain.AllocationSummary, limit domain.UserQuota) bool {
+func quotaExceeded(summary domain.AllocationSummary, limit domain.UserQuota, storageKnown bool) bool {
 	return quotaOver(summary.Resources.CPUMillis, limit.MaxCPUMillis) ||
 		quotaOver(summary.Resources.MemoryBytes, limit.MaxMemoryBytes) ||
-		quotaOver(summary.Resources.StorageBytes, limit.MaxStorageBytes) ||
+		(storageKnown && quotaOver(summary.Resources.StorageBytes, limit.MaxStorageBytes)) ||
 		quotaOver(summary.WorkspaceCount, limit.MaxWorkspaces) ||
 		quotaOver(summary.RunningWorkspaceCount, limit.MaxRunningWorkspaces)
 }
@@ -581,16 +582,17 @@ func (s *Server) workspacePageData(ctx context.Context, user *domain.User) (page
 	if err != nil {
 		return pageData{}, err
 	}
-	allocation, err := s.workspace.AllocationSummary(ctx, user.ID)
+	allocation, storageKnown, err := s.workspace.AllocationSummaryForWorkspaces(ctx, user.ID, workspaces)
 	if err != nil {
 		return pageData{}, err
 	}
-	data := pageData{Workspaces: workspaces, Allocation: &allocationView{Summary: allocation}, WorkspaceAccess: make(map[string]workspaceAccess, len(workspaces))}
+	data := pageData{Workspaces: workspaces, Allocation: &allocationView{Summary: allocation, StorageKnown: storageKnown}, WorkspaceAccess: make(map[string]workspaceAccess, len(workspaces))}
+	methodsByWorkspace, err := s.workspace.WorkspaceAccessMethodsForWorkspaces(ctx, user.ID, workspaces)
+	if err != nil {
+		return pageData{}, err
+	}
 	for _, value := range workspaces {
-		methods, err := s.workspace.WorkspaceAccessMethods(ctx, user.ID, value.ID)
-		if err != nil {
-			return pageData{}, err
-		}
+		methods := methodsByWorkspace[value.ID]
 		access := workspaceAccess{}
 		for _, method := range methods {
 			switch method {
@@ -1970,7 +1972,6 @@ func (s *Server) runtimeWorkspaceViews(ctx context.Context, actorID string, obse
 			}
 		}
 		view := runtimeWorkspaceView{Observed: observed, WorkspaceID: value.ID, Managed: true, RuntimePresent: present}
-		view.Managed = true
 		view.OwnerID = value.OwnerUserID
 		if owner, exists := userByID[value.OwnerUserID]; exists {
 			view.Owner = owner.Username
@@ -1978,9 +1979,8 @@ func (s *Server) runtimeWorkspaceViews(ctx context.Context, actorID string, obse
 		if template, exists := templateByID[value.TemplateID]; exists {
 			view.Template = template.Name
 		}
-		methods, accessErr := s.workspace.WorkspaceAccessMethods(ctx, actorID, value.ID)
-		if accessErr == nil {
-			for _, method := range methods {
+		if template, exists := templateByID[value.TemplateID]; exists {
+			for _, method := range template.AccessMethods {
 				switch method {
 				case domain.AccessTerminal:
 					view.Access.Terminal = true

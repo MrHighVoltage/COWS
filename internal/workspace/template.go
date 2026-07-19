@@ -58,7 +58,10 @@ type Service struct {
 	storageUsage     *StorageUsageProvider
 	resourceUsage    runtime.ResourceUsageRuntime
 	fileAccessLocks  sync.Map
-	now              func() time.Time
+	// ponytail: one process-wide admission lock; database reservations belong to
+	// the future multi-instance deployment.
+	admissionMu sync.Mutex
+	now         func() time.Time
 }
 
 func New(store repository.Store, schedulers ...*quota.Scheduler) *Service {
@@ -74,10 +77,20 @@ func NewWithRuntimeAndMountRoot(store repository.Store, runtimeAdapter runtime.R
 }
 
 func NewWithRuntimeAndMountRoots(store repository.Store, runtimeAdapter runtime.Runtime, mountRoot, mountArchiveRoot string, schedulers ...*quota.Scheduler) *Service {
+	return newServiceWithStorage(store, runtimeAdapter, mountRoot, mountArchiveRoot, nil, schedulers...)
+}
+
+func NewWithRuntimeAndMountRootsAndStorage(store repository.Store, runtimeAdapter runtime.Runtime, mountRoot, mountArchiveRoot string, storageProvider *StorageUsageProvider, schedulers ...*quota.Scheduler) *Service {
+	return newServiceWithStorage(store, runtimeAdapter, mountRoot, mountArchiveRoot, storageProvider, schedulers...)
+}
+
+func newServiceWithStorage(store repository.Store, runtimeAdapter runtime.Runtime, mountRoot, mountArchiveRoot string, storageProvider *StorageUsageProvider, schedulers ...*quota.Scheduler) *Service {
 	service := newService(store, runtimeAdapter, schedulers...)
 	service.mountRoot = mountRoot
 	service.mountArchiveRoot = mountArchiveRoot
-	if storageRuntime, ok := runtimeAdapter.(runtime.StorageUsageRuntime); ok {
+	if storageProvider != nil {
+		service.storageUsage = storageProvider
+	} else if storageRuntime, ok := runtimeAdapter.(runtime.StorageUsageRuntime); ok {
 		service.storageUsage = NewStorageUsageProvider(storageRuntime, mountRoot)
 	}
 	if usageRuntime, ok := runtimeAdapter.(runtime.ResourceUsageRuntime); ok {

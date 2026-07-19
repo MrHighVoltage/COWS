@@ -38,6 +38,12 @@ Mount usage is calculated through the approved runtime file-access helper, so
 rootless subordinate-ID ownership is preserved. Storage usage is counted for
 all workspaces, whether their containers are running or stopped. If storage
 measurement is unavailable, quota admission fails closed.
+Measurements are cached per workspace for a short interval and concurrent
+requests are coalesced. The workspace page may display an unavailable value
+when a refresh fails, but workspace admission never treats missing or expired
+storage data as available capacity. The current byte count is the sum of
+regular-file logical sizes; filesystem block allocation is a future policy
+decision and must not be described as physical disk usage until implemented.
 
 CPU and memory allocations are counted only for workspaces whose observed
 runtime state is `running`. Workspace counts are separate:

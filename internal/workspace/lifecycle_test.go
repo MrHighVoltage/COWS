@@ -22,6 +22,7 @@ type lifecycleRuntime struct {
 	started                      int
 	stopped                      int
 	removed                      int
+	removeErr                    error
 	lastID                       string
 	lastSpec                     runtime.WorkspaceSpec
 	observed                     []runtime.ObservedWorkspace
@@ -54,7 +55,10 @@ func (r *lifecycleRuntime) StopWorkspace(context.Context, string, time.Duration)
 	r.stopped++
 	return nil
 }
-func (r *lifecycleRuntime) RemoveWorkspace(context.Context, string) error { r.removed++; return nil }
+func (r *lifecycleRuntime) RemoveWorkspace(context.Context, string) error {
+	r.removed++
+	return r.removeErr
+}
 func (r *lifecycleRuntime) InspectWorkspace(context.Context, string) (runtime.ObservedWorkspace, error) {
 	return runtime.ObservedWorkspace{}, nil
 }
@@ -113,6 +117,7 @@ func TestLifecycleTimeoutStopsAndDeletesWorkspace(t *testing.T) {
 		t.Fatalf("stop calls = %d, want 1", fake.stopped)
 	}
 	service.now = func() time.Time { return base.Add(4 * time.Second) }
+	fake.removeErr = runtime.ErrNotFound
 	if err := service.RunTimeouts(context.Background()); err != nil {
 		t.Fatalf("run delete timeout: %v", err)
 	}

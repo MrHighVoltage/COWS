@@ -318,6 +318,12 @@ Quota checks use measured storage for all existing workspaces, including
 stopped records. CPU and memory are counted only for running workspaces. A
 request must fit total and running workspace-count quotas and the remaining host
 capacity after reserved capacity.
+Storage measurements are cached per workspace for a short bounded interval and
+coalesced when concurrent requests ask for the same workspace. Workspace pages
+reuse the measured rows for their allocation summary; a missing measurement is
+shown as unavailable, while quota admission fails closed and refreshes expired
+data. This keeps ordinary page rendering from repeatedly walking large trees
+without treating stale usage as safe for admission.
 Explicit user quotas override group quotas. Without an explicit row, finite
 group limits add together and zero makes that dimension unlimited. Missing
 quotas block ordinary users but do not restrict administrators. Host capacity

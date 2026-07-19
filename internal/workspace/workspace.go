@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/cows-project/cows/internal/domain"
+	"github.com/cows-project/cows/internal/quota"
 	"github.com/cows-project/cows/internal/repository"
 	"github.com/cows-project/cows/internal/runtime"
 )
@@ -94,6 +95,8 @@ func (s *Service) CreateWorkspace(ctx context.Context, actorID string, input Cre
 	if err != nil {
 		return domain.Workspace{}, err
 	}
+	releaseAdmission := s.acquireAdmission()
+	defer releaseAdmission()
 	if s.scheduler != nil {
 		if err := s.scheduler.CheckCreate(ctx, user.ID, domain.ResourceRequest{CPUMillis: template.DefaultCPUMillis, MemoryBytes: template.DefaultMemoryBytes, StorageBytes: template.DefaultStorageBytes}); err != nil {
 			return domain.Workspace{}, err
@@ -240,14 +243,49 @@ func (s *Service) DeleteUserWorkspaces(ctx context.Context, actorID, targetUserI
 }
 
 func (s *Service) withTemplateNames(ctx context.Context, values []domain.Workspace) ([]domain.Workspace, error) {
+	templates, err := s.store.ListTemplates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	names := make(map[string]string, len(templates))
+	for _, template := range templates {
+		names[template.ID] = template.Name
+	}
 	for index := range values {
-		template, err := s.store.FindTemplateByID(ctx, values[index].TemplateID)
-		if err != nil {
-			return nil, err
+		name, ok := names[values[index].TemplateID]
+		if !ok {
+			return nil, repository.ErrNotFound
 		}
-		values[index].TemplateName = template.Name
+		values[index].TemplateName = name
 	}
 	return values, nil
+}
+
+func (s *Service) WorkspaceAccessMethodsForWorkspaces(ctx context.Context, actorID string, values []domain.Workspace) (map[string][]domain.AccessMethod, error) {
+	user, err := s.requireActor(ctx, actorID)
+	if err != nil {
+		return nil, err
+	}
+	templates, err := s.store.ListTemplates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	accessByTemplate := make(map[string][]domain.AccessMethod, len(templates))
+	for _, template := range templates {
+		accessByTemplate[template.ID] = template.AccessMethods
+	}
+	access := make(map[string][]domain.AccessMethod, len(values))
+	for _, value := range values {
+		if !user.IsAdministrator() && value.OwnerUserID != user.ID {
+			return nil, repository.ErrNotFound
+		}
+		methods, ok := accessByTemplate[value.TemplateID]
+		if !ok {
+			return nil, repository.ErrNotFound
+		}
+		access[value.ID] = append([]domain.AccessMethod(nil), methods...)
+	}
+	return access, nil
 }
 
 // ListWorkspacesForRuntimeOverview returns control-plane records without
@@ -273,20 +311,45 @@ func (s *Service) AllocationSummary(ctx context.Context, actorID string) (domain
 	if err != nil {
 		return domain.AllocationSummary{}, err
 	}
-	summary, err := s.store.WorkspaceAllocations(ctx, user.ID)
+	values, err = s.withStorageUsage(ctx, values)
 	if err != nil {
 		return domain.AllocationSummary{}, err
 	}
-	if s.storageUsage != nil {
-		for _, value := range values {
-			usage, usageErr := s.storageUsage.WorkspaceStorageUsage(ctx, value)
-			if usageErr != nil {
-				return domain.AllocationSummary{}, usageErr
-			}
-			summary.Resources.StorageBytes += usage
-		}
+	summary, known, err := s.allocationSummaryForWorkspaces(ctx, user.ID, values)
+	if err != nil {
+		return domain.AllocationSummary{}, err
+	}
+	if !known {
+		return domain.AllocationSummary{}, quota.ErrStorageUnavailable
 	}
 	return summary, nil
+}
+
+func (s *Service) AllocationSummaryForWorkspaces(ctx context.Context, actorID string, values []domain.Workspace) (domain.AllocationSummary, bool, error) {
+	user, err := s.requireActor(ctx, actorID)
+	if err != nil {
+		return domain.AllocationSummary{}, false, err
+	}
+	return s.allocationSummaryForWorkspaces(ctx, user.ID, values)
+}
+
+func (s *Service) allocationSummaryForWorkspaces(ctx context.Context, userID string, values []domain.Workspace) (domain.AllocationSummary, bool, error) {
+	summary, err := s.store.WorkspaceAllocations(ctx, userID)
+	if err != nil {
+		return domain.AllocationSummary{}, false, err
+	}
+	known := true
+	if s.storageUsage == nil {
+		return summary, true, nil
+	}
+	for _, value := range values {
+		if !value.StorageUsageKnown {
+			known = false
+			continue
+		}
+		summary.Resources.StorageBytes += value.StorageUsageBytes
+	}
+	return summary, known, nil
 }
 
 func (s *Service) withStorageUsage(ctx context.Context, values []domain.Workspace) ([]domain.Workspace, error) {
@@ -296,7 +359,7 @@ func (s *Service) withStorageUsage(ctx context.Context, values []domain.Workspac
 	for index := range values {
 		usage, err := s.storageUsage.WorkspaceStorageUsage(ctx, values[index])
 		if err != nil {
-			return nil, err
+			continue
 		}
 		values[index].StorageUsageBytes = usage
 		values[index].StorageUsageKnown = true
@@ -382,6 +445,8 @@ func (s *Service) StartWorkspace(ctx context.Context, actorID, workspaceID strin
 		return err
 	}
 	defer release()
+	releaseAdmission := s.acquireAdmission()
+	defer releaseAdmission()
 	if value.ObservedState != string(runtime.StateRunning) && s.scheduler != nil {
 		if err := s.scheduler.CheckStart(ctx, value.OwnerUserID, domain.ResourceRequest{CPUMillis: value.AllocatedCPUMillis, MemoryBytes: value.AllocatedMemoryBytes}); err != nil {
 			return err
@@ -461,6 +526,8 @@ func (s *Service) StopWorkspace(ctx context.Context, actorID, workspaceID string
 		return err
 	}
 	defer release()
+	releaseAdmission := s.acquireAdmission()
+	defer releaseAdmission()
 	if err := s.store.SetWorkspaceDesiredState(ctx, value.ID, domain.DesiredWorkspaceStopped, s.now().UTC()); err != nil {
 		return err
 	}
@@ -511,6 +578,8 @@ func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID stri
 		return err
 	}
 	defer release()
+	releaseAdmission := s.acquireAdmission()
+	defer releaseAdmission()
 	configuration, err := s.effectiveConfiguration(ctx, value)
 	if err != nil {
 		return err
@@ -792,6 +861,7 @@ func (s *Service) RunTimeouts(ctx context.Context) error {
 		return err
 	}
 	now := s.now().UTC()
+	failed := 0
 	for _, value := range values {
 		status := EvaluateTimeouts(value, now)
 		release, lockErr := s.beginLifecycleChange(ctx, value.ID)
@@ -801,61 +871,97 @@ func (s *Service) RunTimeouts(ctx context.Context) error {
 			}
 			continue
 		}
-		switch status.Action {
-		case TimeoutActionStop:
-			if value.RuntimeID == "" || value.ObservedState != string(runtime.StateRunning) {
-				release()
-				continue
+		releaseAdmission := s.acquireAdmission()
+		func() {
+			defer releaseAdmission()
+			switch status.Action {
+			case TimeoutActionStop:
+				if value.RuntimeID == "" || value.ObservedState != string(runtime.StateRunning) {
+					return
+				}
+				operationStarted := now
+				if err := s.beginOperation(ctx, value.ID, "timeout-stop", operationStarted); err != nil {
+					failed++
+					return
+				}
+				if err := s.runtime.StopWorkspace(ctx, value.RuntimeID, 10*time.Second); err != nil {
+					failed++
+					_ = s.finishOperation(ctx, value.ID, "timeout-stop", "failed", err.Error(), operationStarted)
+					return
+				}
+				var operationErr error
+				remember := func(err error) {
+					if operationErr == nil && err != nil {
+						operationErr = err
+					}
+				}
+				remember(s.store.SetWorkspaceDesiredState(ctx, value.ID, domain.DesiredWorkspaceStopped, now))
+				value.StoppedAt = now
+				remember(s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateStopped), value.RuntimeID, "", "", now, now))
+				remember(s.store.UpdateWorkspaceLifecycle(ctx, value.ID, value.StartedAt, value.LastConnectedAt, value.StoppedAt, value.ContainerDeletedAt, value.DataArchiveEligibleAt, now))
+				if operationErr != nil {
+					failed++
+					_ = s.finishOperation(ctx, value.ID, "timeout-stop", "failed", operationErr.Error(), operationStarted)
+					return
+				}
+				if err := s.finishOperation(ctx, value.ID, "timeout-stop", "succeeded", "", operationStarted); err != nil {
+					failed++
+					return
+				}
+				s.recordAudit(ctx, domain.AuditEvent{EventType: "workspace.timeout_stopped", TargetType: "workspace", TargetID: value.ID})
+			case TimeoutActionDelete:
+				if value.RuntimeID == "" || (value.ObservedState != string(runtime.StateStopped) && value.ObservedState != string(runtime.StateExited)) {
+					return
+				}
+				operationStarted := now
+				if err := s.beginOperation(ctx, value.ID, "timeout-delete", operationStarted); err != nil {
+					failed++
+					return
+				}
+				if err := s.runtime.RemoveWorkspace(ctx, value.RuntimeID); err != nil && !errors.Is(err, runtime.ErrNotFound) {
+					failed++
+					_ = s.finishOperation(ctx, value.ID, "timeout-delete", "failed", err.Error(), operationStarted)
+					return
+				}
+				var operationErr error
+				remember := func(err error) {
+					if operationErr == nil && err != nil {
+						operationErr = err
+					}
+				}
+				remember(s.store.CancelEmailNotificationsForWorkspace(ctx, value.ID))
+				remember(s.store.ReleaseWorkspacePorts(ctx, value.ID))
+				value.ContainerDeletedAt = now
+				value.DataArchiveEligibleAt = time.Time{}
+				remember(s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateRemoved), value.RuntimeID, "", "", now, now))
+				remember(s.store.UpdateWorkspaceLifecycle(ctx, value.ID, value.StartedAt, value.LastConnectedAt, value.StoppedAt, value.ContainerDeletedAt, value.DataArchiveEligibleAt, now))
+				if operationErr != nil {
+					failed++
+					_ = s.finishOperation(ctx, value.ID, "timeout-delete", "failed", operationErr.Error(), operationStarted)
+					return
+				}
+				if err := s.finishOperation(ctx, value.ID, "timeout-delete", "succeeded", "", operationStarted); err != nil {
+					failed++
+					return
+				}
+				s.recordAudit(ctx, domain.AuditEvent{EventType: "workspace.timeout_container_deleted", TargetType: "workspace", TargetID: value.ID})
 			}
-			operationStarted := now
-			_ = s.beginOperation(ctx, value.ID, "timeout-stop", operationStarted)
-			if err := s.runtime.StopWorkspace(ctx, value.RuntimeID, 10*time.Second); err != nil {
-				_ = s.finishOperation(ctx, value.ID, "timeout-stop", "failed", err.Error(), operationStarted)
-				release()
-				continue
-			}
-			_ = s.store.SetWorkspaceDesiredState(ctx, value.ID, domain.DesiredWorkspaceStopped, now)
-			value.StoppedAt = now
-			_ = s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateStopped), value.RuntimeID, "", "", now, now)
-			_ = s.store.UpdateWorkspaceLifecycle(ctx, value.ID, value.StartedAt, value.LastConnectedAt, value.StoppedAt, value.ContainerDeletedAt, value.DataArchiveEligibleAt, now)
-			_ = s.finishOperation(ctx, value.ID, "timeout-stop", "succeeded", "", operationStarted)
-			s.recordAudit(ctx, domain.AuditEvent{EventType: "workspace.timeout_stopped", TargetType: "workspace", TargetID: value.ID})
-		case TimeoutActionDelete:
-			if value.RuntimeID == "" || (value.ObservedState != string(runtime.StateStopped) && value.ObservedState != string(runtime.StateExited)) {
-				release()
-				continue
-			}
-			operationStarted := now
-			_ = s.beginOperation(ctx, value.ID, "timeout-delete", operationStarted)
-			if err := s.runtime.RemoveWorkspace(ctx, value.RuntimeID); err != nil {
-				_ = s.finishOperation(ctx, value.ID, "timeout-delete", "failed", err.Error(), operationStarted)
-				release()
-				continue
-			}
-			if err := s.store.CancelEmailNotificationsForWorkspace(ctx, value.ID); err != nil {
-				_ = s.finishOperation(ctx, value.ID, "timeout-delete", "failed", err.Error(), operationStarted)
-				release()
-				continue
-			}
-			if err := s.store.ReleaseWorkspacePorts(ctx, value.ID); err != nil {
-				_ = s.finishOperation(ctx, value.ID, "timeout-delete", "failed", err.Error(), operationStarted)
-				release()
-				continue
-			}
-			value.ContainerDeletedAt = now
-			value.DataArchiveEligibleAt = time.Time{}
-			_ = s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateRemoved), value.RuntimeID, "", "", now, now)
-			_ = s.store.UpdateWorkspaceLifecycle(ctx, value.ID, value.StartedAt, value.LastConnectedAt, value.StoppedAt, value.ContainerDeletedAt, value.DataArchiveEligibleAt, now)
-			_ = s.finishOperation(ctx, value.ID, "timeout-delete", "succeeded", "", operationStarted)
-			s.recordAudit(ctx, domain.AuditEvent{EventType: "workspace.timeout_container_deleted", TargetType: "workspace", TargetID: value.ID})
-		}
+		}()
 		release()
+	}
+	if failed > 0 {
+		return &WorkspaceCleanupError{Operation: "timeout processing", Failed: failed}
 	}
 	return nil
 }
 
 func (s *Service) beginOperation(ctx context.Context, workspaceID, operation string, startedAt time.Time) error {
 	return s.store.UpdateWorkspaceOperation(ctx, workspaceID, operation, "running", "", startedAt, startedAt)
+}
+
+func (s *Service) acquireAdmission() func() {
+	s.admissionMu.Lock()
+	return s.admissionMu.Unlock
 }
 
 func (s *Service) finishOperation(ctx context.Context, workspaceID, operation, status, operationError string, startedAt time.Time) error {

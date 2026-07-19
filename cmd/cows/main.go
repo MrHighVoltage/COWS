@@ -92,7 +92,7 @@ func run(ctx context.Context, args []string) error {
 	}
 	storageProvider := workspace.NewStorageUsageProvider(podmanRuntime, cfg.MountRoot)
 	scheduler := quota.NewScheduler(store, podmanRuntime, storageProvider)
-	templateService := workspace.NewWithRuntimeAndMountRoots(store, podmanRuntime, cfg.MountRoot, cfg.MountArchiveRoot, scheduler)
+	templateService := workspace.NewWithRuntimeAndMountRootsAndStorage(store, podmanRuntime, cfg.MountRoot, cfg.MountArchiveRoot, storageProvider, scheduler)
 	webServer, err := web.New(db, authService, templateService, quotaService, podmanRuntime, web.Options{CookieSecure: cfg.CookieSecure, SessionLifetime: cfg.SessionLifetime, RegistrationEnabled: cfg.RegistrationEnabled})
 	if err != nil {
 		return fmt.Errorf("initialize web server: %w", err)
