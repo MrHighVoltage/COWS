@@ -86,12 +86,12 @@
           const elapsed = Math.max((performance.now() - startedAt) / 1000, 0.001);
           const currentRate = event.loaded / elapsed;
           const remaining = (event.total - event.loaded) / currentRate;
-          const value = Math.round(event.loaded / event.total * 100);
+          const value = Math.min(99, Math.round(event.loaded / event.total * 100));
           progress.value = value;
-          percent.textContent = value + "%";
+          percent.textContent = event.loaded >= event.total ? "Processing" : value + "%";
           bytes.textContent = formatBytes(event.loaded) + " / " + formatBytes(event.total);
-          rate.textContent = formatBytes(currentRate) + "/s";
-          eta.textContent = value < 100 ? formatDuration(remaining) : "";
+          rate.textContent = event.loaded >= event.total ? "Saving in workspace" : formatBytes(currentRate) + "/s";
+          eta.textContent = event.loaded < event.total ? formatDuration(remaining) : "";
         });
         request.addEventListener("load", function () {
           if (request.status >= 200 && request.status < 400) {
