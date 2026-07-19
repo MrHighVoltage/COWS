@@ -377,7 +377,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/templates/{id}/enabled", s.adminTemplateEnabled)
 	mux.HandleFunc("GET /admin/runtime", s.adminRuntime)
 	mux.HandleFunc("GET /", s.home)
-	return mux
+	return securityHeaders(mux)
+}
+
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) home(w http.ResponseWriter, r *http.Request) {
@@ -1075,6 +1085,7 @@ func (s *Server) workspaceFileDownload(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 	w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(path.Base(r.URL.Query().Get("path"))))
 	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Cache-Control", "no-store")
 	if info.Size() >= 0 {
 		w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
 	}
@@ -1097,6 +1108,7 @@ func (s *Server) workspaceFileDownloadZip(w http.ResponseWriter, r *http.Request
 	defer archive.Close()
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(filename))
+	w.Header().Set("Cache-Control", "no-store")
 	if _, err := io.Copy(w, archive); err != nil {
 		return
 	}
@@ -2600,6 +2612,10 @@ func fileErrorText(err error) string {
 		return "The directory is too large to download as a ZIP archive."
 	case errors.Is(err, files.ErrArchiveTooMany):
 		return "The directory contains too many entries to download as a ZIP archive."
+	case errors.Is(err, files.ErrTooManyEntries):
+		return "This directory contains too many entries to manage through COWS."
+	case errors.Is(err, files.ErrDownloadTooLarge):
+		return "The requested download exceeds the 4 GiB limit."
 	default:
 		return "The file operation could not be completed."
 	}
@@ -2613,6 +2629,8 @@ func fileErrorStatus(err error) int {
 		return http.StatusNotFound
 	case errors.Is(err, files.ErrNameConflict):
 		return http.StatusConflict
+	case errors.Is(err, files.ErrTooManyEntries), errors.Is(err, files.ErrDownloadTooLarge):
+		return http.StatusRequestEntityTooLarge
 	default:
 		return http.StatusBadRequest
 	}

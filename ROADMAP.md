@@ -154,9 +154,10 @@ leaves data in place. Explicit deletion retains named volumes with durable
 control-plane tombstones for later administrator recovery or cleanup. Remaining
 file access is available for running, stopped, and exited workspaces and is
 serialized with lifecycle operations. Explicit archive activity is recorded in
-a permission-restricted JSONL recovery log. Remaining exit work is stronger temporary storage and
-file-count policy, symlink-race
-hardening, audit events for every file mutation, and broader browser
+a permission-restricted JSONL recovery log. Directory listings and individual
+downloads now have explicit bounds, and file mutations and downloads create
+structured audit events. Remaining exit work is stronger total temporary-storage
+policy, additional symlink-race integration tests, and broader browser
 accessibility review.
 
 ## Later

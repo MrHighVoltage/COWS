@@ -3,6 +3,7 @@ package files
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"io/fs"
 	"strings"
@@ -12,6 +13,14 @@ import (
 	"github.com/cows-project/cows/internal/runtime"
 	"github.com/cows-project/cows/internal/workspace"
 )
+
+func TestServiceRejectsOversizedRuntimeListing(t *testing.T) {
+	entries := make([]runtime.FileEntry, MaxDirectoryEntries+1)
+	service := New(fakeMountResolver{mounts: []workspace.FileMount{{Name: "data", RuntimeID: "runtime-1", MountType: "volume", Source: "volume-1"}}}, fakeFileAccessRuntime{access: &fakeFileAccess{entries: entries}})
+	if _, err := service.List(context.Background(), "user-1", "workspace-1", "data", "."); !errors.Is(err, ErrTooManyEntries) {
+		t.Fatalf("oversized listing error = %v, want %v", err, ErrTooManyEntries)
+	}
+}
 
 func TestServiceUsesRuntimeFileAccessForMountedRoots(t *testing.T) {
 	fake := &fakeFileAccess{

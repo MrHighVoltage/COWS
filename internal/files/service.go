@@ -30,12 +30,16 @@ var (
 	ErrNotDirectory      = errors.New("files: not a directory")
 	ErrArchiveTooLarge   = errors.New("files: archive is too large")
 	ErrArchiveTooMany    = errors.New("files: archive contains too many entries")
+	ErrTooManyEntries    = errors.New("files: directory contains too many entries")
+	ErrDownloadTooLarge  = errors.New("files: download is too large")
 )
 
 const (
-	MaxUploadBytes    int64 = 128 << 20
-	MaxArchiveBytes   int64 = 4 << 30
-	MaxArchiveEntries       = 100000
+	MaxUploadBytes      int64 = 128 << 20
+	MaxDownloadBytes    int64 = 4 << 30
+	MaxArchiveBytes     int64 = 4 << 30
+	MaxDirectoryEntries       = 10000
+	MaxArchiveEntries         = 100000
 )
 
 type MountResolver interface {
@@ -46,10 +50,15 @@ type AccessCoordinator interface {
 	BeginFileAccess(ctx context.Context, actorID, workspaceID string) (func(), error)
 }
 
+type AuditRecorder interface {
+	RecordFileAudit(ctx context.Context, actorID, workspaceID, eventType string, metadata map[string]string)
+}
+
 type Service struct {
 	workspaces  MountResolver
 	runtime     runtime.FileAccessRuntime
 	coordinator AccessCoordinator
+	audit       AuditRecorder
 }
 
 type Entry struct {
@@ -72,7 +81,8 @@ func New(workspaces MountResolver, runtimes ...runtime.FileAccessRuntime) *Servi
 		runtimeAccess = runtimes[0]
 	}
 	coordinator, _ := workspaces.(AccessCoordinator)
-	return &Service{workspaces: workspaces, runtime: runtimeAccess, coordinator: coordinator}
+	audit, _ := workspaces.(AuditRecorder)
+	return &Service{workspaces: workspaces, runtime: runtimeAccess, coordinator: coordinator, audit: audit}
 }
 
 func (s *Service) Mounts(ctx context.Context, actorID, workspaceID string) ([]workspace.FileMount, error) {
@@ -103,6 +113,9 @@ func (s *Service) List(ctx context.Context, actorID, workspaceID, mountName, rel
 		if err != nil {
 			return Listing{}, mapRuntimeError(err)
 		}
+		if len(items) > MaxDirectoryEntries {
+			return Listing{}, ErrTooManyEntries
+		}
 		listing := Listing{Mount: mount, Path: relativePath, Items: make([]Entry, 0, len(items))}
 		for _, item := range items {
 			itemPath := item.Name
@@ -114,12 +127,15 @@ func (s *Service) List(ctx context.Context, actorID, workspaceID, mountName, rel
 		return listing, nil
 	}
 	root := backend.root
-	items, err := fs.ReadDir(root.FS(), relativePath)
+	items, err := readDirectory(root, relativePath)
 	if err != nil {
 		return Listing{}, mapPathError(err)
 	}
 	listing := Listing{Mount: mount, Path: relativePath, Items: make([]Entry, 0, len(items))}
 	for _, item := range items {
+		if item.Type()&os.ModeSymlink != 0 {
+			return Listing{}, ErrInvalidPath
+		}
 		info, err := item.Info()
 		if err != nil {
 			return Listing{}, mapPathError(err)
@@ -155,9 +171,27 @@ func (s *Service) OpenDownload(ctx context.Context, actorID, workspaceID, mountN
 			release()
 			return nil, nil, mapRuntimeError(err)
 		}
-		return &accessFile{reader: file, access: access, release: release}, info, nil
+		if info.Size() > MaxDownloadBytes {
+			file.Close()
+			access.Close()
+			release()
+			return nil, nil, ErrDownloadTooLarge
+		}
+		s.recordAudit(ctx, actorID, workspaceID, "file.downloaded", mount, relativePath)
+		return &accessFile{reader: &boundedReadCloser{ReadCloser: file, remaining: MaxDownloadBytes}, access: access, release: release}, info, nil
 	}
 	root := backend.root
+	pathInfo, err := root.Lstat(relativePath)
+	if err != nil {
+		root.Close()
+		release()
+		return nil, nil, mapPathError(err)
+	}
+	if pathInfo.Mode()&os.ModeSymlink != 0 {
+		root.Close()
+		release()
+		return nil, nil, ErrInvalidPath
+	}
 	file, err := root.Open(relativePath)
 	if err != nil {
 		root.Close()
@@ -177,12 +211,19 @@ func (s *Service) OpenDownload(ctx context.Context, actorID, workspaceID, mountN
 		release()
 		return nil, nil, ErrNotRegular
 	}
+	if info.Size() > MaxDownloadBytes {
+		file.Close()
+		backend.Close()
+		release()
+		return nil, nil, ErrDownloadTooLarge
+	}
 	if err := backend.Close(); err != nil {
 		file.Close()
 		release()
 		return nil, nil, err
 	}
-	return &releaseFile{ReadCloser: file, release: release}, info, nil
+	s.recordAudit(ctx, actorID, workspaceID, "file.downloaded", mount, relativePath)
+	return &releaseFile{ReadCloser: &boundedReadCloser{ReadCloser: file, remaining: MaxDownloadBytes}, release: release}, info, nil
 }
 
 // OpenZip starts a bounded, streamed ZIP response for an approved directory.
@@ -214,6 +255,7 @@ func (s *Service) OpenZip(ctx context.Context, actorID, workspaceID, mountName, 
 			release()
 			return nil, "", mapRuntimeError(err)
 		}
+		s.recordAudit(ctx, actorID, workspaceID, "file.archive_downloaded", mount, relativePath)
 		return &accessFile{reader: archive, access: access, release: release}, name + ".zip", nil
 	}
 	root := backend.root
@@ -251,6 +293,7 @@ func (s *Service) OpenZip(ctx context.Context, actorID, workspaceID, mountName, 
 		}
 		_ = writer.Close()
 	}()
+	s.recordAudit(ctx, actorID, workspaceID, "file.archive_downloaded", mount, relativePath)
 	return reader, name + ".zip", nil
 }
 
@@ -377,13 +420,20 @@ func (s *Service) CreateDirectory(ctx context.Context, actorID, workspaceID, mou
 	if backend.access != nil {
 		access := backend.access
 		defer backend.Close()
+		if err := ensureDirectoryCapacity(ctx, access, nil, relativePath); err != nil {
+			return mapRuntimeError(err)
+		}
 		if err := access.CreateDirectory(ctx, relativePath, name); err != nil {
 			return mapRuntimeError(err)
 		}
+		s.recordAudit(ctx, actorID, workspaceID, "file.directory_created", mount, path.Join(relativePath, name))
 		return nil
 	}
 	root := backend.root
 	defer backend.Close()
+	if err := ensureDirectoryCapacity(ctx, nil, root, relativePath); err != nil {
+		return err
+	}
 	target := path.Join(relativePath, name)
 	if _, err := root.Lstat(target); err == nil {
 		return ErrNameConflict
@@ -393,6 +443,7 @@ func (s *Service) CreateDirectory(ctx context.Context, actorID, workspaceID, mou
 	if err := root.Mkdir(target, 0o700); err != nil {
 		return mapPathError(err)
 	}
+	s.recordAudit(ctx, actorID, workspaceID, "file.directory_created", mount, target)
 	return nil
 }
 
@@ -422,6 +473,7 @@ func (s *Service) Delete(ctx context.Context, actorID, workspaceID, mountName, r
 		if err := access.Delete(ctx, relativePath); err != nil {
 			return mapRuntimeError(err)
 		}
+		s.recordAudit(ctx, actorID, workspaceID, "file.deleted", mount, relativePath)
 		return nil
 	}
 	root := backend.root
@@ -432,6 +484,7 @@ func (s *Service) Delete(ctx context.Context, actorID, workspaceID, mountName, r
 	if err := root.RemoveAll(relativePath); err != nil {
 		return mapPathError(err)
 	}
+	s.recordAudit(ctx, actorID, workspaceID, "file.deleted", mount, relativePath)
 	return nil
 }
 
@@ -466,14 +519,19 @@ func (s *Service) Rename(ctx context.Context, actorID, workspaceID, mountName, r
 		if err := access.Rename(ctx, relativePath, oldName, newName); err != nil {
 			return mapRuntimeError(err)
 		}
+		s.recordAudit(ctx, actorID, workspaceID, "file.renamed", mount, path.Join(relativePath, oldName)+" -> "+path.Join(relativePath, newName))
 		return nil
 	}
 	root := backend.root
 	defer backend.Close()
 	oldPath := path.Join(relativePath, oldName)
 	newPath := path.Join(relativePath, newName)
-	if _, err := root.Lstat(oldPath); err != nil {
+	oldInfo, err := root.Lstat(oldPath)
+	if err != nil {
 		return mapPathError(err)
+	}
+	if oldInfo.Mode()&os.ModeSymlink != 0 {
+		return ErrInvalidPath
 	}
 	if _, err := root.Lstat(newPath); err == nil {
 		return ErrNameConflict
@@ -483,6 +541,7 @@ func (s *Service) Rename(ctx context.Context, actorID, workspaceID, mountName, r
 	if err := root.Rename(oldPath, newPath); err != nil {
 		return mapPathError(err)
 	}
+	s.recordAudit(ctx, actorID, workspaceID, "file.renamed", mount, oldPath+" -> "+newPath)
 	return nil
 }
 
@@ -510,13 +569,20 @@ func (s *Service) Upload(ctx context.Context, actorID, workspaceID, mountName, r
 	if backend.access != nil {
 		access := backend.access
 		defer backend.Close()
+		if err := ensureDirectoryCapacity(ctx, access, nil, relativePath); err != nil {
+			return mapRuntimeError(err)
+		}
 		if err := access.Upload(ctx, relativePath, filename, source); err != nil {
 			return mapRuntimeError(err)
 		}
+		s.recordAudit(ctx, actorID, workspaceID, "file.uploaded", mount, path.Join(relativePath, filename))
 		return nil
 	}
 	root := backend.root
 	defer backend.Close()
+	if err := ensureDirectoryCapacity(ctx, nil, root, relativePath); err != nil {
+		return err
+	}
 	target := path.Join(relativePath, filename)
 	if existing, statErr := root.Lstat(target); statErr == nil && existing.Mode()&os.ModeSymlink != 0 {
 		return ErrInvalidPath
@@ -545,6 +611,7 @@ func (s *Service) Upload(ctx context.Context, actorID, workspaceID, mountName, r
 		_ = root.Remove(temporaryPath)
 		return mapPathError(err)
 	}
+	s.recordAudit(ctx, actorID, workspaceID, "file.uploaded", mount, target)
 	return nil
 }
 
@@ -585,6 +652,43 @@ func (s *Service) openLocalMount(mount workspace.FileMount) (*os.Root, error) {
 		return nil, ErrFileManagerAccess
 	}
 	return root, nil
+}
+
+func readDirectory(root *os.Root, relativePath string) ([]fs.DirEntry, error) {
+	directory, err := root.Open(relativePath)
+	if err != nil {
+		return nil, mapPathError(err)
+	}
+	defer directory.Close()
+	items, err := directory.ReadDir(MaxDirectoryEntries + 1)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, mapPathError(err)
+	}
+	if len(items) > MaxDirectoryEntries {
+		return nil, ErrTooManyEntries
+	}
+	return items, nil
+}
+
+func ensureDirectoryCapacity(ctx context.Context, access runtime.FileAccess, root *os.Root, relativePath string) error {
+	if access != nil {
+		items, err := access.List(ctx, relativePath)
+		if err != nil {
+			return err
+		}
+		if len(items) >= MaxDirectoryEntries {
+			return ErrTooManyEntries
+		}
+		return nil
+	}
+	items, err := readDirectory(root, relativePath)
+	if err != nil {
+		return err
+	}
+	if len(items) >= MaxDirectoryEntries {
+		return ErrTooManyEntries
+	}
+	return nil
 }
 
 func (s *Service) openRuntimeAccess(ctx context.Context, mount workspace.FileMount) (runtime.FileAccess, error) {
@@ -644,6 +748,13 @@ func (s *Service) beginAccess(ctx context.Context, actorID, workspaceID string) 
 	return s.coordinator.BeginFileAccess(ctx, actorID, workspaceID)
 }
 
+func (s *Service) recordAudit(ctx context.Context, actorID, workspaceID, eventType string, mount workspace.FileMount, value string) {
+	if s.audit == nil {
+		return
+	}
+	s.audit.RecordFileAudit(ctx, actorID, workspaceID, eventType, map[string]string{"mount": mount.Name, "path": value})
+}
+
 type accessFile struct {
 	reader  io.ReadCloser
 	access  runtime.FileAccess
@@ -665,6 +776,28 @@ type releaseFile struct {
 	io.ReadCloser
 	release func()
 	once    sync.Once
+}
+
+type boundedReadCloser struct {
+	io.ReadCloser
+	remaining int64
+}
+
+func (r *boundedReadCloser) Read(value []byte) (int, error) {
+	if r.remaining == 0 {
+		var extra [1]byte
+		count, err := r.ReadCloser.Read(extra[:])
+		if count > 0 {
+			return 0, ErrDownloadTooLarge
+		}
+		return 0, err
+	}
+	if int64(len(value)) > r.remaining {
+		value = value[:r.remaining]
+	}
+	count, err := r.ReadCloser.Read(value)
+	r.remaining -= int64(count)
+	return count, err
 }
 
 func (f *releaseFile) Close() error {
@@ -722,6 +855,8 @@ func mapRuntimeError(err error) error {
 	switch {
 	case errors.Is(err, runtime.ErrNotFound):
 		return ErrNotFound
+	case errors.Is(err, runtime.ErrTooManyEntries):
+		return ErrTooManyEntries
 	case errors.Is(err, runtime.ErrConflict):
 		return ErrNameConflict
 	case errors.Is(err, runtime.ErrNotSupported), errors.Is(err, runtime.ErrUnavailable):

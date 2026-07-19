@@ -116,6 +116,11 @@ func TestHomeRendersLocalServerDrivenPage(t *testing.T) {
 			t.Errorf("page does not contain %q", expected)
 		}
 	}
+	for header, want := range map[string]string{"X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer"} {
+		if got := recorder.Header().Get(header); got != want {
+			t.Errorf("%s = %q, want %q", header, got, want)
+		}
+	}
 }
 
 func TestEnabledRegistrationRendersAndCreatesUser(t *testing.T) {

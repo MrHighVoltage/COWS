@@ -40,7 +40,9 @@ design decisions.
 The first deployment target is one Linux server with one active COWS process,
 one SQLite database, and one local rootless Podman runtime. A reverse proxy may
 terminate HTTPS. COWS must not expose workspace VNC, SSH, terminal, or
-application ports directly to users.
+application ports directly to users. See [docs/deployment.md](docs/deployment.md)
+and the example Caddy configuration for the prepared, non-development proxy
+deployment.
 
 ## Development
 
