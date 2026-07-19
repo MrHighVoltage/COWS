@@ -69,6 +69,7 @@
 
         request = new XMLHttpRequest();
         startedAt = performance.now();
+        const payload = new FormData(form);
         status.hidden = false;
         submit.disabled = true;
         cancel.hidden = false;
@@ -112,7 +113,7 @@
           reset();
         });
         request.open("POST", form.action, true);
-        request.send(new FormData(form));
+        request.send(payload);
       });
 
       function reset() {
