@@ -32,9 +32,12 @@ export function initDesktop(root) {
 
   function fitDesktop() {
     if (!rfb) return;
-    rfb.scaleViewport = true;
-    rfb.resizeSession = true;
-    window.dispatchEvent(new Event("resize"));
+    window.requestAnimationFrame(function () {
+      if (!rfb) return;
+      rfb.scaleViewport = true;
+      rfb.resizeSession = true;
+      window.dispatchEvent(new Event("resize"));
+    });
   }
 
   function updateFullscreenLabel() {
