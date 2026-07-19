@@ -40,7 +40,9 @@
       <p class="muted">Administrator-only typed JSON. Users can select this template but cannot edit or see the resolved values. Mounts use <code>volume</code> by default or COWS-created <code>directory</code> mounts. Directory mounts may set <code>file_manager:true</code>; names are generated from the workspace container name plus optional prefix and suffix. Use named secrets with <code>{{"{{"}}cows.secret.name{{"}}"}}</code>; generated secrets are resolved per workspace.</p>
       <label for="configuration-json">Environment, mounts, services, and command</label>
       <textarea id="configuration-json" name="configuration_json" rows="16" maxlength="20000" spellcheck="false">{{ .Template.ConfigurationJSON }}</textarea>
+      {{ if .Template.TerminalRootAllowed }}<p class="alert alert-warning">This template allows terminal access as UID 0 (root) inside the container. That grants full control over the workspace and all writable mounts.</p>{{ end }}
       <p class="muted">Example: <code>{"command":["/bin/bash","-l"],"container_user":{"uid":1000,"gid":1000,"name":"{{"{{"}}cows.user.display_name{{"}}"}}","home":"/home/{{"{{"}}cows.user.username{{"}}"}}","shell":"/bin/bash"},"mounts":[{"name":"designs","type":"directory","container_path":"/foss/designs","read_only":false,"file_manager":true,"name_prefix":"workspace-","name_suffix":"-data"}]}</code></p>
+      <p class="muted">Optional <code>terminal_uids</code> is a list of numeric container UIDs users may select for terminal sessions. For example, <code>"terminal_uids":[1000,0]</code>. UID 0 enables root terminal access.</p>
     </fieldset>
 
     <fieldset>

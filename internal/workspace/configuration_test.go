@@ -43,6 +43,17 @@ func TestTemplateConfigurationRequiresContainerIDs(t *testing.T) {
 	}
 }
 
+func TestTemplateConfigurationValidatesTerminalUIDs(t *testing.T) {
+	if err := validateTemplateConfiguration(domain.TemplateConfiguration{TerminalUIDs: []int64{1000, 0}}); err != nil {
+		t.Fatalf("valid terminal UIDs rejected: %v", err)
+	}
+	for _, value := range [][]int64{{-1}, {2147483648}, {1000, 1000}} {
+		if err := validateTemplateConfiguration(domain.TemplateConfiguration{TerminalUIDs: value}); err != ErrInvalidTemplate {
+			t.Fatalf("terminal UIDs %v error = %v, want %v", value, err, ErrInvalidTemplate)
+		}
+	}
+}
+
 func TestTemplateConfigurationAcceptsSeparatorMountSuffix(t *testing.T) {
 	err := validateTemplateConfiguration(domain.TemplateConfiguration{Mounts: []domain.TemplateMount{{
 		Name: "designs", Type: domain.TemplateMountDirectory, ContainerPath: "/foss/designs",

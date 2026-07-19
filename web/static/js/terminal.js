@@ -20,6 +20,7 @@
     });
     terminal.open(target);
     const fitAddon = typeof FitAddon !== "undefined" ? new FitAddon.FitAddon() : null;
+    const terminalUID = root.querySelector("[data-terminal-uid]");
     if (fitAddon) terminal.loadAddon(fitAddon);
 
     let socket = null;
@@ -49,6 +50,12 @@
         fitAddon.fit();
         sendResize();
       });
+    }
+
+    function terminalURL() {
+      const endpoint = new URL(root.dataset.terminalUrl, window.location.origin);
+      if (terminalUID) endpoint.searchParams.set("uid", terminalUID.value);
+      return endpoint.pathname + endpoint.search;
     }
 
     function updateFullscreenLabel() {
@@ -85,7 +92,7 @@
       userDisconnect = false;
       error.hidden = true;
       setStatus("Connecting");
-      const connection = new WebSocket(scheme + "//" + window.location.host + root.dataset.terminalUrl);
+      const connection = new WebSocket(scheme + "//" + window.location.host + terminalURL());
       connection.binaryType = "arraybuffer";
       socket = connection;
       connection.addEventListener("open", function () {
@@ -126,6 +133,9 @@
     });
     if (fitButton) fitButton.addEventListener("click", fitTerminal);
     if (fullscreenButton) fullscreenButton.addEventListener("click", toggleFullscreen);
+    if (terminalUID) terminalUID.addEventListener("change", function () {
+      if (socket) disconnect();
+    });
     document.addEventListener("fullscreenchange", function () {
       updateFullscreenLabel();
       fitTerminal();

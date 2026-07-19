@@ -83,8 +83,13 @@ the session, workspace ownership or administrator permission, observed running
 state, and the template's terminal access method, it resolves the configured
 container-user shell from the workspace template snapshot and asks the runtime
 adapter for that fixed shell with the `-l` argument. Templates without a
-container-user override use `/bin/sh`. The browser receives only terminal input
-and output over a COWS WebSocket; it never supplies a runtime ID or command.
+container-user override use `/bin/sh`. A template may additionally provide a
+typed `terminal_uids` allowlist. The terminal selector exposes only those UIDs,
+and the backend checks the selected value again before asking Podman to execute
+the shell as that container UID. UID 0 is an explicit administrator decision
+and is warned about in the template editor. The browser receives only terminal
+input and output over a COWS WebSocket; it never supplies a runtime ID or
+command.
 Terminal sessions have a 15-minute idle timeout, a one-hour maximum lifetime,
 resize forwarding, and start/end audit events. The Podman adapter
 uses the runtime exec API's upgraded stream and keeps the runtime-specific

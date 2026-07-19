@@ -165,6 +165,12 @@ type ShellRuntime interface {
 	OpenShell(ctx context.Context, runtimeID string, command []string) (Terminal, error)
 }
 
+// UserShellRuntime is an optional extension for templates that allow a
+// terminal to run as a selected container UID.
+type UserShellRuntime interface {
+	OpenShellAs(ctx context.Context, runtimeID string, uid int64, command []string) (Terminal, error)
+}
+
 // InternalServiceRuntime opens a server-selected TCP service through the
 // runtime's private loopback forwarding. It is intentionally not a generic
 // browser proxy capability.

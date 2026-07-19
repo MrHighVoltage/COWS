@@ -230,6 +230,38 @@ func TestOpenShellUsesPodmanExecUpgradeAndResize(t *testing.T) {
 	}
 }
 
+func TestOpenShellAsPassesContainerUID(t *testing.T) {
+	var user string
+	stream := &testStream{Reader: strings.NewReader("shell> ")}
+	adapter := &Adapter{client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/version":
+			return podmanResponse(http.StatusOK, `{"ApiVersion":"1.45"}`), nil
+		case "/v1.45/containers/abcdef0123456789/exec":
+			var body struct {
+				User string `json:"User"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				return nil, err
+			}
+			user = body.User
+			return podmanResponse(http.StatusCreated, `{"Id":"abc123"}`), nil
+		case "/v1.45/exec/abc123/start":
+			return &http.Response{StatusCode: http.StatusSwitchingProtocols, Status: "101 Switching Protocols", Body: stream, Header: http.Header{"Connection": {"Upgrade"}, "Upgrade": {"tcp"}}}, nil
+		default:
+			return podmanResponse(http.StatusNotFound, `not found`), nil
+		}
+	})}}
+	terminal, err := adapter.OpenShellAs(context.Background(), "abcdef0123456789", 0, []string{"/bin/bash", "-l"})
+	if err != nil {
+		t.Fatalf("open shell as UID: %v", err)
+	}
+	defer terminal.Close()
+	if user != "0" {
+		t.Fatalf("Podman exec user = %q, want %q", user, "0")
+	}
+}
+
 func TestWorkspaceResourceUsageReadsNonStreamingStats(t *testing.T) {
 	adapter := &Adapter{client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.URL.Path == "/version" {

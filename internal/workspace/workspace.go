@@ -24,6 +24,7 @@ var (
 	ErrRuntimeUnavailable          = errors.New("workspace runtime unavailable")
 	ErrWorkspaceStateConflict      = errors.New("workspace state conflict")
 	ErrTerminalNotAvailable        = errors.New("workspace terminal is not available")
+	ErrTerminalIdentityNotAllowed  = errors.New("workspace terminal identity is not allowed")
 	ErrDesktopNotAvailable         = errors.New("workspace desktop is not available")
 	ErrFileManagerNotAvailable     = errors.New("workspace file manager is not available")
 	ErrWorkspaceCleanupIncomplete  = errors.New("workspace cleanup incomplete")
@@ -702,7 +703,7 @@ func (s *Service) RecordWorkspaceConnection(ctx context.Context, actorID, worksp
 // OpenTerminal authorizes the workspace and template before asking the runtime
 // adapter to attach an approved shell. The browser never supplies a runtime ID
 // or command.
-func (s *Service) OpenTerminal(ctx context.Context, actorID, workspaceID string) (runtime.Terminal, error) {
+func (s *Service) OpenTerminal(ctx context.Context, actorID, workspaceID string, requestedUID *int64) (runtime.Terminal, error) {
 	if s.runtime == nil {
 		return nil, ErrRuntimeUnavailable
 	}
@@ -744,7 +745,26 @@ func (s *Service) OpenTerminal(ctx context.Context, actorID, workspaceID string)
 	if resolved.User != nil && resolved.User.Shell != "" {
 		shell = resolved.User.Shell
 	}
-	terminal, err := shellRuntime.OpenShell(ctx, value.RuntimeID, []string{shell, "-l"})
+	var terminal runtime.Terminal
+	if len(configuration.TerminalUIDs) == 0 {
+		if requestedUID != nil {
+			return nil, ErrTerminalIdentityNotAllowed
+		}
+		terminal, err = shellRuntime.OpenShell(ctx, value.RuntimeID, []string{shell, "-l"})
+	} else {
+		uid := configuration.TerminalUIDs[0]
+		if requestedUID != nil {
+			uid = *requestedUID
+		}
+		if !containsInt64(configuration.TerminalUIDs, uid) {
+			return nil, ErrTerminalIdentityNotAllowed
+		}
+		userShellRuntime, ok := s.runtime.(runtime.UserShellRuntime)
+		if !ok {
+			return nil, ErrTerminalNotAvailable
+		}
+		terminal, err = userShellRuntime.OpenShellAs(ctx, value.RuntimeID, uid, []string{shell, "-l"})
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -752,8 +772,25 @@ func (s *Service) OpenTerminal(ctx context.Context, actorID, workspaceID string)
 		_ = terminal.Close()
 		return nil, err
 	}
-	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "terminal.session_started", TargetType: "workspace", TargetID: workspaceID})
+	metadata := map[string]string{}
+	if len(configuration.TerminalUIDs) > 0 {
+		uid := configuration.TerminalUIDs[0]
+		if requestedUID != nil {
+			uid = *requestedUID
+		}
+		metadata["uid"] = fmt.Sprintf("%d", uid)
+	}
+	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "terminal.session_started", TargetType: "workspace", TargetID: workspaceID, Metadata: metadata})
 	return terminal, nil
+}
+
+func containsInt64(values []int64, want int64) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) RecordTerminalDisconnect(ctx context.Context, actorID, workspaceID string) {

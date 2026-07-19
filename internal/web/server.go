@@ -133,6 +133,7 @@ type templateFormData struct {
 	InitialConnectionHours string
 	StoppedRetentionHours  string
 	ConfigurationJSON      string
+	TerminalRootAllowed    bool
 	TerminalAccess         bool
 	DesktopAccess          bool
 	WebAccess              bool
@@ -825,12 +826,17 @@ func (s *Server) workspaceTerminalWebSocket(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	terminal, err := s.workspace.OpenTerminal(r.Context(), user.ID, r.PathValue("id"))
+	requestedUID, err := parseTerminalUID(r.URL.Query().Get("uid"))
+	if err != nil {
+		http.Error(w, "The requested terminal identity is invalid.", http.StatusBadRequest)
+		return
+	}
+	terminal, err := s.workspace.OpenTerminal(r.Context(), user.ID, r.PathValue("id"), requestedUID)
 	if err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, repository.ErrNotFound) {
 			status = http.StatusNotFound
-		} else if errors.Is(err, workspace.ErrWorkspaceNotAuthorized) || errors.Is(err, workspace.ErrTerminalNotAvailable) {
+		} else if errors.Is(err, workspace.ErrWorkspaceNotAuthorized) || errors.Is(err, workspace.ErrTerminalNotAvailable) || errors.Is(err, workspace.ErrTerminalIdentityNotAllowed) {
 			status = http.StatusForbidden
 		}
 		http.Error(w, terminalErrorText(err), status)
@@ -907,6 +913,17 @@ func (s *Server) workspaceTerminalWebSocket(w http.ResponseWriter, r *http.Reque
 			}
 		}
 	}
+}
+
+func parseTerminalUID(value string) (*int64, error) {
+	if value == "" {
+		return nil, nil
+	}
+	uid, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || uid < 0 || uid > 2147483647 {
+		return nil, errors.New("invalid terminal UID")
+	}
+	return &uid, nil
 }
 
 func readTerminalInput(ctx context.Context, conn *websocket.Conn, output chan<- terminalInputMessage) {
@@ -2081,6 +2098,7 @@ func (s *Server) parseTemplateForm(r *http.Request) (templateFormData, workspace
 			return form, workspace.TemplateInput{}, workspace.ErrInvalidTemplate
 		}
 	}
+	form.TerminalRootAllowed = hasTerminalUID(configuration, 0)
 	methods := make([]domain.AccessMethod, 0, 4)
 	if form.TerminalAccess {
 		methods = append(methods, domain.AccessTerminal)
@@ -2350,12 +2368,21 @@ func defaultTemplateForm() templateFormData {
 	return templateFormData{DefaultCPUMillis: "1000", MaxCPUMillis: "4000", DefaultMemoryMiB: "2048", MaxMemoryMiB: "8192", DefaultStorageGiB: "20", InitialConnectionHours: "24", StoppedRetentionHours: "24", ConfigurationJSON: "{}", TerminalAccess: true, UserRole: true, GroupAccessMode: domain.GroupAccessExclude, Enabled: true}
 }
 
+func hasTerminalUID(configuration domain.TemplateConfiguration, want int64) bool {
+	for _, uid := range configuration.TerminalUIDs {
+		if uid == want {
+			return true
+		}
+	}
+	return false
+}
+
 func templateFormFromDomain(template domain.WorkspaceTemplate) templateFormData {
 	configurationJSON, _ := json.MarshalIndent(template.Configuration, "", "  ")
 	if len(configurationJSON) == 0 {
 		configurationJSON = []byte("{}")
 	}
-	form := templateFormData{ID: template.ID, Editing: true, Name: template.Name, Description: template.Description, ImageReference: template.ImageReference, ImageDigest: template.ImageDigest, DefaultCPUMillis: strconv.FormatInt(template.DefaultCPUMillis, 10), MaxCPUMillis: strconv.FormatInt(template.MaxCPUMillis, 10), DefaultMemoryMiB: strconv.FormatInt(template.DefaultMemoryBytes/(1<<20), 10), MaxMemoryMiB: strconv.FormatInt(template.MaxMemoryBytes/(1<<20), 10), DefaultStorageGiB: strconv.FormatInt(template.DefaultStorageBytes/(1<<30), 10), InitialConnectionHours: strconv.FormatInt(template.InitialConnectionTimeoutSeconds/3600, 10), StoppedRetentionHours: strconv.FormatInt(template.StoppedRetentionSeconds/3600, 10), GroupAccessMode: template.GroupAccessMode, AllowedGroupIDs: append([]string(nil), template.AllowedGroupIDs...), ConfigurationJSON: string(configurationJSON), Enabled: template.Enabled}
+	form := templateFormData{ID: template.ID, Editing: true, Name: template.Name, Description: template.Description, ImageReference: template.ImageReference, ImageDigest: template.ImageDigest, DefaultCPUMillis: strconv.FormatInt(template.DefaultCPUMillis, 10), MaxCPUMillis: strconv.FormatInt(template.MaxCPUMillis, 10), DefaultMemoryMiB: strconv.FormatInt(template.DefaultMemoryBytes/(1<<20), 10), MaxMemoryMiB: strconv.FormatInt(template.MaxMemoryBytes/(1<<20), 10), DefaultStorageGiB: strconv.FormatInt(template.DefaultStorageBytes/(1<<30), 10), InitialConnectionHours: strconv.FormatInt(template.InitialConnectionTimeoutSeconds/3600, 10), StoppedRetentionHours: strconv.FormatInt(template.StoppedRetentionSeconds/3600, 10), GroupAccessMode: template.GroupAccessMode, AllowedGroupIDs: append([]string(nil), template.AllowedGroupIDs...), ConfigurationJSON: string(configurationJSON), TerminalRootAllowed: hasTerminalUID(template.Configuration, 0), Enabled: template.Enabled}
 	for _, method := range template.AccessMethods {
 		switch method {
 		case domain.AccessTerminal:
@@ -2644,6 +2671,8 @@ func terminalErrorText(err error) string {
 		return "The workspace must be running before a terminal can be opened."
 	case errors.Is(err, workspace.ErrTerminalNotAvailable):
 		return "Terminal access is not enabled for this workspace template."
+	case errors.Is(err, workspace.ErrTerminalIdentityNotAllowed):
+		return "That terminal identity is not allowed by the workspace template."
 	default:
 		return "The terminal session could not be opened."
 	}

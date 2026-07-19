@@ -505,6 +505,17 @@ func (a *Adapter) RemoveWorkspace(ctx context.Context, runtimeID string) error {
 }
 
 func (a *Adapter) OpenShell(ctx context.Context, runtimeID string, command []string) (runtime.Terminal, error) {
+	return a.openShell(ctx, runtimeID, "", command)
+}
+
+func (a *Adapter) OpenShellAs(ctx context.Context, runtimeID string, uid int64, command []string) (runtime.Terminal, error) {
+	if uid < 0 || uid > 2147483647 {
+		return nil, runtime.ErrConflict
+	}
+	return a.openShell(ctx, runtimeID, strconv.FormatInt(uid, 10), command)
+}
+
+func (a *Adapter) openShell(ctx context.Context, runtimeID, user string, command []string) (runtime.Terminal, error) {
 	if !validRuntimeID(runtimeID) || len(command) == 0 || len(command) > 8 {
 		return nil, runtime.ErrConflict
 	}
@@ -522,7 +533,8 @@ func (a *Adapter) OpenShell(ctx context.Context, runtimeID string, command []str
 		AttachStderr bool     `json:"AttachStderr"`
 		Tty          bool     `json:"Tty"`
 		Cmd          []string `json:"Cmd"`
-	}{AttachStdin: true, AttachStdout: true, AttachStderr: true, Tty: true, Cmd: command}
+		User         string   `json:"User,omitempty"`
+	}{AttachStdin: true, AttachStdout: true, AttachStderr: true, Tty: true, Cmd: command, User: user}
 	if err := a.mutation(ctx, http.MethodPost, "/containers/"+url.PathEscape(runtimeID)+"/exec", &body, &created); err != nil {
 		return nil, err
 	}
