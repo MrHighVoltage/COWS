@@ -797,6 +797,10 @@ func (s *Service) RecordTerminalDisconnect(ctx context.Context, actorID, workspa
 	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "terminal.session_ended", TargetType: "workspace", TargetID: workspaceID})
 }
 
+func (s *Service) RecordFileAudit(ctx context.Context, actorID, workspaceID, eventType string, metadata map[string]string) {
+	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: eventType, TargetType: "workspace", TargetID: workspaceID, Metadata: metadata})
+}
+
 // OpenDesktop authorizes the fixed desktop service and asks the runtime to
 // connect only to the persisted loopback port allocated for that service.
 func (s *Service) OpenDesktop(ctx context.Context, actorID, workspaceID string) (io.ReadWriteCloser, error) {

@@ -275,6 +275,9 @@ func helperErrorText(stderr string, err error) error {
 	if strings.Contains(stderr, "read-only mount") {
 		return runtime.ErrConflict
 	}
+	if strings.Contains(stderr, "too many entries") {
+		return runtime.ErrTooManyEntries
+	}
 	return fmt.Errorf("%w: file helper: %v", runtime.ErrUnavailable, err)
 }
 

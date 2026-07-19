@@ -41,6 +41,9 @@ partial operations, and compromised or misconfigured images.
   limits.
 - Logs and audit records exclude passwords, tokens, terminal contents, file
   contents, and sensitive environment values.
+- File-manager directory listings, individual downloads, uploads, and archive
+  generation are bounded. Successful file mutations and downloads create
+  audit events containing only the workspace, mount, path, and operation.
 - User-facing state contains stable COWS error categories only. Detailed Podman,
   filesystem, and database errors remain administrator-side diagnostic data and
   must not be rendered to workspace owners.
@@ -204,9 +207,10 @@ Local username/password authentication, mandatory first-login password change,
 stored email fields, server-side opaque sessions, CSRF protected forms,
 administrator checks, login rate limiting, and basic audit persistence now
 exist. Account disablement, safe user deletion, and group lifecycle controls
-are implemented. The implementation has no password recovery,
-generic application proxy, or production HTTPS configuration. The initial file
-manager supports approved directory and named-volume listing, bounded upload,
+are implemented. The implementation has no password recovery or generic
+application proxy. A Caddy HTTPS reverse-proxy example is prepared but is not
+enabled by the development process. The initial file manager supports approved
+directory and named-volume listing, bounded upload,
 individual file download, streamed directory ZIP download, folder creation,
 rename, and deletion; it does not support archive extraction.
 Administrator CSV imports are bounded, previewed before commit, restricted to

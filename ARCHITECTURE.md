@@ -41,6 +41,12 @@ with rootless Podman. The user service socket should be available only to the CO
 process, or later to a narrowly privileged host agent. Containers use private
 networking where practical; no workspace port is a public routing mechanism.
 
+The application is prepared for HTTPS termination by a reverse proxy. The
+repository's Caddy example keeps COWS on loopback, enables secure cookies, and
+passes WebSocket upgrades for terminal and desktop access. The development
+process intentionally continues to serve plain HTTP; HSTS is added only by the
+TLS proxy.
+
 ## Template runtime configuration
 
 Templates contain a validated, administrator-controlled configuration document

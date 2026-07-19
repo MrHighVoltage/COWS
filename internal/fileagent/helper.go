@@ -20,7 +20,9 @@ import (
 
 const (
 	MaxUploadBytes    int64 = 128 << 20
+	MaxDownloadBytes  int64 = 4 << 30
 	MaxArchiveBytes   int64 = 4 << 30
+	MaxListEntries          = 10000
 	MaxArchiveEntries       = 100000
 	MaxUsageEntries         = 1000000
 )
@@ -169,9 +171,17 @@ func cleanName(value string) error {
 }
 
 func list(root *os.Root, relativePath string, output io.Writer) error {
-	items, err := fs.ReadDir(root.FS(), relativePath)
+	directory, err := root.Open(relativePath)
 	if err != nil {
 		return err
+	}
+	defer directory.Close()
+	items, err := directory.ReadDir(MaxListEntries + 1)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	if len(items) > MaxListEntries {
+		return errors.New("directory contains too many entries")
 	}
 	entries := make([]entry, 0, len(items))
 	for _, item := range items {
@@ -239,6 +249,9 @@ func download(root *os.Root, relativePath string, output io.Writer) error {
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return errors.New("not a regular file")
+	}
+	if info.Size() > MaxDownloadBytes {
+		return errors.New("download is too large")
 	}
 	file, err := root.Open(relativePath)
 	if err != nil {

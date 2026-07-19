@@ -61,6 +61,10 @@ authorized directory or named-volume mounts explicitly marked `file_manager`;
 use the runtime file-access capability and rooted, server-selected paths for
 all file operations. Keep runtime storage paths and volume names out of
 browser routes.
+File listings and downloads must remain bounded, and file mutations/downloads
+must not record file contents or secrets in audit events. The prepared HTTPS
+reverse-proxy example is documentation only; do not enable it automatically in
+the development environment.
 
 Rootless Podman directory mounts with a configured container user use explicit
 subordinate UID/GID mappings, not `keep-id`, and keep the COWS-owned

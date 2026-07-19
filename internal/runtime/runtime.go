@@ -11,10 +11,11 @@ import (
 )
 
 var (
-	ErrNotSupported = errors.New("runtime: operation not supported")
-	ErrNotFound     = errors.New("runtime: workspace not found")
-	ErrUnavailable  = errors.New("runtime: unavailable")
-	ErrConflict     = errors.New("runtime: workspace conflict")
+	ErrNotSupported   = errors.New("runtime: operation not supported")
+	ErrNotFound       = errors.New("runtime: workspace not found")
+	ErrUnavailable    = errors.New("runtime: unavailable")
+	ErrConflict       = errors.New("runtime: workspace conflict")
+	ErrTooManyEntries = errors.New("runtime: too many file entries")
 )
 
 const (

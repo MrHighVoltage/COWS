@@ -84,6 +84,19 @@ func TestRootedDownloadRejectsSymlinkEscape(t *testing.T) {
 	}
 }
 
+func TestLocalListingAndRenameRejectSymlinks(t *testing.T) {
+	service, root := newFileService(t, false)
+	if err := os.Symlink(filepath.Join(root, "hello.txt"), filepath.Join(root, "link")); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+	if _, err := service.List(context.Background(), "user-1", "workspace-1", "data", "."); !errors.Is(err, ErrInvalidPath) {
+		t.Fatalf("symlink listing error = %v, want %v", err, ErrInvalidPath)
+	}
+	if err := service.Rename(context.Background(), "user-1", "workspace-1", "data", ".", "link", "renamed"); !errors.Is(err, ErrInvalidPath) {
+		t.Fatalf("symlink rename error = %v, want %v", err, ErrInvalidPath)
+	}
+}
+
 func TestOpenZipStreamsDirectoryContents(t *testing.T) {
 	service, root := newFileService(t, true)
 	if err := os.Mkdir(filepath.Join(root, "project"), 0o700); err != nil {
@@ -145,6 +158,31 @@ func TestUploadLimitIsEnforced(t *testing.T) {
 	if err := service.Upload(context.Background(), "user-1", "workspace-1", "data", ".", "large.txt", source); !errors.Is(err, ErrUploadTooLarge) {
 		t.Fatalf("large upload error = %v", err)
 	}
+}
+
+func TestMutationsCreateAuditEvents(t *testing.T) {
+	root := t.TempDir()
+	resolver := &auditMountResolver{mounts: []workspace.FileMount{{Name: "data", ContainerPath: "/data", Root: root}}}
+	service := New(resolver)
+	if err := service.CreateDirectory(context.Background(), "user-1", "workspace-1", "data", ".", "folder"); err != nil {
+		t.Fatalf("create directory: %v", err)
+	}
+	if len(resolver.events) != 1 || resolver.events[0] != "file.directory_created:data:folder" {
+		t.Fatalf("audit events = %#v", resolver.events)
+	}
+}
+
+type auditMountResolver struct {
+	mounts []workspace.FileMount
+	events []string
+}
+
+func (f *auditMountResolver) ListFileMounts(context.Context, string, string) ([]workspace.FileMount, error) {
+	return f.mounts, nil
+}
+
+func (f *auditMountResolver) RecordFileAudit(_ context.Context, _ string, _ string, eventType string, metadata map[string]string) {
+	f.events = append(f.events, eventType+":"+metadata["mount"]+":"+metadata["path"])
 }
 
 type repeatingReader struct{}
