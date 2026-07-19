@@ -265,6 +265,12 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 			}
 			return value.Local().Format("2006-01-02 15:04")
 		},
+		"observedTime": func(value time.Time) string {
+			if value.IsZero() {
+				return "Not available"
+			}
+			return value.Local().Format("2006-01-02 15:04")
+		},
 	}).ParseFS(webassets.Files, "templates/layouts/*.html", "templates/pages/*.html", "templates/fragments/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse templates: %w", err)
