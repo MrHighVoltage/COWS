@@ -17,6 +17,8 @@ The supported configuration vocabulary initially contains:
 - TCP or UDP services with administrator-defined host-port ranges.
 - an optional typed container-user block with administrator-selected numeric
   UID/GID, shell, home, and display-name overrides.
+- an optional `terminal_uids` list that permits selected container UIDs for
+  browser terminal sessions.
 
 The resolver accepts only these placeholders:
 
@@ -61,3 +63,10 @@ passwd entry is actually written into the container.
 Sensitive environment values are stored as administrator configuration and are
 never returned to users or written to audit metadata. A dedicated secret store
 is still required before using this mechanism for high-value credentials.
+
+Terminal UID selection is not a general runtime argument. The server validates
+the selected value against the snapshotted `terminal_uids` list and passes it
+to Podman only through the runtime adapter. An empty list preserves the
+template's normal container-user shell behavior. UID 0 is allowed only when
+explicitly listed by an administrator and is treated as full control of the
+workspace.

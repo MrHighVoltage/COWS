@@ -9,6 +9,7 @@ type TemplateConfiguration struct {
 	Mounts        []TemplateMount        `json:"mounts,omitempty"`
 	Services      []TemplateService      `json:"services,omitempty"`
 	ContainerUser *TemplateContainerUser `json:"container_user,omitempty"`
+	TerminalUIDs  []int64                `json:"terminal_uids,omitempty"`
 }
 
 type TemplateEnvironment struct {

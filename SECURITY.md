@@ -78,6 +78,13 @@ partial operations, and compromised or misconfigured images.
   therefore use subordinate host IDs. The per-container parent remains
   COWS-owned for lifecycle moves. Rootless Podman resolves the passwd-entry
   extension server-side; users never select it.
+- A template may explicitly allow terminal sessions for selected container UIDs
+  through `terminal_uids`. The browser may request one of those values, but the
+  backend revalidates the allowlist before the Podman exec request. Allowing UID
+  0 grants root inside that workspace, including control of writable mounts and
+  container-visible secrets; it does not grant host root under correct rootless
+  subordinate-ID mappings. It remains high risk if templates expose host paths,
+  runtime sockets, devices, unsafe capabilities, or vulnerable workloads.
 
 ## Access gateway risks
 
@@ -207,8 +214,8 @@ local user identity fields, and committed transactionally. Generated temporary
 passwords are returned only through a short-lived administrator-bound download;
 they are not stored in the database, logs, or audit metadata. Treat the export
 as sensitive and delete it after distribution.
-Terminal access uses a fixed server-resolved template shell and desktop access
-uses a template-approved VNC service through the rootless Podman adapter; desktop sessions
+Terminal access uses a fixed server-resolved template shell, optionally with a
+template allowlist of container UIDs, and desktop access uses a template-approved VNC service through the rootless Podman adapter; desktop sessions
 automatically authenticate using the template-selected VNC secret when one is
 configured. Both require runtime support for the selected container. Podman lifecycle
 operations are limited to approved images,

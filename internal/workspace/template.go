@@ -323,11 +323,12 @@ func normalizeGroupAccessMode(value string) string {
 
 func cloneTemplateConfiguration(value domain.TemplateConfiguration) domain.TemplateConfiguration {
 	clone := domain.TemplateConfiguration{
-		Command:     append([]string(nil), value.Command...),
-		Environment: append([]domain.TemplateEnvironment(nil), value.Environment...),
-		Secrets:     append([]domain.TemplateSecret(nil), value.Secrets...),
-		Mounts:      append([]domain.TemplateMount(nil), value.Mounts...),
-		Services:    append([]domain.TemplateService(nil), value.Services...),
+		Command:      append([]string(nil), value.Command...),
+		Environment:  append([]domain.TemplateEnvironment(nil), value.Environment...),
+		Secrets:      append([]domain.TemplateSecret(nil), value.Secrets...),
+		Mounts:       append([]domain.TemplateMount(nil), value.Mounts...),
+		Services:     append([]domain.TemplateService(nil), value.Services...),
+		TerminalUIDs: append([]int64(nil), value.TerminalUIDs...),
 	}
 	if value.ContainerUser != nil {
 		user := *value.ContainerUser

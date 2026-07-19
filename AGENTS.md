@@ -50,7 +50,9 @@ port bindings, or browser-controlled environment values.
 Terminal access is implemented through the runtime shell capability and must
 retain fixed server-selected commands, ownership/template/state checks,
 WebSocket session limits, resize validation, and audit events. Do not expose
-public workspace ports. Desktop access is implemented only through the fixed
+public workspace ports. A template `terminal_uids` allowlist may select a
+container UID, but the backend must revalidate it; UID 0 requires explicit
+administrator intent and warning. Desktop access is implemented only through the fixed
 template-approved VNC service and must retain loopback mapping verification,
 WebSocket session limits, audit events, and template-selected VNC credentials
 without exposing them in URLs or logs. Do not implement a generic proxy or

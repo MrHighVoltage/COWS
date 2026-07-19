@@ -25,8 +25,18 @@ var (
 )
 
 func validateTemplateConfiguration(configuration domain.TemplateConfiguration) error {
-	if len(configuration.Command) > 32 || len(configuration.Environment) > 64 || len(configuration.Secrets) > 32 || len(configuration.Mounts) > 16 || len(configuration.Services) > 16 {
+	if len(configuration.Command) > 32 || len(configuration.Environment) > 64 || len(configuration.Secrets) > 32 || len(configuration.Mounts) > 16 || len(configuration.Services) > 16 || len(configuration.TerminalUIDs) > 32 {
 		return ErrInvalidTemplate
+	}
+	terminalUIDs := make(map[int64]struct{}, len(configuration.TerminalUIDs))
+	for _, uid := range configuration.TerminalUIDs {
+		if uid < 0 || uid > 2147483647 {
+			return ErrInvalidTemplate
+		}
+		if _, exists := terminalUIDs[uid]; exists {
+			return ErrInvalidTemplate
+		}
+		terminalUIDs[uid] = struct{}{}
 	}
 	for _, value := range configuration.Command {
 		if len(value) == 0 || len(value) > 256 || hasControl(value) {
