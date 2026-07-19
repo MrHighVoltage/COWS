@@ -8,12 +8,12 @@
 </section>
 
 {{ if .Error }}<p class="alert alert-error" role="alert">{{ .Error }}</p>{{ end }}
-<section class="panel" aria-labelledby="new-group-title">
-  <h2 id="new-group-title">Create group</h2>
-  <form class="form-grid-inline" method="post" action="/admin/groups">
+<section class="panel group-create-panel" aria-labelledby="new-group-title">
+  <div class="panel-heading"><div><h2 id="new-group-title">Create group</h2><p class="muted">Use groups to manage template access and shared quotas.</p></div></div>
+  <form class="group-create-form" method="post" action="/admin/groups">
     <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
-    <label>Name <input name="name" type="text" maxlength="100" required></label>
-    <label>Description <input name="description" type="text" maxlength="2000"></label>
+    <label>Name <input name="name" type="text" maxlength="100" placeholder="e.g. Research team" required></label>
+    <label>Description <input name="description" type="text" maxlength="2000" placeholder="Short description"></label>
     <button class="primary-button" type="submit">Create group</button>
   </form>
 </section>
