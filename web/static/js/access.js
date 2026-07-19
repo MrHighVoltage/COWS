@@ -29,6 +29,7 @@ if (shell) {
         const module = await import("/static/js/desktop.js");
         module.initDesktop(shell.querySelector("[data-desktop]"));
       } else if (tab === "files") {
+        await loadScript("/static/js/files.js");
         const target = shell.querySelector("[data-access-files]");
         if (!target.querySelector(".file-panel")) {
           const params = new URLSearchParams(window.location.search);
@@ -40,6 +41,7 @@ if (shell) {
           if (window.Alpine) window.Alpine.initTree(target);
           if (!response.ok) throw new Error("file listing request failed");
         }
+        window.CowsFiles.init(target);
       }
       loaded.add(tab);
     } catch (error) {

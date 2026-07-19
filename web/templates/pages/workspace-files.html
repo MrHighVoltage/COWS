@@ -31,7 +31,13 @@
   {{ if not .FileListing.Mount.ReadOnly }}
   <div class="file-actions">
     <form method="post" action="/workspaces/{{ .ActiveWorkspace.ID }}/files/mkdir"><input type="hidden" name="csrf_token" value="{{ .CSRFToken }}"><input type="hidden" name="mount" value="{{ .FileListing.Mount.Name }}"><input type="hidden" name="path" value="{{ .FileListing.Path }}"><input name="name" type="text" maxlength="255" placeholder="New folder" required><button class="secondary-button" type="submit">Create folder</button></form>
-    <form method="post" action="/workspaces/{{ .ActiveWorkspace.ID }}/files/upload" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ .CSRFToken }}"><input type="hidden" name="mount" value="{{ .FileListing.Mount.Name }}"><input type="hidden" name="path" value="{{ .FileListing.Path }}"><input name="file" type="file" required><button class="secondary-button" type="submit">Upload</button></form>
+    <form class="file-upload-form" method="post" action="/workspaces/{{ .ActiveWorkspace.ID }}/files/upload" enctype="multipart/form-data" data-file-upload><input type="hidden" name="csrf_token" value="{{ .CSRFToken }}"><input type="hidden" name="mount" value="{{ .FileListing.Mount.Name }}"><input type="hidden" name="path" value="{{ .FileListing.Path }}"><input name="file" type="file" required data-upload-input><button class="secondary-button" type="submit" data-upload-submit>Upload</button><button class="table-action" type="button" data-upload-cancel hidden>Cancel</button></form>
+    <div class="file-upload-status" data-upload-status role="status" aria-live="polite" hidden>
+      <div class="file-upload-summary"><strong data-upload-name>Ready</strong><span data-upload-percent>0%</span></div>
+      <progress max="100" value="0" data-upload-progress aria-label="Upload progress"></progress>
+      <div class="file-upload-stats"><span data-upload-bytes>0 B / 0 B</span><span data-upload-rate>Waiting</span><span data-upload-eta></span></div>
+      <p class="table-subtext" data-upload-message>Select a file to begin.</p>
+    </div>
   </div>
   {{ end }}
   <div class="table-scroll"><table><thead><tr><th>Name</th><th>Type</th><th>Size</th><th>Modified</th><th>Actions</th></tr></thead><tbody>
