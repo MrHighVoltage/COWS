@@ -157,6 +157,9 @@ ENV/
 env.bak/
 venv.bak/
 
+# Local screenshots and temporary test artifacts
+tmp/
+
 # Spyder project settings
 .spyderproject
 .spyproject
