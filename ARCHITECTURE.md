@@ -329,6 +329,10 @@ Quota checks use measured storage for all existing workspaces, including
 stopped records. CPU and memory are counted only for running workspaces. A
 request must fit total and running workspace-count quotas and the remaining host
 capacity after reserved capacity.
+Templates can either fix CPU and memory at their defaults or allow users to
+select values between the administrator-defined default and maximum. The
+selection is validated in the workspace service and checked again against live
+quota and host availability under the admission lock.
 Storage measurements are cached per workspace for a short bounded interval and
 coalesced when concurrent requests ask for the same workspace. Workspace pages
 reuse the measured rows for their allocation summary; a missing measurement is
@@ -339,9 +343,9 @@ Explicit user quotas override group quotas. Without an explicit row, finite
 group limits add together and zero makes that dimension unlimited. Missing
 quotas block ordinary users but do not restrict administrators. Host capacity
 checks still apply to administrators.
-The scheduler does not overcommit by default. Rootless Podman reports CPU and memory;
-allocatable storage is an explicit host setting because the runtime host-info
-response does not provide a portable allocatable-storage contract. The
+The scheduler does not overcommit by default. Rootless Podman reports CPU and memory.
+Storage is measured for display and user allowance checks, but is not reserved
+per template or workspace and does not block creation through host capacity. The
 `COWS_HOST_STORAGE_BYTES` configuration value seeds that setting on first
 startup, but the persisted row is the source of truth afterward. Administrators
 can update storage capacity and reserved resources through the web UI without

@@ -77,6 +77,7 @@ type WorkspaceTemplate struct {
 	MaxCPUMillis                    int64
 	DefaultMemoryBytes              int64
 	MaxMemoryBytes                  int64
+	ResourcesConfigurable           bool
 	DefaultStorageBytes             int64
 	InitialConnectionTimeoutSeconds int64
 	StoppedRetentionSeconds         int64

@@ -436,11 +436,11 @@ func (s *Store) CreateTemplate(ctx context.Context, template domain.WorkspaceTem
 	}
 	_, err = s.db.ExecContext(ctx, `INSERT INTO workspace_templates
 		(id, name, description, image_reference, image_digest, default_cpu_millis, max_cpu_millis,
-		 default_memory_bytes, max_memory_bytes, default_storage_bytes, initial_connection_timeout_seconds,
+		 default_memory_bytes, max_memory_bytes, resources_configurable, default_storage_bytes, initial_connection_timeout_seconds,
 		 stopped_retention_seconds, data_retention_seconds, revision, configuration_json, access_methods_json, allowed_roles_json, group_access_mode, allowed_group_ids_json, enabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, template.ID, template.Name, template.Description,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, template.ID, template.Name, template.Description,
 		template.ImageReference, template.ImageDigest, template.DefaultCPUMillis, template.MaxCPUMillis,
-		template.DefaultMemoryBytes, template.MaxMemoryBytes, template.DefaultStorageBytes, template.InitialConnectionTimeoutSeconds,
+		template.DefaultMemoryBytes, template.MaxMemoryBytes, boolInt(template.ResourcesConfigurable), template.DefaultStorageBytes, template.InitialConnectionTimeoutSeconds,
 		template.StoppedRetentionSeconds, template.DataRetentionSeconds, template.Revision, configuration, accessMethods, roles, template.GroupAccessMode, groupIDs, boolInt(template.Enabled), template.CreatedAt.Unix(), template.UpdatedAt.Unix())
 	if err != nil {
 		return fmt.Errorf("create template: %w", err)
@@ -455,10 +455,10 @@ func (s *Store) UpdateTemplate(ctx context.Context, template domain.WorkspaceTem
 	}
 	result, err := s.db.ExecContext(ctx, `UPDATE workspace_templates SET
 		name = ?, description = ?, image_reference = ?, image_digest = ?, default_cpu_millis = ?, max_cpu_millis = ?,
-		default_memory_bytes = ?, max_memory_bytes = ?, default_storage_bytes = ?, initial_connection_timeout_seconds = ?,
+		default_memory_bytes = ?, max_memory_bytes = ?, resources_configurable = ?, default_storage_bytes = ?, initial_connection_timeout_seconds = ?,
 		stopped_retention_seconds = ?, data_retention_seconds = ?, revision = ?, configuration_json = ?, access_methods_json = ?, allowed_roles_json = ?, group_access_mode = ?, allowed_group_ids_json = ?, enabled = ?, updated_at = ? WHERE id = ?`, template.Name, template.Description,
 		template.ImageReference, template.ImageDigest, template.DefaultCPUMillis, template.MaxCPUMillis,
-		template.DefaultMemoryBytes, template.MaxMemoryBytes, template.DefaultStorageBytes, template.InitialConnectionTimeoutSeconds,
+		template.DefaultMemoryBytes, template.MaxMemoryBytes, boolInt(template.ResourcesConfigurable), template.DefaultStorageBytes, template.InitialConnectionTimeoutSeconds,
 		template.StoppedRetentionSeconds, template.DataRetentionSeconds, template.Revision, configuration, accessMethods, roles, template.GroupAccessMode, groupIDs, boolInt(template.Enabled), template.UpdatedAt.Unix(), template.ID)
 	if err != nil {
 		return fmt.Errorf("update template: %w", err)
@@ -531,7 +531,7 @@ func (s *Store) ReleaseWorkspacePorts(ctx context.Context, workspaceID string) e
 }
 
 const templateSelect = `SELECT id, name, description, image_reference, image_digest, default_cpu_millis,
-	max_cpu_millis, default_memory_bytes, max_memory_bytes, default_storage_bytes, initial_connection_timeout_seconds,
+	max_cpu_millis, default_memory_bytes, max_memory_bytes, resources_configurable, default_storage_bytes, initial_connection_timeout_seconds,
 	stopped_retention_seconds, data_retention_seconds, revision, configuration_json, access_methods_json, allowed_roles_json, group_access_mode, allowed_group_ids_json, enabled, created_at, updated_at FROM workspace_templates`
 
 func marshalTemplateLists(template domain.WorkspaceTemplate) (string, string, string, string, error) {
@@ -556,19 +556,20 @@ func marshalTemplateLists(template domain.WorkspaceTemplate) (string, string, st
 
 func scanTemplate(row scanner) (domain.WorkspaceTemplate, error) {
 	var (
-		template      domain.WorkspaceTemplate
-		accessMethods string
-		roles         string
-		groupIDs      string
-		configuration string
-		groupMode     string
-		enabled       int
-		createdUnix   int64
-		updatedUnix   int64
+		template              domain.WorkspaceTemplate
+		accessMethods         string
+		roles                 string
+		groupIDs              string
+		configuration         string
+		groupMode             string
+		resourcesConfigurable int
+		enabled               int
+		createdUnix           int64
+		updatedUnix           int64
 	)
 	if err := row.Scan(&template.ID, &template.Name, &template.Description, &template.ImageReference, &template.ImageDigest,
 		&template.DefaultCPUMillis, &template.MaxCPUMillis, &template.DefaultMemoryBytes, &template.MaxMemoryBytes,
-		&template.DefaultStorageBytes, &template.InitialConnectionTimeoutSeconds, &template.StoppedRetentionSeconds,
+		&resourcesConfigurable, &template.DefaultStorageBytes, &template.InitialConnectionTimeoutSeconds, &template.StoppedRetentionSeconds,
 		&template.DataRetentionSeconds, &template.Revision, &configuration, &accessMethods, &roles, &groupMode, &groupIDs, &enabled, &createdUnix, &updatedUnix); err != nil {
 		if err == sql.ErrNoRows {
 			return domain.WorkspaceTemplate{}, repository.ErrNotFound
@@ -587,6 +588,7 @@ func scanTemplate(row scanner) (domain.WorkspaceTemplate, error) {
 		}
 	}
 	template.GroupAccessMode = groupMode
+	template.ResourcesConfigurable = resourcesConfigurable != 0
 	if template.GroupAccessMode == "" {
 		template.GroupAccessMode = "exclude"
 	}

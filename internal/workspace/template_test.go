@@ -59,6 +59,20 @@ func validTemplateInput() TemplateInput {
 	}
 }
 
+func TestSelectedResourcesUseTemplatePolicy(t *testing.T) {
+	template := domain.WorkspaceTemplate{DefaultCPUMillis: 1000, MaxCPUMillis: 4000, DefaultMemoryBytes: 2 << 30, MaxMemoryBytes: 8 << 30}
+	if cpu, memory, err := selectedResources(template, CreateWorkspaceInput{CPUMillis: 4000, MemoryBytes: 8 << 30}); err != nil || cpu != 1000 || memory != 2<<30 {
+		t.Fatalf("fixed resources = %d/%d/%v, want template defaults", cpu, memory, err)
+	}
+	template.ResourcesConfigurable = true
+	if cpu, memory, err := selectedResources(template, CreateWorkspaceInput{CPUMillis: 3000, MemoryBytes: 6 << 30}); err != nil || cpu != 3000 || memory != 6<<30 {
+		t.Fatalf("selected resources = %d/%d/%v, want requested values", cpu, memory, err)
+	}
+	if _, _, err := selectedResources(template, CreateWorkspaceInput{CPUMillis: 500, MemoryBytes: 6 << 30}); !errors.Is(err, ErrInvalidWorkspaceResources) {
+		t.Fatalf("below-default resources error = %v, want invalid resource selection", err)
+	}
+}
+
 func TestTemplateServiceCRUDAndAuthorization(t *testing.T) {
 	service, authService, adminID, _ := testService(t)
 	ctx := context.Background()
@@ -216,7 +230,7 @@ func TestTemplateConfigurationSnapshotsAndAllocatesPorts(t *testing.T) {
 	if err := runtimeService.StartWorkspace(context.Background(), user.ID, value.ID); err != nil {
 		t.Fatalf("start configured workspace: %v", err)
 	}
-	if fake.lastSpec.NetworkMode != "bridge" || len(fake.lastSpec.Environment) != 4 || fake.lastSpec.Environment[1].Value != strconv.Itoa(allocations[0].HostPort) || fake.lastSpec.Environment[2].Name != "VNC_PW" || fake.lastSpec.Environment[2].Value != value.TemplateSecrets["vnc_password"] || !fake.lastSpec.Environment[2].Sensitive || fake.lastSpec.Environment[3].Value != "static-value" || len(fake.lastSpec.Mounts) != 1 || len(fake.lastSpec.Ports) != 1 {
+	if fake.lastSpec.NetworkMode != "bridge" || fake.lastSpec.Limits.StorageBytes != 0 || len(fake.lastSpec.Environment) != 4 || fake.lastSpec.Environment[1].Value != strconv.Itoa(allocations[0].HostPort) || fake.lastSpec.Environment[2].Name != "VNC_PW" || fake.lastSpec.Environment[2].Value != value.TemplateSecrets["vnc_password"] || !fake.lastSpec.Environment[2].Sensitive || fake.lastSpec.Environment[3].Value != "static-value" || len(fake.lastSpec.Mounts) != 1 || len(fake.lastSpec.Ports) != 1 {
 		t.Fatalf("resolved runtime spec: %+v", fake.lastSpec)
 	}
 }

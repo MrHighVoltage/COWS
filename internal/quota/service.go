@@ -312,7 +312,7 @@ func NewScheduler(store repository.Store, capacity runtime.CapacityProvider, sto
 }
 
 func (s *Scheduler) CheckCreate(ctx context.Context, userID string, request domain.ResourceRequest) error {
-	if request.CPUMillis <= 0 || request.MemoryBytes <= 0 || request.StorageBytes <= 0 {
+	if request.CPUMillis <= 0 || request.MemoryBytes <= 0 {
 		return ErrInvalidQuota
 	}
 	user, err := s.store.FindUserByID(ctx, userID)
@@ -336,53 +336,87 @@ func (s *Scheduler) CheckCreate(ctx context.Context, userID string, request doma
 	if quotaAssigned && exceedsQuota(userAllocations, request, userQuota) {
 		return ErrQuotaExceeded
 	}
-	userWorkspaces, err := s.store.ListWorkspacesForUser(ctx, userID)
+	if quotaAssigned && userQuota.MaxStorageBytes > 0 {
+		userWorkspaces, err := s.store.ListWorkspacesForUser(ctx, userID)
+		if err != nil {
+			return err
+		}
+		userStorage, err := s.measureStorage(ctx, userWorkspaces)
+		if err != nil {
+			return err
+		}
+		if userStorage >= userQuota.MaxStorageBytes {
+			return ErrQuotaExceeded
+		}
+	}
+	available, err := s.Available(ctx, userID)
 	if err != nil {
 		return err
 	}
-	allWorkspaces, err := s.store.ListAllWorkspaces(ctx)
-	if err != nil {
-		return err
+	if request.CPUMillis > available.CPUMillis {
+		return &CapacityInsufficientError{Resource: "CPU", Available: available.CPUMillis, Requested: request.CPUMillis}
 	}
-	userStorage, allStorage, err := s.measureStorage(ctx, userWorkspaces, allWorkspaces)
-	if err != nil {
-		return err
+	if request.MemoryBytes > available.MemoryBytes {
+		return &CapacityInsufficientError{Resource: "memory", Available: available.MemoryBytes, Requested: request.MemoryBytes}
 	}
-	if quotaAssigned && userQuota.MaxStorageBytes > 0 && userStorage > userQuota.MaxStorageBytes-request.StorageBytes {
-		return ErrQuotaExceeded
+	return nil
+}
+
+// Available returns the lower of current host capacity and the user's
+// remaining CPU and memory quota. It is advisory for the UI.
+func (s *Scheduler) Available(ctx context.Context, userID string) (domain.ResourceRequest, error) {
+	user, err := s.store.FindUserByID(ctx, userID)
+	if err != nil {
+		return domain.ResourceRequest{}, fmt.Errorf("load quota user: %w", err)
+	}
+	userQuota, err := effectiveQuota(ctx, s.store, userID)
+	quotaAssigned := true
+	if errors.Is(err, repository.ErrNotFound) {
+		quotaAssigned = false
+		if !user.IsAdministrator() {
+			return domain.ResourceRequest{}, ErrQuotaUnavailable
+		}
+	} else if err != nil {
+		return domain.ResourceRequest{}, fmt.Errorf("load user quota: %w", err)
 	}
 	if s.capacity == nil {
-		return ErrCapacityUnavailable
+		return domain.ResourceRequest{}, ErrCapacityUnavailable
 	}
 	settings, err := s.store.FindHostSettings(ctx)
 	if err != nil {
-		return ErrCapacityUnavailable
+		return domain.ResourceRequest{}, ErrCapacityUnavailable
 	}
 	host, err := s.capacity.HostCapacity(ctx)
 	if err != nil || host.CPUMillis <= 0 || host.MemoryBytes <= 0 {
-		return ErrCapacityUnavailable
+		return domain.ResourceRequest{}, ErrCapacityUnavailable
 	}
-	if settings.HostStorageBytes <= 0 {
-		return ErrCapacityUnavailable
-	}
-	host.StorageBytes = settings.HostStorageBytes
 	allAllocations, err := s.store.AllWorkspaceAllocations(ctx)
 	if err != nil {
-		return err
+		return domain.ResourceRequest{}, err
 	}
-	availableCPU := host.CPUMillis - settings.ReservedCPUMillis - allAllocations.Resources.CPUMillis
-	if request.CPUMillis > availableCPU {
-		return &CapacityInsufficientError{Resource: "CPU", Available: availableCPU, Requested: request.CPUMillis}
+	available := domain.ResourceRequest{
+		CPUMillis:   host.CPUMillis - settings.ReservedCPUMillis - allAllocations.Resources.CPUMillis,
+		MemoryBytes: host.MemoryBytes - settings.ReservedMemoryBytes - allAllocations.Resources.MemoryBytes,
 	}
-	availableMemory := host.MemoryBytes - settings.ReservedMemoryBytes - allAllocations.Resources.MemoryBytes
-	if request.MemoryBytes > availableMemory {
-		return &CapacityInsufficientError{Resource: "memory", Available: availableMemory, Requested: request.MemoryBytes}
+	if quotaAssigned {
+		userAllocations, err := s.store.WorkspaceAllocations(ctx, userID)
+		if err != nil {
+			return domain.ResourceRequest{}, err
+		}
+		if userQuota.MaxCPUMillis > 0 && userQuota.MaxCPUMillis-userAllocations.Resources.CPUMillis < available.CPUMillis {
+			available.CPUMillis = userQuota.MaxCPUMillis - userAllocations.Resources.CPUMillis
+		}
+		if userQuota.MaxMemoryBytes > 0 && userQuota.MaxMemoryBytes-userAllocations.Resources.MemoryBytes < available.MemoryBytes {
+			available.MemoryBytes = userQuota.MaxMemoryBytes - userAllocations.Resources.MemoryBytes
+		}
 	}
-	availableStorage := host.StorageBytes - settings.ReservedStorageBytes - allStorage
-	if request.StorageBytes > availableStorage {
-		return &CapacityInsufficientError{Resource: "storage", Available: availableStorage, Requested: request.StorageBytes}
+	if available.CPUMillis < 0 {
+		available.CPUMillis = 0
 	}
-	return nil
+	if available.MemoryBytes < 0 {
+		available.MemoryBytes = 0
+	}
+	return available, nil
 }
 
 func (s *Scheduler) CheckStart(ctx context.Context, userID string, request domain.ResourceRequest) error {
@@ -416,25 +450,19 @@ func (s *Scheduler) CheckStart(ctx context.Context, userID string, request domai
 	return nil
 }
 
-func (s *Scheduler) measureStorage(ctx context.Context, userWorkspaces, allWorkspaces []domain.Workspace) (int64, int64, error) {
+func (s *Scheduler) measureStorage(ctx context.Context, userWorkspaces []domain.Workspace) (int64, error) {
 	if s.storage == nil {
-		return 0, 0, ErrStorageUnavailable
+		return 0, ErrStorageUnavailable
 	}
-	usage := make(map[string]int64, len(allWorkspaces))
 	var total int64
-	for _, value := range allWorkspaces {
+	for _, value := range userWorkspaces {
 		bytes, err := s.storage.WorkspaceStorageUsage(ctx, value)
 		if err != nil || bytes < 0 {
-			return 0, 0, ErrStorageUnavailable
+			return 0, ErrStorageUnavailable
 		}
-		usage[value.ID] = bytes
 		total += bytes
 	}
-	var userTotal int64
-	for _, value := range userWorkspaces {
-		userTotal += usage[value.ID]
-	}
-	return userTotal, total, nil
+	return total, nil
 }
 
 func validHostSettings(input HostSettingsInput) bool {

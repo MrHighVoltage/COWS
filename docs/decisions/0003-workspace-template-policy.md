@@ -12,17 +12,24 @@ settings. A template currently contains:
 - image reference and an optional validated `sha256` digest;
 - default and maximum CPU in millicores;
 - default and maximum memory in bytes;
-- default storage allocation in bytes;
+- whether users may select CPU and memory between the default and maximum;
 - approved access-method names: terminal, desktop, and web;
 - allowed roles; and
 - enabled state.
 
-The browser presents memory and storage in MiB/GiB, but the backend converts
-them to integer bytes before validation and storage. The service rejects empty
+The browser presents memory in MiB, but the backend converts it to integer
+bytes before validation and storage. Fixed templates always use their defaults;
+selectable templates accept a browser request only within the stored range, and
+the scheduler checks live user and host availability again during creation. The
+service rejects empty
 or malformed values, invalid digests, unsupported methods or roles, duplicate
 policy entries, inverted resource ranges, and values above conservative bounds.
 
 ## Storage
+
+Storage is measured after creation for display and user-level allowance
+accounting. Templates and workspaces do not reserve or enforce a storage
+allocation; runtime storage limits are not populated from this policy.
 
 The initial SQLite schema stores access methods and allowed roles as JSON text
 inside the template row. This is appropriate for the low-volume control plane

@@ -19,6 +19,7 @@ import (
 
 var (
 	ErrInvalidWorkspace            = errors.New("invalid workspace")
+	ErrInvalidWorkspaceResources   = errors.New("invalid workspace resources")
 	ErrTemplateNotAvailable        = errors.New("workspace template is not available")
 	ErrWorkspaceNotAuthorized      = errors.New("workspace access is not authorized")
 	ErrRuntimeUnavailable          = errors.New("workspace runtime unavailable")
@@ -43,8 +44,10 @@ func (e *WorkspaceCleanupError) Error() string {
 func (e *WorkspaceCleanupError) Unwrap() error { return ErrWorkspaceCleanupIncomplete }
 
 type CreateWorkspaceInput struct {
-	Name       string
-	TemplateID string
+	Name        string
+	TemplateID  string
+	CPUMillis   int64
+	MemoryBytes int64
 }
 
 // Scheduler is optional for persistence-only tests and is enabled by the
@@ -92,6 +95,10 @@ func (s *Service) CreateWorkspace(ctx context.Context, actorID string, input Cre
 	if !template.Enabled || !allowed {
 		return domain.Workspace{}, ErrTemplateNotAvailable
 	}
+	cpuMillis, memoryBytes, err := selectedResources(template, input)
+	if err != nil {
+		return domain.Workspace{}, err
+	}
 	templateSecrets, err := resolveTemplateSecrets(template.Configuration)
 	if err != nil {
 		return domain.Workspace{}, err
@@ -99,7 +106,7 @@ func (s *Service) CreateWorkspace(ctx context.Context, actorID string, input Cre
 	releaseAdmission := s.acquireAdmission()
 	defer releaseAdmission()
 	if s.scheduler != nil {
-		if err := s.scheduler.CheckCreate(ctx, user.ID, domain.ResourceRequest{CPUMillis: template.DefaultCPUMillis, MemoryBytes: template.DefaultMemoryBytes, StorageBytes: template.DefaultStorageBytes}); err != nil {
+		if err := s.scheduler.CheckCreate(ctx, user.ID, domain.ResourceRequest{CPUMillis: cpuMillis, MemoryBytes: memoryBytes}); err != nil {
 			return domain.Workspace{}, err
 		}
 	}
@@ -128,9 +135,9 @@ func (s *Service) CreateWorkspace(ctx context.Context, actorID string, input Cre
 		Name:                            name,
 		DesiredState:                    domain.DesiredWorkspaceStopped,
 		ObservedState:                   "unknown",
-		AllocatedCPUMillis:              template.DefaultCPUMillis,
-		AllocatedMemoryBytes:            template.DefaultMemoryBytes,
-		AllocatedStorageBytes:           template.DefaultStorageBytes,
+		AllocatedCPUMillis:              cpuMillis,
+		AllocatedMemoryBytes:            memoryBytes,
+		AllocatedStorageBytes:           0,
 		InitialConnectionTimeoutSeconds: template.InitialConnectionTimeoutSeconds,
 		StoppedRetentionSeconds:         template.StoppedRetentionSeconds,
 		CreatedAt:                       now,
@@ -147,6 +154,30 @@ func (s *Service) CreateWorkspace(ctx context.Context, actorID string, input Cre
 	}
 	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: user.ID, EventType: "workspace.created", TargetType: "workspace", TargetID: id, Metadata: map[string]string{"template_id": template.ID}})
 	return workspace, nil
+}
+
+func selectedResources(template domain.WorkspaceTemplate, input CreateWorkspaceInput) (int64, int64, error) {
+	if !template.ResourcesConfigurable {
+		return template.DefaultCPUMillis, template.DefaultMemoryBytes, nil
+	}
+	if input.CPUMillis < template.DefaultCPUMillis || input.CPUMillis > template.MaxCPUMillis ||
+		input.MemoryBytes < template.DefaultMemoryBytes || input.MemoryBytes > template.MaxMemoryBytes {
+		return 0, 0, ErrInvalidWorkspaceResources
+	}
+	return input.CPUMillis, input.MemoryBytes, nil
+}
+
+// ResourceAvailability is advisory; CreateWorkspace repeats the check under
+// the admission lock because host capacity can change between page loads.
+func (s *Service) ResourceAvailability(ctx context.Context, actorID string) (domain.ResourceRequest, error) {
+	user, err := s.requireActor(ctx, actorID)
+	if err != nil {
+		return domain.ResourceRequest{}, err
+	}
+	if s.scheduler == nil {
+		return domain.ResourceRequest{}, quota.ErrCapacityUnavailable
+	}
+	return s.scheduler.Available(ctx, user.ID)
 }
 
 func (s *Service) ListWorkspaces(ctx context.Context, actorID string) ([]domain.Workspace, error) {
@@ -1132,7 +1163,7 @@ func (s *Service) runtimeSpec(ctx context.Context, value domain.Workspace) (runt
 	if image.Reference == "" {
 		image = runtime.Image{Reference: template.ImageReference, Digest: template.ImageDigest}
 	}
-	return runtime.WorkspaceSpec{WorkspaceID: value.ID, Image: image, Limits: runtime.ResourceLimits{CPUMillis: value.AllocatedCPUMillis, MemoryBytes: value.AllocatedMemoryBytes, StorageBytes: value.AllocatedStorageBytes}, Labels: runtime.ManagedLabels(value.ID), Command: resolved.Command, Environment: resolved.Environment, Mounts: mounts, Ports: resolved.Ports, NetworkMode: networkMode, User: resolved.User}, nil
+	return runtime.WorkspaceSpec{WorkspaceID: value.ID, Image: image, Limits: runtime.ResourceLimits{CPUMillis: value.AllocatedCPUMillis, MemoryBytes: value.AllocatedMemoryBytes}, Labels: runtime.ManagedLabels(value.ID), Command: resolved.Command, Environment: resolved.Environment, Mounts: mounts, Ports: resolved.Ports, NetworkMode: networkMode, User: resolved.User}, nil
 }
 
 func (s *Service) effectiveConfiguration(ctx context.Context, value domain.Workspace) (domain.TemplateConfiguration, error) {

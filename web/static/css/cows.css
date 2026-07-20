@@ -85,6 +85,17 @@ button:focus-visible, .primary-button:focus-visible, .secondary-button:focus-vis
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem 1rem; }
 .form-grid > div { display: grid; min-width: 0; gap: .35rem; }
 .form-grid label { margin-top: 0; }
+.workspace-resource-options { display: grid; gap: .75rem; margin-top: 1rem; }
+.resource-choice { display: grid; gap: .65rem; margin: 0; padding: 1rem; border: 1px solid #d7dee5; border-radius: .4rem; background: #f7fafb; }
+.resource-choice legend { padding: 0 .35rem; color: #304554; font-weight: 700; }
+.resource-range, .resource-fixed { margin: 0; color: #52616f; font-size: .85rem; }
+.resource-slider-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.resource-slider-field { display: grid; grid-template-columns: 1fr auto; gap: .35rem .65rem; align-items: center; margin: 0; color: #304554; font-weight: 700; }
+.resource-slider-field input[type="range"] { grid-column: 1 / -1; width: 100%; accent-color: #176b8f; }
+.resource-slider-field input[type="number"] { width: 7rem; min-height: 2.25rem; padding: .35rem .5rem; }
+.resource-slider-field output { color: #52616f; font-size: .85rem; font-weight: 400; }
+.resource-over { accent-color: #b54a2f !important; border-color: #b54a2f !important; color: #8c2d1a; }
+.resource-warning { margin: 0; color: #8c2d1a; font-size: .85rem; font-weight: 700; }
 .check-row { display: flex; align-items: center; gap: .55rem; margin-top: .25rem !important; color: #17212b !important; font-weight: 500 !important; }
 .check-row input { width: 1rem; min-height: 1rem; }
 .form-actions, .title-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
@@ -259,6 +270,7 @@ code { color: #465866; font-size: .82rem; }
   .form-actions { align-items: stretch; flex-direction: column-reverse; }
   .form-actions > * { width: 100%; }
   .form-grid { grid-template-columns: 1fr; }
+  .resource-slider-grid { grid-template-columns: 1fr; }
   .runtime-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .resource-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .quota-form { min-width: 24rem; }

@@ -123,11 +123,12 @@ Resource limits must be enforced by rootless Podman wherever possible. COWS
 quotas alone are not a containment mechanism. Capacity calculations must fail
 closed when host information is unavailable.
 
-Administrator host settings control allocatable storage and reserved host
-resources. They are persisted in SQLite, protected by administrator
-authorization and CSRF checks, and audited. The startup configuration value
-only initializes missing settings; it does not silently overwrite web-managed
-values. A zero storage capacity intentionally fails workspace admission closed.
+Administrator host settings control reserved CPU and memory resources and retain
+storage reporting settings for future policy work. They are persisted in SQLite,
+protected by administrator authorization and CSRF checks, and audited. The
+startup configuration value only initializes missing settings; it does not
+silently overwrite web-managed values. Storage is measured for display and
+finite user-allowance checks, not reserved per template or workspace.
 
 Lifecycle timeout processing must fail closed around ambiguous state. If COWS
 cannot establish whether a workspace was connected, stopped, or deleted, it
@@ -135,9 +136,9 @@ must not perform an irreversible deletion or archival action. Future email
 warnings must not include secrets, tokens, terminal contents, or sensitive
 workspace data.
 
-The current scheduler reserves allocations for stopped workspaces and requires
-an explicit host-storage capacity. It does not support overcommit, GPU
-capacity, or multiple active schedulers.
+The current scheduler counts CPU and memory only for observed running
+workspaces and checks selected resources against live host capacity. It does not
+support overcommit, GPU capacity, or multiple active schedulers.
 
 ## File-manager risks
 
