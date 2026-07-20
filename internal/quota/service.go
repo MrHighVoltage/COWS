@@ -60,14 +60,15 @@ type Input struct {
 }
 
 type HostSettingsInput struct {
-	HostStorageBytes     int64
-	OverbookingFactor    float64
-	ReservedStorageBytes int64
+	HostStorageBytes        int64
+	CPUOverbookingFactor    float64
+	MemoryOverbookingFactor float64
+	ReservedStorageBytes    int64
 }
 
 const (
 	MinOverbookingFactor = 0.1
-	MaxOverbookingFactor = 1_000_000
+	MaxOverbookingFactor = 1_000
 )
 
 func New(store repository.Store) *Service {
@@ -244,14 +245,17 @@ func (s *Service) EnsureHostSettings(ctx context.Context, defaults HostSettingsI
 	if !errors.Is(err, repository.ErrNotFound) {
 		return domain.HostSettings{}, err
 	}
-	if defaults.OverbookingFactor == 0 {
-		defaults.OverbookingFactor = 1
+	if defaults.CPUOverbookingFactor == 0 {
+		defaults.CPUOverbookingFactor = 1
+	}
+	if defaults.MemoryOverbookingFactor == 0 {
+		defaults.MemoryOverbookingFactor = 1
 	}
 	if !validHostSettings(defaults) {
 		return domain.HostSettings{}, ErrInvalidQuota
 	}
 	now := s.now().UTC()
-	settings = domain.HostSettings{ID: 1, HostStorageBytes: defaults.HostStorageBytes, OverbookingFactor: defaults.OverbookingFactor, ReservedStorageBytes: defaults.ReservedStorageBytes, CreatedAt: now, UpdatedAt: now}
+	settings = domain.HostSettings{ID: 1, HostStorageBytes: defaults.HostStorageBytes, CPUOverbookingFactor: defaults.CPUOverbookingFactor, MemoryOverbookingFactor: defaults.MemoryOverbookingFactor, ReservedStorageBytes: defaults.ReservedStorageBytes, CreatedAt: now, UpdatedAt: now}
 	if err := s.store.UpsertHostSettings(ctx, settings); err != nil {
 		return domain.HostSettings{}, err
 	}
@@ -279,7 +283,8 @@ func (s *Service) SetHostSettings(ctx context.Context, actorID string, input Hos
 		return domain.HostSettings{}, err
 	}
 	existing.HostStorageBytes = input.HostStorageBytes
-	existing.OverbookingFactor = input.OverbookingFactor
+	existing.CPUOverbookingFactor = input.CPUOverbookingFactor
+	existing.MemoryOverbookingFactor = input.MemoryOverbookingFactor
 	existing.ReservedStorageBytes = input.ReservedStorageBytes
 	existing.UpdatedAt = s.now().UTC()
 	if err := s.store.UpsertHostSettings(ctx, existing); err != nil {
@@ -484,8 +489,8 @@ func (s *Scheduler) hostAvailable(ctx context.Context) (domain.ResourceRequest, 
 		return domain.ResourceRequest{}, err
 	}
 	available := domain.ResourceRequest{
-		CPUMillis:   scaleCapacity(host.CPUMillis, settings.OverbookingFactor) - allAllocations.Resources.CPUMillis,
-		MemoryBytes: scaleCapacity(host.MemoryBytes, settings.OverbookingFactor) - allAllocations.Resources.MemoryBytes,
+		CPUMillis:   scaleCapacity(host.CPUMillis, settings.CPUOverbookingFactor) - allAllocations.Resources.CPUMillis,
+		MemoryBytes: scaleCapacity(host.MemoryBytes, settings.MemoryOverbookingFactor) - allAllocations.Resources.MemoryBytes,
 	}
 	if available.CPUMillis < 0 {
 		available.CPUMillis = 0
@@ -512,7 +517,11 @@ func (s *Scheduler) measureStorage(ctx context.Context, userWorkspaces []domain.
 }
 
 func validHostSettings(input HostSettingsInput) bool {
-	return input.HostStorageBytes >= 0 && input.HostStorageBytes <= 1<<60 && input.OverbookingFactor >= MinOverbookingFactor && input.OverbookingFactor <= MaxOverbookingFactor && !math.IsNaN(input.OverbookingFactor) && !math.IsInf(input.OverbookingFactor, 0) && input.ReservedStorageBytes >= 0 && input.ReservedStorageBytes <= 1<<60
+	return input.HostStorageBytes >= 0 && input.HostStorageBytes <= 1<<60 && validOverbookingFactor(input.CPUOverbookingFactor) && validOverbookingFactor(input.MemoryOverbookingFactor) && input.ReservedStorageBytes >= 0 && input.ReservedStorageBytes <= 1<<60
+}
+
+func validOverbookingFactor(value float64) bool {
+	return value >= MinOverbookingFactor && value <= MaxOverbookingFactor && !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
 func scaleCapacity(value int64, factor float64) int64 {

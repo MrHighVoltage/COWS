@@ -18,31 +18,32 @@ import (
 )
 
 type Config struct {
-	ListenAddr             string
-	DatabasePath           string
-	MountRoot              string
-	MountArchiveRoot       string
-	PodmanSocket           string
-	HostStorageBytes       int64
-	HostOverbookingFactor  float64
-	LogLevel               slog.Level
-	ShutdownTimeout        time.Duration
-	SessionLifetime        time.Duration
-	CookieSecure           bool
-	BootstrapAdminUsername string
-	BootstrapAdminPassword string
-	RegistrationEnabled    bool
-	RegistrationGroups     []string
-	RegistrationQuota      quota.Input
-	EmailEnabled           bool
-	SMTPHost               string
-	SMTPPort               int
-	SMTPFrom               string
-	SMTPUsername           string
-	SMTPPassword           string
-	SMTPRequireTLS         bool
-	EmailWarningLeadTime   time.Duration
-	EmailRetryInterval     time.Duration
+	ListenAddr                  string
+	DatabasePath                string
+	MountRoot                   string
+	MountArchiveRoot            string
+	PodmanSocket                string
+	HostStorageBytes            int64
+	HostCPUOverbookingFactor    float64
+	HostMemoryOverbookingFactor float64
+	LogLevel                    slog.Level
+	ShutdownTimeout             time.Duration
+	SessionLifetime             time.Duration
+	CookieSecure                bool
+	BootstrapAdminUsername      string
+	BootstrapAdminPassword      string
+	RegistrationEnabled         bool
+	RegistrationGroups          []string
+	RegistrationQuota           quota.Input
+	EmailEnabled                bool
+	SMTPHost                    string
+	SMTPPort                    int
+	SMTPFrom                    string
+	SMTPUsername                string
+	SMTPPassword                string
+	SMTPRequireTLS              bool
+	EmailWarningLeadTime        time.Duration
+	EmailRetryInterval          time.Duration
 }
 
 func Load(args []string) (Config, error) {
@@ -57,7 +58,8 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	defaultPodmanSocket := filepath.Join("/run/user", strconv.Itoa(os.Getuid()), "podman", "podman.sock")
 	podmanSocket := envOr(lookup, "COWS_PODMAN_SOCKET", defaultPodmanSocket)
 	hostStorageValue := envOr(lookup, "COWS_HOST_STORAGE_BYTES", "0")
-	hostOverbookingValue := envOr(lookup, "COWS_HOST_OVERBOOKING_FACTOR", "1")
+	hostCPUOverbookingValue := envOr(lookup, "COWS_HOST_CPU_OVERBOOKING_FACTOR", "1")
+	hostMemoryOverbookingValue := envOr(lookup, "COWS_HOST_MEMORY_OVERBOOKING_FACTOR", "1")
 	logLevel := envOr(lookup, "COWS_LOG_LEVEL", "info")
 	shutdownTimeout := envOr(lookup, "COWS_SHUTDOWN_TIMEOUT", "10s")
 	sessionLifetime := envOr(lookup, "COWS_SESSION_LIFETIME", "8h")
@@ -105,7 +107,8 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	flags.StringVar(&mountArchiveRoot, "mount-archive-root", mountArchiveRoot, "root directory for archived COWS-managed workspace data")
 	flags.StringVar(&podmanSocket, "podman-socket", podmanSocket, "rootless Podman Unix socket path")
 	flags.StringVar(&hostStorageValue, "host-storage-bytes", hostStorageValue, "configured allocatable host storage in bytes; zero means unknown")
-	flags.StringVar(&hostOverbookingValue, "host-overbooking-factor", hostOverbookingValue, "CPU and memory host overbooking factor")
+	flags.StringVar(&hostCPUOverbookingValue, "host-cpu-overbooking-factor", hostCPUOverbookingValue, "CPU host overbooking factor")
+	flags.StringVar(&hostMemoryOverbookingValue, "host-memory-overbooking-factor", hostMemoryOverbookingValue, "memory host overbooking factor")
 	flags.StringVar(&logLevel, "log-level", logLevel, "log level: debug, info, warn, or error")
 	flags.StringVar(&shutdownTimeout, "shutdown-timeout", shutdownTimeout, "graceful shutdown timeout")
 	flags.StringVar(&sessionLifetime, "session-lifetime", sessionLifetime, "authenticated session lifetime")
@@ -165,9 +168,13 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	if err != nil || hostStorageBytes < 0 {
 		return Config{}, fmt.Errorf("host storage bytes must be zero or positive: %q", hostStorageValue)
 	}
-	hostOverbookingFactor, err := strconv.ParseFloat(strings.TrimSpace(hostOverbookingValue), 64)
-	if err != nil || math.IsNaN(hostOverbookingFactor) || math.IsInf(hostOverbookingFactor, 0) || hostOverbookingFactor < quota.MinOverbookingFactor || hostOverbookingFactor > quota.MaxOverbookingFactor {
-		return Config{}, fmt.Errorf("host overbooking factor must be between %.1f and %d: %q", quota.MinOverbookingFactor, quota.MaxOverbookingFactor, hostOverbookingValue)
+	hostCPUOverbookingFactor, err := strconv.ParseFloat(strings.TrimSpace(hostCPUOverbookingValue), 64)
+	if err != nil || math.IsNaN(hostCPUOverbookingFactor) || math.IsInf(hostCPUOverbookingFactor, 0) || hostCPUOverbookingFactor < quota.MinOverbookingFactor || hostCPUOverbookingFactor > quota.MaxOverbookingFactor {
+		return Config{}, fmt.Errorf("host CPU overbooking factor must be between %.1f and %d: %q", quota.MinOverbookingFactor, quota.MaxOverbookingFactor, hostCPUOverbookingValue)
+	}
+	hostMemoryOverbookingFactor, err := strconv.ParseFloat(strings.TrimSpace(hostMemoryOverbookingValue), 64)
+	if err != nil || math.IsNaN(hostMemoryOverbookingFactor) || math.IsInf(hostMemoryOverbookingFactor, 0) || hostMemoryOverbookingFactor < quota.MinOverbookingFactor || hostMemoryOverbookingFactor > quota.MaxOverbookingFactor {
+		return Config{}, fmt.Errorf("host memory overbooking factor must be between %.1f and %d: %q", quota.MinOverbookingFactor, quota.MaxOverbookingFactor, hostMemoryOverbookingValue)
 	}
 
 	level, err := parseLogLevel(logLevel)
@@ -222,31 +229,32 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	}
 
 	return Config{
-		ListenAddr:             listenAddr,
-		DatabasePath:           databasePath,
-		MountRoot:              mountRoot,
-		MountArchiveRoot:       mountArchiveRoot,
-		PodmanSocket:           podmanSocket,
-		HostStorageBytes:       hostStorageBytes,
-		HostOverbookingFactor:  hostOverbookingFactor,
-		LogLevel:               level,
-		ShutdownTimeout:        timeout,
-		SessionLifetime:        sessionDuration,
-		CookieSecure:           cookieSecure,
-		BootstrapAdminUsername: bootstrapUsername,
-		BootstrapAdminPassword: bootstrapPassword,
-		RegistrationEnabled:    registrationEnabled,
-		RegistrationGroups:     registrationGroups,
-		RegistrationQuota:      registrationQuota,
-		EmailEnabled:           emailEnabled,
-		SMTPHost:               strings.TrimSpace(smtpHost),
-		SMTPPort:               smtpPort,
-		SMTPFrom:               strings.TrimSpace(smtpFrom),
-		SMTPUsername:           smtpUsername,
-		SMTPPassword:           smtpPassword,
-		SMTPRequireTLS:         smtpRequireTLS,
-		EmailWarningLeadTime:   emailWarningLeadTime,
-		EmailRetryInterval:     emailRetryInterval,
+		ListenAddr:                  listenAddr,
+		DatabasePath:                databasePath,
+		MountRoot:                   mountRoot,
+		MountArchiveRoot:            mountArchiveRoot,
+		PodmanSocket:                podmanSocket,
+		HostStorageBytes:            hostStorageBytes,
+		HostCPUOverbookingFactor:    hostCPUOverbookingFactor,
+		HostMemoryOverbookingFactor: hostMemoryOverbookingFactor,
+		LogLevel:                    level,
+		ShutdownTimeout:             timeout,
+		SessionLifetime:             sessionDuration,
+		CookieSecure:                cookieSecure,
+		BootstrapAdminUsername:      bootstrapUsername,
+		BootstrapAdminPassword:      bootstrapPassword,
+		RegistrationEnabled:         registrationEnabled,
+		RegistrationGroups:          registrationGroups,
+		RegistrationQuota:           registrationQuota,
+		EmailEnabled:                emailEnabled,
+		SMTPHost:                    strings.TrimSpace(smtpHost),
+		SMTPPort:                    smtpPort,
+		SMTPFrom:                    strings.TrimSpace(smtpFrom),
+		SMTPUsername:                smtpUsername,
+		SMTPPassword:                smtpPassword,
+		SMTPRequireTLS:              smtpRequireTLS,
+		EmailWarningLeadTime:        emailWarningLeadTime,
+		EmailRetryInterval:          emailRetryInterval,
 	}, nil
 }
 

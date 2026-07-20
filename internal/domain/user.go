@@ -173,12 +173,13 @@ type GroupQuota struct {
 }
 
 type HostSettings struct {
-	ID                   int
-	HostStorageBytes     int64
-	OverbookingFactor    float64
-	ReservedStorageBytes int64
-	CreatedAt            time.Time
-	UpdatedAt            time.Time
+	ID                      int
+	HostStorageBytes        int64
+	CPUOverbookingFactor    float64
+	MemoryOverbookingFactor float64
+	ReservedStorageBytes    int64
+	CreatedAt               time.Time
+	UpdatedAt               time.Time
 }
 
 type ResourceRequest struct {

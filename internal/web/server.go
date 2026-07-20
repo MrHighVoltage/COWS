@@ -107,10 +107,11 @@ type quotaFormData struct {
 }
 
 type settingsFormData struct {
-	HostStorageGiB     string
-	OverbookingFactor  string
-	ReservedStorageGiB string
-	Error              string
+	HostStorageGiB          string
+	CPUOverbookingFactor    string
+	MemoryOverbookingFactor string
+	ReservedStorageGiB      string
+	Error                   string
 }
 
 type allocationView struct {
@@ -1807,8 +1808,8 @@ func (s *Server) adminSettingsUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	form := settingsFormData{
-		HostStorageGiB: r.FormValue("host_storage_gib"), OverbookingFactor: r.FormValue("overbooking_factor"),
-		ReservedStorageGiB: r.FormValue("reserved_storage_gib"),
+		HostStorageGiB: r.FormValue("host_storage_gib"), CPUOverbookingFactor: r.FormValue("cpu_overbooking_factor"),
+		MemoryOverbookingFactor: r.FormValue("memory_overbooking_factor"), ReservedStorageGiB: r.FormValue("reserved_storage_gib"),
 	}
 	input, err := parseSettingsForm(form)
 	if err == nil && s.quota == nil {
@@ -2370,15 +2371,19 @@ func parseSettingsForm(form settingsFormData) (quota.HostSettingsInput, error) {
 	if err != nil {
 		return quota.HostSettingsInput{}, quota.ErrInvalidQuota
 	}
-	factor, err := strconv.ParseFloat(strings.TrimSpace(form.OverbookingFactor), 64)
-	if err != nil || math.IsNaN(factor) || math.IsInf(factor, 0) || factor < quota.MinOverbookingFactor || factor > quota.MaxOverbookingFactor {
+	cpuFactor, err := strconv.ParseFloat(strings.TrimSpace(form.CPUOverbookingFactor), 64)
+	if err != nil || math.IsNaN(cpuFactor) || math.IsInf(cpuFactor, 0) || cpuFactor < quota.MinOverbookingFactor || cpuFactor > quota.MaxOverbookingFactor {
+		return quota.HostSettingsInput{}, quota.ErrInvalidQuota
+	}
+	memoryFactor, err := strconv.ParseFloat(strings.TrimSpace(form.MemoryOverbookingFactor), 64)
+	if err != nil || math.IsNaN(memoryFactor) || math.IsInf(memoryFactor, 0) || memoryFactor < quota.MinOverbookingFactor || memoryFactor > quota.MaxOverbookingFactor {
 		return quota.HostSettingsInput{}, quota.ErrInvalidQuota
 	}
 	reservedStorage, err := parseNonNegativeResource(form.ReservedStorageGiB, 1<<30)
 	if err != nil {
 		return quota.HostSettingsInput{}, quota.ErrInvalidQuota
 	}
-	return quota.HostSettingsInput{HostStorageBytes: storage, OverbookingFactor: factor, ReservedStorageBytes: reservedStorage}, nil
+	return quota.HostSettingsInput{HostStorageBytes: storage, CPUOverbookingFactor: cpuFactor, MemoryOverbookingFactor: memoryFactor, ReservedStorageBytes: reservedStorage}, nil
 }
 
 func parseNonNegativeInt(value string) (int64, error) {
@@ -2399,9 +2404,10 @@ func parseNonNegativeResource(value string, multiplier int64) (int64, error) {
 
 func settingsFormFromDomain(settings domain.HostSettings) settingsFormData {
 	return settingsFormData{
-		HostStorageGiB:     strconv.FormatInt(settings.HostStorageBytes/(1<<30), 10),
-		OverbookingFactor:  strconv.FormatFloat(settings.OverbookingFactor, 'f', -1, 64),
-		ReservedStorageGiB: strconv.FormatInt(settings.ReservedStorageBytes/(1<<30), 10),
+		HostStorageGiB:          strconv.FormatInt(settings.HostStorageBytes/(1<<30), 10),
+		CPUOverbookingFactor:    strconv.FormatFloat(settings.CPUOverbookingFactor, 'f', -1, 64),
+		MemoryOverbookingFactor: strconv.FormatFloat(settings.MemoryOverbookingFactor, 'f', -1, 64),
+		ReservedStorageGiB:      strconv.FormatInt(settings.ReservedStorageBytes/(1<<30), 10),
 	}
 }
 
@@ -2795,7 +2801,7 @@ func quotaFormError(err error) string {
 
 func settingsFormError(err error) string {
 	if errors.Is(err, quota.ErrInvalidQuota) {
-		return "Enter an overbooking factor between 0.1 and 1000000 and valid storage values. Reserved storage cannot exceed configured storage capacity."
+		return "Enter CPU and memory overbooking factors between 0.1 and 1000 and valid storage values. Reserved storage cannot exceed configured storage capacity."
 	}
 	return "The host settings could not be saved."
 }

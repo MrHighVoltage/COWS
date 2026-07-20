@@ -85,10 +85,13 @@ button:focus-visible, .primary-button:focus-visible, .secondary-button:focus-vis
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem 1rem; }
 .form-grid > div { display: grid; min-width: 0; gap: .35rem; }
 .form-grid label { margin-top: 0; }
+.host-overbooking-settings { grid-column: 1 / -1; display: grid; min-width: 0; gap: .35rem; }
+.field-label { margin: 0; color: #304554; font-weight: 700; }
+.host-overbooking-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
 .host-overbooking-field { display: grid; grid-template-columns: 1fr auto; gap: .35rem .65rem; align-items: center; }
 .host-overbooking-field input[type="range"] { grid-column: 1 / -1; width: 100%; accent-color: #176b8f; }
 .host-overbooking-field input[type="number"] { width: 8rem; min-height: 2.25rem; padding: .35rem .5rem; }
-.host-overbooking-field .muted, .host-overbooking-field .alert { grid-column: 1 / -1; }
+.host-overbooking-grid > .muted, .host-overbooking-grid > .alert { grid-column: 1 / -1; }
 .workspace-resource-options { display: grid; gap: .75rem; margin-top: 1rem; }
 .resource-choice { display: grid; gap: .65rem; margin: 0; padding: 1rem; border: 1px solid #d7dee5; border-radius: .4rem; background: #f7fafb; }
 .resource-choice legend { padding: 0 .35rem; color: #304554; font-weight: 700; }
@@ -275,6 +278,7 @@ code { color: #465866; font-size: .82rem; }
   .form-actions { align-items: stretch; flex-direction: column-reverse; }
   .form-actions > * { width: 100%; }
   .form-grid { grid-template-columns: 1fr; }
+  .host-overbooking-grid { grid-template-columns: 1fr; }
   .resource-slider-grid { grid-template-columns: 1fr; }
   .runtime-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .resource-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

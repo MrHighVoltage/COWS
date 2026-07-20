@@ -930,10 +930,11 @@ func deleteQuota(ctx context.Context, db *sql.DB, query, id, quotaType string) e
 func (s *Store) FindHostSettings(ctx context.Context) (domain.HostSettings, error) {
 	var settings domain.HostSettings
 	var createdUnix, updatedUnix int64
-	err := s.db.QueryRowContext(ctx, `SELECT id, host_storage_bytes, overbooking_factor,
+	err := s.db.QueryRowContext(ctx, `SELECT id, host_storage_bytes, cpu_overbooking_factor,
+		memory_overbooking_factor,
 		reserved_storage_bytes, created_at, updated_at
 		FROM host_settings WHERE id = 1`).Scan(&settings.ID, &settings.HostStorageBytes,
-		&settings.OverbookingFactor, &settings.ReservedStorageBytes,
+		&settings.CPUOverbookingFactor, &settings.MemoryOverbookingFactor, &settings.ReservedStorageBytes,
 		&createdUnix, &updatedUnix)
 	if err == sql.ErrNoRows {
 		return domain.HostSettings{}, repository.ErrNotFound
@@ -948,13 +949,16 @@ func (s *Store) FindHostSettings(ctx context.Context) (domain.HostSettings, erro
 
 func (s *Store) UpsertHostSettings(ctx context.Context, settings domain.HostSettings) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO host_settings
-		(id, host_storage_bytes, reserved_cpu_millis, reserved_memory_bytes, overbooking_factor, reserved_storage_bytes, created_at, updated_at)
-		VALUES (1, ?, 0, 0, ?, ?, ?, ?)
+		(id, host_storage_bytes, reserved_cpu_millis, reserved_memory_bytes, overbooking_factor, cpu_overbooking_factor, memory_overbooking_factor, reserved_storage_bytes, created_at, updated_at)
+		VALUES (1, ?, 0, 0, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET host_storage_bytes = excluded.host_storage_bytes,
 		overbooking_factor = excluded.overbooking_factor,
+		cpu_overbooking_factor = excluded.cpu_overbooking_factor,
+		memory_overbooking_factor = excluded.memory_overbooking_factor,
 		reserved_storage_bytes = excluded.reserved_storage_bytes,
-		updated_at = excluded.updated_at`, settings.HostStorageBytes, settings.OverbookingFactor,
-		settings.ReservedStorageBytes, unixOrZero(settings.CreatedAt), unixOrZero(settings.UpdatedAt))
+		updated_at = excluded.updated_at`, settings.HostStorageBytes, settings.CPUOverbookingFactor,
+		settings.CPUOverbookingFactor, settings.MemoryOverbookingFactor, settings.ReservedStorageBytes,
+		unixOrZero(settings.CreatedAt), unixOrZero(settings.UpdatedAt))
 	if err != nil {
 		return fmt.Errorf("upsert host settings: %w", err)
 	}
