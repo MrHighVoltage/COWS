@@ -2705,16 +2705,47 @@ func workspaceFormError(err error) string {
 }
 
 func workspaceActionError(action string, err error) string {
+	verb := workspaceActionVerb(action)
+	var quotaErr *quota.QuotaInsufficientError
+	var capacityErr *quota.CapacityInsufficientError
 	switch {
+	case errors.Is(err, quota.ErrQuotaUnavailable):
+		return "This workspace cannot be " + verb + " because your resource quota is not assigned."
+	case errors.As(err, &quotaErr):
+		if quotaErr.Resource == "running workspaces" {
+			return fmt.Sprintf("This workspace cannot be %s because your running-workspace quota is full (%d of %d).", verb, quotaErr.Current, quotaErr.Limit)
+		}
+		return fmt.Sprintf("This workspace cannot be %s because it would exceed your assigned %s quota (%s allocated, %s requested, %s limit).", verb, quotaErr.Resource, resourceAmount(quotaErr.Resource, quotaErr.Current), resourceAmount(quotaErr.Resource, quotaErr.Requested), resourceAmount(quotaErr.Resource, quotaErr.Limit))
+	case errors.As(err, &capacityErr):
+		return fmt.Sprintf("This workspace cannot be %s because the host has only %s available, but it needs %s.", verb, resourceAmount(capacityErr.Resource, capacityErr.Available), resourceAmount(capacityErr.Resource, capacityErr.Requested))
+	case errors.Is(err, quota.ErrCapacityUnavailable):
+		return "This workspace cannot be " + verb + " because current host capacity is unavailable."
 	case errors.Is(err, workspace.ErrRuntimeUnavailable):
 		return "The rootless Podman runtime is unavailable. Try again later."
+	case errors.Is(err, runtime.ErrUnavailable):
+		return "This workspace could not be " + verb + " because the rootless Podman runtime is unavailable."
+	case errors.Is(err, runtime.ErrConflict):
+		return "This workspace could not be " + verb + " because the runtime reported a conflicting container state. Reconcile the workspace and try again."
+	case errors.Is(err, runtime.ErrNotFound):
+		return "This workspace could not be " + verb + " because its container no longer exists. Reconcile the workspace and try again."
+	case errors.Is(err, context.DeadlineExceeded):
+		return "This workspace could not be " + verb + " before the operation timed out."
 	case errors.Is(err, workspace.ErrWorkspaceStateConflict):
-		return "This workspace is not in a state where it can be " + workspaceActionVerb(action) + "."
+		return "This workspace is not in a state where it can be " + verb + "."
 	case errors.Is(err, runtime.ErrNotSupported):
 		return "This operation is not supported by the configured rootless Podman runtime."
+	case errors.Is(err, quota.ErrQuotaExceeded):
+		return "This workspace cannot be " + verb + " because it would exceed your assigned resource quota."
 	default:
-		return "The workspace could not be " + workspaceActionVerb(action) + "."
+		return "The workspace could not be " + verb + "."
 	}
+}
+
+func resourceAmount(resource string, value int64) string {
+	if strings.EqualFold(resource, "memory") {
+		return fmt.Sprintf("%d MiB", value/(1<<20))
+	}
+	return fmt.Sprintf("%d mCPU", value)
 }
 
 func terminalErrorText(err error) string {

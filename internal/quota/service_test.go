@@ -121,6 +121,33 @@ func TestSchedulerFailsClosed(t *testing.T) {
 	}
 }
 
+func TestCheckStartReportsQuotaAndHostCapacity(t *testing.T) {
+	store, _, adminID, studentID := quotaTestStore(t)
+	ctx := context.Background()
+	service := New(store)
+	if _, err := service.EnsureHostSettings(ctx, HostSettingsInput{HostStorageBytes: 100 << 30}); err != nil {
+		t.Fatalf("initialize host settings: %v", err)
+	}
+	if _, err := service.Set(ctx, adminID, studentID, Input{MaxCPUMillis: 1000, MaxMemoryBytes: 4 << 30, MaxRunningWorkspaces: 2}); err != nil {
+		t.Fatalf("set quota: %v", err)
+	}
+	scheduler := NewScheduler(store, fakeCapacity{capacity: runtime.HostCapacity{CPUMillis: 4000, MemoryBytes: 8 << 30}}, fakeStorage{})
+	err := scheduler.CheckStart(ctx, studentID, domain.ResourceRequest{CPUMillis: 2000, MemoryBytes: 2 << 30})
+	var quotaErr *QuotaInsufficientError
+	if !errors.As(err, &quotaErr) || quotaErr.Resource != "CPU" {
+		t.Fatalf("quota start error = %v, want typed CPU quota error", err)
+	}
+	if _, err := service.Set(ctx, adminID, studentID, Input{MaxMemoryBytes: 4 << 30, MaxRunningWorkspaces: 2}); err != nil {
+		t.Fatalf("set unlimited CPU quota: %v", err)
+	}
+	scheduler = NewScheduler(store, fakeCapacity{capacity: runtime.HostCapacity{CPUMillis: 1000, MemoryBytes: 8 << 30}}, fakeStorage{})
+	err = scheduler.CheckStart(ctx, studentID, domain.ResourceRequest{CPUMillis: 2000, MemoryBytes: 2 << 30})
+	var capacityErr *CapacityInsufficientError
+	if !errors.As(err, &capacityErr) || capacityErr.Resource != "CPU" {
+		t.Fatalf("capacity start error = %v, want typed CPU capacity error", err)
+	}
+}
+
 func TestAdministratorsAreUnlimitedWithoutQuotaAndZeroLimitsAreUnlimited(t *testing.T) {
 	store, _, adminID, studentID := quotaTestStore(t)
 	ctx := context.Background()

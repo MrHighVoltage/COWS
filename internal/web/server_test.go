@@ -84,6 +84,17 @@ func TestWorkspaceActionReturnPathKeepsAdministratorRuntimeContext(t *testing.T)
 	}
 }
 
+func TestWorkspaceActionErrorExplainsQuotaAndCapacity(t *testing.T) {
+	quotaMessage := workspaceActionError("start", &quota.QuotaInsufficientError{Resource: "CPU", Current: 1000, Limit: 2000, Requested: 1500})
+	if !strings.Contains(quotaMessage, "assigned CPU quota") || !strings.Contains(quotaMessage, "1000 mCPU") {
+		t.Fatalf("quota message = %q, want actionable CPU details", quotaMessage)
+	}
+	capacityMessage := workspaceActionError("start", &quota.CapacityInsufficientError{Resource: "memory", Available: 1 << 30, Requested: 2 << 30})
+	if !strings.Contains(capacityMessage, "host") || !strings.Contains(capacityMessage, "1024 MiB") || !strings.Contains(capacityMessage, "2048 MiB") {
+		t.Fatalf("capacity message = %q, want actionable memory details", capacityMessage)
+	}
+}
+
 func TestFileDeleteParent(t *testing.T) {
 	tests := []struct {
 		path string
