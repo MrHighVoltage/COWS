@@ -102,7 +102,7 @@ compatibility API endpoints internally, but Docker is not a supported runtime.
 Workspace capacity checks also require `COWS_HOST_STORAGE_BYTES` to be set to
 the initial storage amount COWS may allocate. The value seeds the persistent
 host settings row only when it does not exist; administrators can change host
-storage and reserved CPU, memory, and storage in **Settings** without
+storage, CPU/memory overbooking, and reserved storage in **Settings** without
 restarting COWS. Zero leaves storage capacity unknown and causes workspace
 creation to fail closed. Directory mounts are created below `COWS_MOUNT_ROOT`
 (default `./data/cows-mounts`) in per-container directories named from the

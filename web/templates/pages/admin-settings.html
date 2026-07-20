@@ -15,13 +15,14 @@
       <span class="muted">Zero means unknown and blocks workspace creation.</span>
     </div>
     <div>
-      <label for="reserved-cpu-millis">Reserved CPU (mCPU)</label>
-      <input id="reserved-cpu-millis" name="reserved_cpu_millis" type="number" min="0" max="1000000" value="{{ .SettingsForm.ReservedCPUMillis }}" required>
-      <span class="muted">Held back from workspace allocations.</span>
-    </div>
-    <div>
-      <label for="reserved-memory-mib">Reserved memory (MiB)</label>
-      <input id="reserved-memory-mib" name="reserved_memory_mib" type="number" min="0" max="1099511627776" value="{{ .SettingsForm.ReservedMemoryMiB }}" required>
+      <label for="overbooking-factor-slider">CPU and memory overbooking factor</label>
+      <div class="host-overbooking-field" x-data="{ factor: Number('{{ .SettingsForm.OverbookingFactor }}') || 1 }">
+        <input id="overbooking-factor-slider" type="range" min="0.1" max="10" step="0.1" x-model.number="factor" aria-label="CPU and memory overbooking factor from 0.1 to 10">
+        <label for="overbooking-factor">Factor</label>
+        <input id="overbooking-factor" name="overbooking_factor" type="number" min="0.1" max="1000000" step="0.1" x-model.number="factor" required>
+        <span class="muted">The slider covers 0.1 to 10. Use the field for higher values. 1.0 uses physical CPU and memory capacity.</span>
+        <p class="alert alert-warning" x-show="factor &gt; 1" x-cloak role="alert">Overbooking above 1 can cause system lockups, especially when memory is overbooked.</p>
+      </div>
     </div>
     <div>
       <label for="reserved-storage-gib">Reserved storage (GiB)</label>
