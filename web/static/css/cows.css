@@ -184,13 +184,16 @@ code { color: #465866; font-size: .82rem; }
 .workspace-access-shell:fullscreen .access-tab-controls { padding: .1rem .25rem; }
 .workspace-access-shell:fullscreen .access-panels { display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; }
 .workspace-access-shell:fullscreen .access-panel:not([hidden]) { display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; }
-.workspace-access-shell:fullscreen .access-service-panel { display: flex; flex: 1 1 auto; flex-direction: column; width: 100%; height: auto; min-height: 0; padding: .35rem; }
+.workspace-access-shell:fullscreen .access-service-panel { display: flex; flex: 1 1 auto; flex-direction: column; width: 100%; height: auto; min-height: 0; padding: 0; border: 0; border-radius: 0; box-shadow: none; background: transparent; }
 .workspace-access-shell:fullscreen .access-control-bar { min-height: 1.8rem; gap: .25rem; }
 .workspace-access-shell:fullscreen .access-control-bar h2 { font-size: .85rem; }
 .workspace-access-shell:fullscreen .access-control-bar button { min-height: 1.7rem; padding: .2rem .4rem; font-size: .75rem; }
 .workspace-access-shell:fullscreen .terminal-identity select { min-height: 1.7rem; padding: .15rem .3rem; }
 .workspace-access-shell:fullscreen .access-session-note { display: none; }
 .workspace-access-shell:fullscreen .terminal, .workspace-access-shell:fullscreen .desktop-display { flex: 1 1 auto; width: 100%; max-width: 100%; height: auto; min-width: 0; min-height: 0; }
+.workspace-access-shell:fullscreen [data-access-files] { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; }
+.workspace-access-shell:fullscreen .file-panel { display: flex; flex: 1 1 auto; flex-direction: column; width: 100%; max-width: 100%; min-width: 0; min-height: 0; margin: 0; padding: .5rem; border: 0; border-radius: 0; box-shadow: none; overflow: hidden; }
+.workspace-access-shell:fullscreen .file-panel .table-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; }
 .terminal, .terminal .xterm, .terminal .xterm-screen, .terminal .xterm-viewport { min-width: 0; max-width: 100%; }
 .workspace-details summary { cursor: pointer; color: #176b8f; font-weight: 700; }
 .workspace-details dl { display: grid; grid-template-columns: max-content minmax(8rem, 1fr); gap: .25rem .75rem; margin: .65rem 0 0; font-size: .8rem; }
@@ -212,7 +215,7 @@ code { color: #465866; font-size: .82rem; }
 .file-upload-summary strong { overflow-wrap: anywhere; }
 .file-upload-status progress { display: block; width: 100%; height: .7rem; accent-color: #176b8f; }
 .file-upload-stats { margin-top: .35rem; color: #52616f; font-size: .78rem; }
-.terminal-panel:fullscreen, .desktop-panel:fullscreen { display: flex; flex-direction: column; width: 100vw; height: 100vh; padding: 1rem; border: 0; border-radius: 0; }
+.terminal-panel:fullscreen, .desktop-panel:fullscreen { display: flex; flex-direction: column; width: 100vw; height: 100vh; padding: 0; border: 0; border-radius: 0; }
 .terminal-panel:fullscreen .terminal, .desktop-panel:fullscreen .desktop-display { flex: 1; height: auto; min-height: 0; }
 .quota-table { min-width: 74rem; }
 .quota-summary { display: grid; grid-template-columns: repeat(2, minmax(8rem, 1fr)); gap: .65rem 1rem; min-width: 18rem; }
