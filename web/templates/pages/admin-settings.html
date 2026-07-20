@@ -14,14 +14,23 @@
       <input id="host-storage-gib" name="host_storage_gib" type="number" min="0" max="1073741824" value="{{ .SettingsForm.HostStorageGiB }}" required>
       <span class="muted">Zero means unknown and blocks workspace creation.</span>
     </div>
-    <div>
-      <label for="overbooking-factor-slider">CPU and memory overbooking factor</label>
-      <div class="host-overbooking-field" x-data="{ factor: Number('{{ .SettingsForm.OverbookingFactor }}') || 1 }">
-        <input id="overbooking-factor-slider" type="range" min="0.1" max="10" step="0.1" x-model.number="factor" aria-label="CPU and memory overbooking factor from 0.1 to 10">
-        <label for="overbooking-factor">Factor</label>
-        <input id="overbooking-factor" name="overbooking_factor" type="number" min="0.1" max="1000000" step="0.1" x-model.number="factor" required>
-        <span class="muted">The slider covers 0.1 to 10. Use the field for higher values. 1.0 uses physical CPU and memory capacity.</span>
-        <p class="alert alert-warning" x-show="factor &gt; 1" x-cloak role="alert">Overbooking above 1 can cause system lockups, especially when memory is overbooked.</p>
+    <div class="host-overbooking-settings" x-data="{ cpu: Number('{{ .SettingsForm.CPUOverbookingFactor }}') || 1, memory: Number('{{ .SettingsForm.MemoryOverbookingFactor }}') || 1 }">
+      <p class="field-label">CPU and memory overbooking factors</p>
+      <div class="host-overbooking-grid">
+        <div class="host-overbooking-field">
+          <label for="cpu-overbooking-factor-slider">CPU factor</label>
+          <input id="cpu-overbooking-factor-slider" type="range" min="0.1" max="10" step="0.1" x-model.number="cpu" aria-label="CPU overbooking factor from 0.1 to 10">
+          <label for="cpu-overbooking-factor">Factor</label>
+          <input id="cpu-overbooking-factor" name="cpu_overbooking_factor" type="number" min="0.1" max="1000" step="0.1" x-model.number="cpu" required>
+        </div>
+        <div class="host-overbooking-field">
+          <label for="memory-overbooking-factor-slider">Memory factor</label>
+          <input id="memory-overbooking-factor-slider" type="range" min="0.1" max="10" step="0.1" x-model.number="memory" aria-label="memory overbooking factor from 0.1 to 10">
+          <label for="memory-overbooking-factor">Factor</label>
+          <input id="memory-overbooking-factor" name="memory_overbooking_factor" type="number" min="0.1" max="1000" step="0.1" x-model.number="memory" required>
+        </div>
+        <span class="muted">Each slider covers 0.1 to 10. Use the fields for higher values. 1.0 uses physical capacity.</span>
+        <p class="alert alert-warning" x-show="cpu &gt; 1 || memory &gt; 1" x-cloak role="alert">Overbooking above 1 can cause system lockups, especially when memory is overbooked.</p>
       </div>
     </div>
     <div>

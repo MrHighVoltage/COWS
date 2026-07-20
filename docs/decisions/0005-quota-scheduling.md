@@ -14,14 +14,14 @@ COWS uses a deterministic admission check before recording a workspace:
 4. Reject the request if an ordinary user has no assigned quota or if an
    assigned finite quota would be exceeded.
 5. Load host CPU, memory, and storage capacity.
-6. Scale physical host CPU and memory by the configured overbooking factor,
+6. Scale physical host CPU and memory by their configured overbooking factors,
    then subtract all existing workspace allocations.
 7. Reject the request if any requested resource does not fit.
 
-The default factor is `1.0`, which does not overbook. Values below `1.0` leave
-headroom; values above `1.0` allow admission overbooking and are warned about in
-the administrator UI because memory overbooking can lock up the host. Runtime
-hard limits still apply to each container. Allocations remain reserved for stopped
+The default CPU and memory factors are `1.0`, which does not overbook. Values
+below `1.0` leave headroom; values above `1.0` allow admission overbooking and
+are warned about in the administrator UI because memory overbooking can lock up
+the host. Runtime hard limits still apply to each container. Allocations remain reserved for stopped
 workspaces under the initial policy. A missing quota is an error for ordinary
 users, while administrators are unlimited when no quota row is assigned. A
 zero value in an assigned quota explicitly means unlimited for that resource.
@@ -31,11 +31,12 @@ administrators.
 ## Capacity sources
 
 Rootless Podman reports host CPU and memory through its local service API.
-Storage capacity, the overbooking factor, and reserved storage are stored in the
-singleton `host_settings` record. `COWS_HOST_STORAGE_BYTES` and
-`COWS_HOST_OVERBOOKING_FACTOR` seed the record when it is first created;
-administrators can update them through the web UI without a process restart. A
-zero storage value means unknown and causes admission to fail closed.
+Storage capacity, the CPU/memory overbooking factors, and reserved storage are
+stored in the singleton `host_settings` record. `COWS_HOST_STORAGE_BYTES`,
+`COWS_HOST_CPU_OVERBOOKING_FACTOR`, and `COWS_HOST_MEMORY_OVERBOOKING_FACTOR`
+seed the record when it is first created; administrators can update them through
+the web UI without a process restart. A zero storage value means unknown and
+causes admission to fail closed.
 Administrator updates create audit events.
 
 Measured storage is the writable container layer plus helper-measured managed
