@@ -122,5 +122,10 @@ reviewed. See [SECURITY.md](SECURITY.md).
 
 ## License
 
-The project license has not yet been selected. Do not assume that the current
-repository is ready for redistribution under a particular license.
+COWS is licensed under the **GNU Affero General Public License, version 3 or
+any later version**. See [LICENSE](LICENSE).
+
+Commercial use, hosted services, and selling services built with COWS are
+allowed. The AGPL copyleft and network-source requirements apply to modified
+versions that are conveyed or offered for remote network interaction. COWS
+project contributions are intended to remain under the AGPL.
