@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/mail"
 	"os"
 	"path/filepath"
@@ -23,6 +24,7 @@ type Config struct {
 	MountArchiveRoot       string
 	PodmanSocket           string
 	HostStorageBytes       int64
+	HostOverbookingFactor  float64
 	LogLevel               slog.Level
 	ShutdownTimeout        time.Duration
 	SessionLifetime        time.Duration
@@ -55,6 +57,7 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	defaultPodmanSocket := filepath.Join("/run/user", strconv.Itoa(os.Getuid()), "podman", "podman.sock")
 	podmanSocket := envOr(lookup, "COWS_PODMAN_SOCKET", defaultPodmanSocket)
 	hostStorageValue := envOr(lookup, "COWS_HOST_STORAGE_BYTES", "0")
+	hostOverbookingValue := envOr(lookup, "COWS_HOST_OVERBOOKING_FACTOR", "1")
 	logLevel := envOr(lookup, "COWS_LOG_LEVEL", "info")
 	shutdownTimeout := envOr(lookup, "COWS_SHUTDOWN_TIMEOUT", "10s")
 	sessionLifetime := envOr(lookup, "COWS_SESSION_LIFETIME", "8h")
@@ -102,6 +105,7 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	flags.StringVar(&mountArchiveRoot, "mount-archive-root", mountArchiveRoot, "root directory for archived COWS-managed workspace data")
 	flags.StringVar(&podmanSocket, "podman-socket", podmanSocket, "rootless Podman Unix socket path")
 	flags.StringVar(&hostStorageValue, "host-storage-bytes", hostStorageValue, "configured allocatable host storage in bytes; zero means unknown")
+	flags.StringVar(&hostOverbookingValue, "host-overbooking-factor", hostOverbookingValue, "CPU and memory host overbooking factor")
 	flags.StringVar(&logLevel, "log-level", logLevel, "log level: debug, info, warn, or error")
 	flags.StringVar(&shutdownTimeout, "shutdown-timeout", shutdownTimeout, "graceful shutdown timeout")
 	flags.StringVar(&sessionLifetime, "session-lifetime", sessionLifetime, "authenticated session lifetime")
@@ -160,6 +164,10 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	hostStorageBytes, err := strconv.ParseInt(hostStorageValue, 10, 64)
 	if err != nil || hostStorageBytes < 0 {
 		return Config{}, fmt.Errorf("host storage bytes must be zero or positive: %q", hostStorageValue)
+	}
+	hostOverbookingFactor, err := strconv.ParseFloat(strings.TrimSpace(hostOverbookingValue), 64)
+	if err != nil || math.IsNaN(hostOverbookingFactor) || math.IsInf(hostOverbookingFactor, 0) || hostOverbookingFactor < quota.MinOverbookingFactor || hostOverbookingFactor > quota.MaxOverbookingFactor {
+		return Config{}, fmt.Errorf("host overbooking factor must be between %.1f and %d: %q", quota.MinOverbookingFactor, quota.MaxOverbookingFactor, hostOverbookingValue)
 	}
 
 	level, err := parseLogLevel(logLevel)
@@ -220,6 +228,7 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 		MountArchiveRoot:       mountArchiveRoot,
 		PodmanSocket:           podmanSocket,
 		HostStorageBytes:       hostStorageBytes,
+		HostOverbookingFactor:  hostOverbookingFactor,
 		LogLevel:               level,
 		ShutdownTimeout:        timeout,
 		SessionLifetime:        sessionDuration,

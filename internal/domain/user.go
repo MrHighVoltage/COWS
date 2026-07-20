@@ -175,8 +175,7 @@ type GroupQuota struct {
 type HostSettings struct {
 	ID                   int
 	HostStorageBytes     int64
-	ReservedCPUMillis    int64
-	ReservedMemoryBytes  int64
+	OverbookingFactor    float64
 	ReservedStorageBytes int64
 	CreatedAt            time.Time
 	UpdatedAt            time.Time

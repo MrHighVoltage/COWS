@@ -123,12 +123,15 @@ Resource limits must be enforced by rootless Podman wherever possible. COWS
 quotas alone are not a containment mechanism. Capacity calculations must fail
 closed when host information is unavailable.
 
-Administrator host settings control reserved CPU and memory resources and retain
-storage reporting settings for future policy work. They are persisted in SQLite,
-protected by administrator authorization and CSRF checks, and audited. The
-startup configuration value only initializes missing settings; it does not
-silently overwrite web-managed values. Storage is measured for display and
-finite user-allowance checks, not reserved per template or workspace.
+Administrator host settings control the CPU/memory overbooking factor and retain
+storage reporting settings for future policy work. A factor above `1.0` is an
+explicit capacity-admission overbooking choice and can cause system lockups,
+especially when memory is overbooked; it is not a runtime safety limit. Settings
+are persisted in SQLite, protected by administrator authorization and CSRF
+checks, and audited. The startup configuration value only initializes missing
+settings; it does not silently overwrite web-managed values. Storage is
+measured for display and finite user-allowance checks, not reserved per template
+or workspace.
 
 Lifecycle timeout processing must fail closed around ambiguous state. If COWS
 cannot establish whether a workspace was connected, stopped, or deleted, it

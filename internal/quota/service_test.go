@@ -175,30 +175,43 @@ func TestHostSettingsAreSeededOnceAndAppliedDynamically(t *testing.T) {
 	store, _, adminID, studentID := quotaTestStore(t)
 	ctx := context.Background()
 	service := New(store)
-	seeded, err := service.EnsureHostSettings(ctx, HostSettingsInput{HostStorageBytes: 100 << 30, ReservedCPUMillis: 500})
+	seeded, err := service.EnsureHostSettings(ctx, HostSettingsInput{HostStorageBytes: 100 << 30, OverbookingFactor: 0.5})
 	if err != nil {
 		t.Fatalf("seed host settings: %v", err)
 	}
-	if seeded.ReservedCPUMillis != 500 {
+	if seeded.OverbookingFactor != 0.5 {
 		t.Fatalf("seeded settings = %+v", seeded)
 	}
-	if _, err := service.SetHostSettings(ctx, adminID, HostSettingsInput{HostStorageBytes: 40 << 30, ReservedCPUMillis: 3000, ReservedStorageBytes: 30 << 30}); err != nil {
+	if _, err := service.SetHostSettings(ctx, adminID, HostSettingsInput{HostStorageBytes: 40 << 30, OverbookingFactor: 2, ReservedStorageBytes: 30 << 30}); err != nil {
 		t.Fatalf("update host settings: %v", err)
 	}
-	unchanged, err := service.EnsureHostSettings(ctx, HostSettingsInput{HostStorageBytes: 200 << 30, ReservedCPUMillis: 0})
+	unchanged, err := service.EnsureHostSettings(ctx, HostSettingsInput{HostStorageBytes: 200 << 30, OverbookingFactor: 0.1})
 	if err != nil {
 		t.Fatalf("reseed host settings: %v", err)
 	}
-	if unchanged.HostStorageBytes != 40<<30 || unchanged.ReservedCPUMillis != 3000 {
+	if unchanged.HostStorageBytes != 40<<30 || unchanged.OverbookingFactor != 2 {
 		t.Fatalf("administrator settings were overwritten: %+v", unchanged)
 	}
-	if _, err := service.Set(ctx, adminID, studentID, Input{MaxCPUMillis: 4000, MaxMemoryBytes: 4 << 30, MaxStorageBytes: 50 << 30, MaxWorkspaces: 1}); err != nil {
+	if _, err := service.Set(ctx, adminID, studentID, Input{MaxMemoryBytes: 4 << 30, MaxStorageBytes: 50 << 30, MaxWorkspaces: 1}); err != nil {
 		t.Fatalf("set quota: %v", err)
 	}
 	scheduler := NewScheduler(store, fakeCapacity{capacity: runtime.HostCapacity{CPUMillis: 8000, MemoryBytes: 8 << 30}}, fakeStorage{})
 	request := domain.ResourceRequest{CPUMillis: 1000, MemoryBytes: 2 << 30, StorageBytes: 20 << 30}
 	if err := scheduler.CheckCreate(ctx, studentID, request); err != nil {
 		t.Fatalf("storage reservation should not block creation: %v", err)
+	}
+	if _, err := service.SetHostSettings(ctx, adminID, HostSettingsInput{HostStorageBytes: 40 << 30, OverbookingFactor: 0.5, ReservedStorageBytes: 30 << 30}); err != nil {
+		t.Fatalf("reduce host overbooking factor: %v", err)
+	}
+	var capacityErr *CapacityInsufficientError
+	if err := scheduler.CheckCreate(ctx, studentID, domain.ResourceRequest{CPUMillis: 5000, MemoryBytes: 2 << 30}); !errors.As(err, &capacityErr) || capacityErr.Resource != "CPU" {
+		t.Fatalf("reduced factor result = %v, want CPU capacity error", err)
+	}
+	if _, err := service.SetHostSettings(ctx, adminID, HostSettingsInput{HostStorageBytes: 40 << 30, OverbookingFactor: 2, ReservedStorageBytes: 30 << 30}); err != nil {
+		t.Fatalf("restore host overbooking factor: %v", err)
+	}
+	if err := scheduler.CheckCreate(ctx, studentID, domain.ResourceRequest{CPUMillis: 9000, MemoryBytes: 2 << 30}); err != nil {
+		t.Fatalf("increased factor should allow capacity: %v", err)
 	}
 }
 

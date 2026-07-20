@@ -343,13 +343,17 @@ Explicit user quotas override group quotas. Without an explicit row, finite
 group limits add together and zero makes that dimension unlimited. Missing
 quotas block ordinary users but do not restrict administrators. Host capacity
 checks still apply to administrators.
-The scheduler does not overcommit by default. Rootless Podman reports CPU and memory.
-Storage is measured for display and user allowance checks, but is not reserved
-per template or workspace and does not block creation through host capacity. The
-`COWS_HOST_STORAGE_BYTES` configuration value seeds that setting on first
-startup, but the persisted row is the source of truth afterward. Administrators
-can update storage capacity and reserved resources through the web UI without
-restarting the service. Unknown capacity fails closed, and updates are audited.
+The default host overbooking factor is `1.0`. Rootless Podman reports CPU and
+memory, and the scheduler multiplies those physical capacities by the persisted
+factor before subtracting allocated running resources. Values below `1.0` leave
+headroom; values above `1.0` permit admission overbooking and produce a visible
+warning because memory overbooking can cause system lockups. Storage is measured
+for display and user allowance checks, but is not reserved per template or
+workspace and does not block creation through host capacity. The
+`COWS_HOST_STORAGE_BYTES` and `COWS_HOST_OVERBOOKING_FACTOR` configuration values
+seed settings on first startup, but persisted values are the source of truth
+afterward. Administrators can update them through the web UI without restarting
+the service. Unknown capacity fails closed, and updates are audited.
 
 ## Frontend architecture
 

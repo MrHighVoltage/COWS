@@ -15,7 +15,7 @@ func TestLoadDefaults(t *testing.T) {
 		t.Fatalf("load defaults: %v", err)
 	}
 	defaultSocket := filepath.Join("/run/user", strconv.Itoa(os.Getuid()), "podman", "podman.sock")
-	if cfg.ListenAddr != "127.0.0.1:8080" || cfg.DatabasePath != "./data/cows.db" || cfg.MountArchiveRoot != "./data/cows-mounts-archive" || cfg.PodmanSocket != defaultSocket || cfg.HostStorageBytes != 0 {
+	if cfg.ListenAddr != "127.0.0.1:8080" || cfg.DatabasePath != "./data/cows.db" || cfg.MountArchiveRoot != "./data/cows-mounts-archive" || cfg.PodmanSocket != defaultSocket || cfg.HostStorageBytes != 0 || cfg.HostOverbookingFactor != 1 {
 		t.Fatalf("unexpected defaults: %+v", cfg)
 	}
 	if cfg.LogLevel != slog.LevelInfo || cfg.ShutdownTimeout != 10*time.Second || cfg.SessionLifetime != 8*time.Hour || cfg.CookieSecure {
@@ -32,6 +32,7 @@ func TestLoadDefaults(t *testing.T) {
 func TestLoadEnvironmentAndFlags(t *testing.T) {
 	env := map[string]string{
 		"COWS_LISTEN_ADDR":                                 "127.0.0.1:9090",
+		"COWS_HOST_OVERBOOKING_FACTOR":                     "2.5",
 		"COWS_DATABASE_PATH":                               "/tmp/cows.db",
 		"COWS_LOG_LEVEL":                                   "debug",
 		"COWS_SHUTDOWN_TIMEOUT":                            "2s",
@@ -59,7 +60,7 @@ func TestLoadEnvironmentAndFlags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load configured values: %v", err)
 	}
-	if cfg.ListenAddr != "127.0.0.1:7070" || cfg.DatabasePath != "/tmp/cows.db" || cfg.MountArchiveRoot != "/srv/cows-archive" || cfg.LogLevel != slog.LevelDebug || cfg.ShutdownTimeout != 2*time.Second || !cfg.RegistrationEnabled || len(cfg.RegistrationGroups) != 2 || cfg.RegistrationQuota.MaxMemoryBytes != 8<<30 || cfg.RegistrationQuota.MaxRunningWorkspaces != 2 || !cfg.EmailEnabled || cfg.SMTPPort != 2525 || cfg.SMTPFrom != "cows@example.test" || cfg.EmailWarningLeadTime != 2*time.Hour || cfg.EmailRetryInterval != 10*time.Minute {
+	if cfg.ListenAddr != "127.0.0.1:7070" || cfg.DatabasePath != "/tmp/cows.db" || cfg.MountArchiveRoot != "/srv/cows-archive" || cfg.HostOverbookingFactor != 2.5 || cfg.LogLevel != slog.LevelDebug || cfg.ShutdownTimeout != 2*time.Second || !cfg.RegistrationEnabled || len(cfg.RegistrationGroups) != 2 || cfg.RegistrationQuota.MaxMemoryBytes != 8<<30 || cfg.RegistrationQuota.MaxRunningWorkspaces != 2 || !cfg.EmailEnabled || cfg.SMTPPort != 2525 || cfg.SMTPFrom != "cows@example.test" || cfg.EmailWarningLeadTime != 2*time.Hour || cfg.EmailRetryInterval != 10*time.Minute {
 		t.Fatalf("unexpected configuration: %+v", cfg)
 	}
 }
@@ -75,6 +76,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{name: "nested mount roots", args: []string{"-mount-root", "/srv/cows", "-mount-archive-root", "/srv/cows/archive"}},
 		{name: "empty Podman socket", args: []string{"-podman-socket", " "}},
 		{name: "negative host storage", args: []string{"-host-storage-bytes", "-1"}},
+		{name: "invalid host overbooking factor", args: []string{"-host-overbooking-factor", "0.05"}},
 		{name: "bad log level", args: []string{"-log-level", "trace"}},
 		{name: "bad timeout", args: []string{"-shutdown-timeout", "0s"}},
 		{name: "bad session lifetime", args: []string{"-session-lifetime", "0s"}},

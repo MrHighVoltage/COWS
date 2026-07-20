@@ -87,7 +87,7 @@ func run(ctx context.Context, args []string) error {
 		return fmt.Errorf("initialize rootless Podman runtime: %w", err)
 	}
 	quotaService := quota.New(store)
-	if _, err := quotaService.EnsureHostSettings(ctx, quota.HostSettingsInput{HostStorageBytes: cfg.HostStorageBytes}); err != nil {
+	if _, err := quotaService.EnsureHostSettings(ctx, quota.HostSettingsInput{HostStorageBytes: cfg.HostStorageBytes, OverbookingFactor: cfg.HostOverbookingFactor}); err != nil {
 		return fmt.Errorf("initialize host settings: %w", err)
 	}
 	storageProvider := workspace.NewStorageUsageProvider(podmanRuntime, cfg.MountRoot)
