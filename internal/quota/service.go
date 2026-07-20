@@ -32,6 +32,19 @@ func (e *CapacityInsufficientError) Error() string {
 
 func (e *CapacityInsufficientError) Unwrap() error { return ErrCapacityInsufficient }
 
+type QuotaInsufficientError struct {
+	Resource  string
+	Current   int64
+	Limit     int64
+	Requested int64
+}
+
+func (e *QuotaInsufficientError) Error() string {
+	return fmt.Sprintf("quota %s insufficient: current=%d limit=%d requested=%d", e.Resource, e.Current, e.Limit, e.Requested)
+}
+
+func (e *QuotaInsufficientError) Unwrap() error { return ErrQuotaExceeded }
+
 type Service struct {
 	store repository.Store
 	now   func() time.Time
@@ -379,24 +392,9 @@ func (s *Scheduler) Available(ctx context.Context, userID string) (domain.Resour
 	} else if err != nil {
 		return domain.ResourceRequest{}, fmt.Errorf("load user quota: %w", err)
 	}
-	if s.capacity == nil {
-		return domain.ResourceRequest{}, ErrCapacityUnavailable
-	}
-	settings, err := s.store.FindHostSettings(ctx)
-	if err != nil {
-		return domain.ResourceRequest{}, ErrCapacityUnavailable
-	}
-	host, err := s.capacity.HostCapacity(ctx)
-	if err != nil || host.CPUMillis <= 0 || host.MemoryBytes <= 0 {
-		return domain.ResourceRequest{}, ErrCapacityUnavailable
-	}
-	allAllocations, err := s.store.AllWorkspaceAllocations(ctx)
+	available, err := s.hostAvailable(ctx)
 	if err != nil {
 		return domain.ResourceRequest{}, err
-	}
-	available := domain.ResourceRequest{
-		CPUMillis:   host.CPUMillis - settings.ReservedCPUMillis - allAllocations.Resources.CPUMillis,
-		MemoryBytes: host.MemoryBytes - settings.ReservedMemoryBytes - allAllocations.Resources.MemoryBytes,
 	}
 	if quotaAssigned {
 		userAllocations, err := s.store.WorkspaceAllocations(ctx, userID)
@@ -434,20 +432,61 @@ func (s *Scheduler) CheckStart(ctx context.Context, userID string, request domai
 	} else if err != nil {
 		return fmt.Errorf("load user quota: %w", err)
 	}
-	if !quotaAssigned {
-		return nil
+	if quotaAssigned {
+		allocations, err := s.store.WorkspaceAllocations(ctx, userID)
+		if err != nil {
+			return err
+		}
+		if userQuota.MaxRunningWorkspaces > 0 && allocations.RunningWorkspaceCount >= userQuota.MaxRunningWorkspaces {
+			return &QuotaInsufficientError{Resource: "running workspaces", Current: allocations.RunningWorkspaceCount, Limit: userQuota.MaxRunningWorkspaces, Requested: 1}
+		}
+		if exceeds(allocations.Resources.CPUMillis, request.CPUMillis, userQuota.MaxCPUMillis) {
+			return &QuotaInsufficientError{Resource: "CPU", Current: allocations.Resources.CPUMillis, Limit: userQuota.MaxCPUMillis, Requested: request.CPUMillis}
+		}
+		if exceeds(allocations.Resources.MemoryBytes, request.MemoryBytes, userQuota.MaxMemoryBytes) {
+			return &QuotaInsufficientError{Resource: "memory", Current: allocations.Resources.MemoryBytes, Limit: userQuota.MaxMemoryBytes, Requested: request.MemoryBytes}
+		}
 	}
-	allocations, err := s.store.WorkspaceAllocations(ctx, userID)
+	available, err := s.hostAvailable(ctx)
 	if err != nil {
 		return err
 	}
-	if userQuota.MaxRunningWorkspaces > 0 && allocations.RunningWorkspaceCount >= userQuota.MaxRunningWorkspaces {
-		return ErrQuotaExceeded
+	if request.CPUMillis > available.CPUMillis {
+		return &CapacityInsufficientError{Resource: "CPU", Available: available.CPUMillis, Requested: request.CPUMillis}
 	}
-	if exceeds(allocations.Resources.CPUMillis, request.CPUMillis, userQuota.MaxCPUMillis) || exceeds(allocations.Resources.MemoryBytes, request.MemoryBytes, userQuota.MaxMemoryBytes) {
-		return ErrQuotaExceeded
+	if request.MemoryBytes > available.MemoryBytes {
+		return &CapacityInsufficientError{Resource: "memory", Available: available.MemoryBytes, Requested: request.MemoryBytes}
 	}
 	return nil
+}
+
+func (s *Scheduler) hostAvailable(ctx context.Context) (domain.ResourceRequest, error) {
+	if s.capacity == nil {
+		return domain.ResourceRequest{}, ErrCapacityUnavailable
+	}
+	settings, err := s.store.FindHostSettings(ctx)
+	if err != nil {
+		return domain.ResourceRequest{}, ErrCapacityUnavailable
+	}
+	host, err := s.capacity.HostCapacity(ctx)
+	if err != nil || host.CPUMillis <= 0 || host.MemoryBytes <= 0 {
+		return domain.ResourceRequest{}, ErrCapacityUnavailable
+	}
+	allAllocations, err := s.store.AllWorkspaceAllocations(ctx)
+	if err != nil {
+		return domain.ResourceRequest{}, err
+	}
+	available := domain.ResourceRequest{
+		CPUMillis:   host.CPUMillis - settings.ReservedCPUMillis - allAllocations.Resources.CPUMillis,
+		MemoryBytes: host.MemoryBytes - settings.ReservedMemoryBytes - allAllocations.Resources.MemoryBytes,
+	}
+	if available.CPUMillis < 0 {
+		available.CPUMillis = 0
+	}
+	if available.MemoryBytes < 0 {
+		available.MemoryBytes = 0
+	}
+	return available, nil
 }
 
 func (s *Scheduler) measureStorage(ctx context.Context, userWorkspaces []domain.Workspace) (int64, error) {
