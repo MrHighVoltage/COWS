@@ -24,6 +24,11 @@ its MIT license in `xterm/xterm-addon-fit.LICENSE`. It is loaded locally by the
 terminal page to calculate terminal rows and columns without a frontend build
 step. Source: <https://github.com/xtermjs/xterm-addon-fit/tree/0.8.0>.
 
-The source URLs are recorded for reproducibility. Before an asset update, read
-the upstream release notes and license, replace the file, recompute its SHA-256
-checksum, and run `go test ./...`, `go vet ./...`, and `go build ./...`.
+The source URLs are recorded for reproducibility. Run
+`tools/web-assets.sh verify` for an offline checksum check. Run
+`tools/web-assets.sh update` only when deliberately refreshing the pinned
+versions; review the resulting lock-file checksum changes, release notes, and
+licenses before committing. The update tool uses curl, tar, sha256sum, and the
+font subsetting tools for the embedded font; none are required to build or run
+COWS. The noVNC tree and embedded font are included in
+`web/static/assets.lock` alongside the standalone JavaScript assets.

@@ -35,9 +35,10 @@ Status: accepted for Milestone 0
 Go dependencies are pinned by `go.mod`/`go.sum`. Browser assets are checked into
 `web/static/vendor`, accompanied by source URLs, exact versions, licenses, and
 checksums in `web/static/vendor/README.md`. Production pages do not load a CDN.
-Updates must be deliberate: review release notes and license changes, replace
-the local asset, recompute its SHA-256 checksum, and run the full verification
-commands.
+The complete lock file is `web/static/assets.lock` and `tools/web-assets.sh`
+provides offline verification and deliberate refreshes. Updates must be
+reviewed: inspect release notes and license changes, review lock-file checksum
+changes, and run the full verification commands.
 
 ## Sources consulted
 
