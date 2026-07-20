@@ -170,8 +170,8 @@ func TestHostSettingsAreSeededOnceAndAppliedDynamically(t *testing.T) {
 	}
 	scheduler := NewScheduler(store, fakeCapacity{capacity: runtime.HostCapacity{CPUMillis: 8000, MemoryBytes: 8 << 30}}, fakeStorage{})
 	request := domain.ResourceRequest{CPUMillis: 1000, MemoryBytes: 2 << 30, StorageBytes: 20 << 30}
-	if err := scheduler.CheckCreate(ctx, studentID, request); !errors.Is(err, ErrCapacityInsufficient) {
-		t.Fatalf("dynamic reserved capacity result = %v, want capacity insufficient", err)
+	if err := scheduler.CheckCreate(ctx, studentID, request); err != nil {
+		t.Fatalf("storage reservation should not block creation: %v", err)
 	}
 }
 

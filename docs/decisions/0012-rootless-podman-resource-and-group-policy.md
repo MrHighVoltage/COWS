@@ -36,14 +36,18 @@ workspace, the runtime storage provider reports:
 
 Mount usage is calculated through the approved runtime file-access helper, so
 rootless subordinate-ID ownership is preserved. Storage usage is counted for
-all workspaces, whether their containers are running or stopped. If storage
-measurement is unavailable, quota admission fails closed.
+all workspaces, whether their containers are running or stopped. If a finite
+storage allowance is being enforced and its measurement is unavailable, quota
+admission fails closed.
 Measurements are cached per workspace for a short interval and concurrent
-requests are coalesced. The workspace page may display an unavailable value
-when a refresh fails, but workspace admission never treats missing or expired
-storage data as available capacity. The current byte count is the sum of
-regular-file logical sizes; filesystem block allocation is a future policy
-decision and must not be described as physical disk usage until implemented.
+requests are coalesced. Storage is displayed and compared with a user's
+predefined storage allowance, but there is no per-template or per-workspace
+storage budget. A new workspace does not reserve storage and host storage
+capacity does not block creation. If a finite user allowance is already fully
+used, creation is rejected; unavailable measurements fail that allowance check
+closed. The current byte count is the sum of regular-file logical sizes;
+filesystem block allocation is a future policy decision and must not be
+described as physical disk usage until implemented.
 
 CPU and memory allocations are counted only for workspaces whose observed
 runtime state is `running`. Workspace counts are separate:
@@ -52,9 +56,10 @@ runtime state is `running`. Workspace counts are separate:
 - running workspace count includes only observed `running` containers.
 
 Zero means unlimited for each quota. Before creating a workspace, COWS checks
-measured existing storage plus the template's default storage budget. This
-conservative admission budget prevents a new empty workspace from bypassing
-the storage limit before its first usage sample.
+the selected CPU and memory against the user's remaining running allocation and
+the current host capacity. Templates with resource selection disabled use their
+defaults; selectable templates accept values only between their defaults and
+maximums. The browser's availability display is advisory.
 
 ## Groups and template access
 

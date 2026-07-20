@@ -38,6 +38,7 @@ type TemplateInput struct {
 	MaxCPUMillis                    int64
 	DefaultMemoryBytes              int64
 	MaxMemoryBytes                  int64
+	ResourcesConfigurable           bool
 	DefaultStorageBytes             int64
 	InitialConnectionTimeoutSeconds int64
 	StoppedRetentionSeconds         int64
@@ -148,6 +149,7 @@ func (s *Service) CreateTemplate(ctx context.Context, actorID string, input Temp
 		MaxCPUMillis:                    input.MaxCPUMillis,
 		DefaultMemoryBytes:              input.DefaultMemoryBytes,
 		MaxMemoryBytes:                  input.MaxMemoryBytes,
+		ResourcesConfigurable:           input.ResourcesConfigurable,
 		DefaultStorageBytes:             input.DefaultStorageBytes,
 		InitialConnectionTimeoutSeconds: input.InitialConnectionTimeoutSeconds,
 		StoppedRetentionSeconds:         input.StoppedRetentionSeconds,
@@ -192,6 +194,7 @@ func (s *Service) UpdateTemplate(ctx context.Context, actorID, id string, input 
 	existing.MaxCPUMillis = input.MaxCPUMillis
 	existing.DefaultMemoryBytes = input.DefaultMemoryBytes
 	existing.MaxMemoryBytes = input.MaxMemoryBytes
+	existing.ResourcesConfigurable = input.ResourcesConfigurable
 	existing.DefaultStorageBytes = input.DefaultStorageBytes
 	existing.InitialConnectionTimeoutSeconds = input.InitialConnectionTimeoutSeconds
 	existing.StoppedRetentionSeconds = input.StoppedRetentionSeconds
@@ -266,9 +269,6 @@ func validateTemplate(input TemplateInput) error {
 		return ErrInvalidTemplate
 	}
 	if input.DefaultMemoryBytes <= 0 || input.MaxMemoryBytes < input.DefaultMemoryBytes || input.MaxMemoryBytes > 1<<50 {
-		return ErrInvalidTemplate
-	}
-	if input.DefaultStorageBytes <= 0 || input.DefaultStorageBytes > 1<<60 {
 		return ErrInvalidTemplate
 	}
 	if !validTimeout(input.InitialConnectionTimeoutSeconds) || !validTimeout(input.StoppedRetentionSeconds) {

@@ -4,15 +4,38 @@
   <p class="eyebrow">Workspace access</p>
   <h1 id="workspace-new-title">Create workspace</h1>
   {{ if .Workspace.Error }}<p class="alert alert-error" role="alert">{{ .Workspace.Error }}</p>{{ end }}
-  <form class="form-panel" method="post" action="/workspaces">
+  <form class="form-panel" method="post" action="/workspaces" x-data="{ template: '{{ .Workspace.TemplateID }}' }">
     <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
     <label for="workspace-name">Workspace name</label>
     <input id="workspace-name" name="name" type="text" value="{{ .Workspace.Name }}" maxlength="100" required autofocus>
     <label for="workspace-template">Approved template</label>
-    <select id="workspace-template" name="template_id" required>
+    <select id="workspace-template" name="template_id" x-model="template" required>
       <option value="">Select a template</option>
       {{ range .Templates }}<option value="{{ .ID }}"{{ if eq .ID $.Workspace.TemplateID }} selected{{ end }}>{{ .Name }}</option>{{ else }}<option value="" disabled>No templates available</option>{{ end }}
     </select>
+    <p class="muted">Choose a template to see its resource policy. The availability indicator is advisory; COWS checks capacity again when you submit.</p>
+    <div class="workspace-resource-options">
+      {{ range .Templates }}
+      <fieldset class="resource-choice" x-show="template === '{{ .ID }}'" x-cloak x-data="{ cpu: {{ if and (eq $.Workspace.TemplateID .ID) $.Workspace.CPUMillis }}{{ $.Workspace.CPUMillis }}{{ else }}{{ .DefaultCPUMillis }}{{ end }}, memory: {{ if and (eq $.Workspace.TemplateID .ID) $.Workspace.MemoryMiB }}{{ $.Workspace.MemoryMiB }}{{ else }}{{ mib .DefaultMemoryBytes }}{{ end }}, availableKnown: {{ $.WorkspaceAvailabilityKnown }}, availableCPU: {{ $.WorkspaceAvailableCPUMillis }}, availableMemory: {{ $.WorkspaceAvailableMemoryMiB }} }">
+        <legend>{{ .Name }} resources</legend>
+        <p class="resource-range">Default: {{ .DefaultCPUMillis }} mCPU / {{ mib .DefaultMemoryBytes }} MiB · Maximum: {{ .MaxCPUMillis }} mCPU / {{ mib .MaxMemoryBytes }} MiB</p>
+        {{ if .ResourcesConfigurable }}
+        <div class="resource-slider-grid">
+          <label class="resource-slider-field" for="workspace-cpu-{{ .ID }}">CPU <output x-text="cpu + ' mCPU'"></output>
+            <input id="workspace-cpu-{{ .ID }}" type="range" name="cpu_millis" min="{{ .DefaultCPUMillis }}" max="{{ .MaxCPUMillis }}" step="1" x-model.number="cpu" :class="{ 'resource-over': availableKnown && cpu > availableCPU }" :disabled="template !== '{{ .ID }}'">
+            <input type="number" min="{{ .DefaultCPUMillis }}" max="{{ .MaxCPUMillis }}" step="1" x-model.number="cpu" :class="{ 'resource-over': availableKnown && cpu > availableCPU }" :disabled="template !== '{{ .ID }}'" aria-label="CPU allocation in mCPU">
+          </label>
+          <label class="resource-slider-field" for="workspace-memory-{{ .ID }}">Memory <output x-text="memory + ' MiB'"></output>
+            <input id="workspace-memory-{{ .ID }}" type="range" name="memory_mib" min="{{ mib .DefaultMemoryBytes }}" max="{{ mib .MaxMemoryBytes }}" step="1" x-model.number="memory" :class="{ 'resource-over': availableKnown && memory > availableMemory }" :disabled="template !== '{{ .ID }}'">
+            <input type="number" min="{{ mib .DefaultMemoryBytes }}" max="{{ mib .MaxMemoryBytes }}" step="1" x-model.number="memory" :class="{ 'resource-over': availableKnown && memory > availableMemory }" :disabled="template !== '{{ .ID }}'" aria-label="Memory allocation in MiB">
+          </label>
+        </div>
+        {{ else }}<p class="resource-fixed">Fixed allocation: {{ .DefaultCPUMillis }} mCPU / {{ mib .DefaultMemoryBytes }} MiB</p>{{ end }}
+        <p class="resource-warning" x-show="availableKnown && (cpu > availableCPU || memory > availableMemory)" x-cloak>Selected resources exceed your current available CPU or memory. Creation will be rejected until capacity is available.</p>
+        {{ if not $.WorkspaceAvailabilityKnown }}<p class="muted">Current resource availability is unavailable. Creation will be checked on submission.</p>{{ end }}
+      </fieldset>
+      {{ end }}
+    </div>
     <div class="form-actions"><a class="secondary-button button-link" href="/workspaces">Cancel</a><button class="primary-button" type="submit">Create workspace</button></div>
   </form>
 </section>

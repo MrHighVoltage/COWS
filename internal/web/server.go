@@ -89,6 +89,8 @@ type registrationFormData struct {
 type workspaceFormData struct {
 	Name       string
 	TemplateID string
+	CPUMillis  string
+	MemoryMiB  string
 	Error      string
 }
 
@@ -129,7 +131,7 @@ type templateFormData struct {
 	MaxCPUMillis           string
 	DefaultMemoryMiB       string
 	MaxMemoryMiB           string
-	DefaultStorageGiB      string
+	ResourcesConfigurable  bool
 	InitialConnectionHours string
 	StoppedRetentionHours  string
 	ConfigurationJSON      string
@@ -147,46 +149,49 @@ type templateFormData struct {
 }
 
 type pageData struct {
-	Title               string
-	User                *domain.User
-	Health              healthSnapshot
-	CSRFToken           string
-	Error               string
-	Notice              string
-	Users               []domain.User
-	Form                userFormData
-	Templates           []domain.WorkspaceTemplate
-	Template            templateFormData
-	Password            passwordFormData
-	Registration        registrationFormData
-	RegistrationEnabled bool
-	Inspection          *runtime.Inspection
-	RuntimeError        string
-	Workspaces          []domain.Workspace
-	Workspace           workspaceFormData
-	AccessTab           string
-	Access              workspaceAccess
-	AccessFilesURL      string
-	Quota               quotaFormData
-	QuotaAssigned       bool
-	Settings            *domain.HostSettings
-	SettingsForm        settingsFormData
-	Allocation          *allocationView
-	ActiveWorkspace     *domain.Workspace
-	WorkspaceAccess     map[string]workspaceAccess
-	FileListing         *files.Listing
-	FileMounts          []workspace.FileMount
-	FileError           string
-	Groups              []domain.Group
-	UserGroupIDs        map[string][]string
-	UserGroups          map[string][]domain.Group
-	EditUser            *domain.User
-	EditUserGroups      []string
-	EditGroup           *domain.Group
-	GroupQuota          quotaFormData
-	GroupQuotaAssigned  bool
-	RuntimeWorkspaces   []runtimeWorkspaceView
-	UserImport          *userImportPageData
+	Title                       string
+	User                        *domain.User
+	Health                      healthSnapshot
+	CSRFToken                   string
+	Error                       string
+	Notice                      string
+	Users                       []domain.User
+	Form                        userFormData
+	Templates                   []domain.WorkspaceTemplate
+	Template                    templateFormData
+	Password                    passwordFormData
+	Registration                registrationFormData
+	RegistrationEnabled         bool
+	Inspection                  *runtime.Inspection
+	RuntimeError                string
+	Workspaces                  []domain.Workspace
+	Workspace                   workspaceFormData
+	WorkspaceAvailabilityKnown  bool
+	WorkspaceAvailableCPUMillis int64
+	WorkspaceAvailableMemoryMiB int64
+	AccessTab                   string
+	Access                      workspaceAccess
+	AccessFilesURL              string
+	Quota                       quotaFormData
+	QuotaAssigned               bool
+	Settings                    *domain.HostSettings
+	SettingsForm                settingsFormData
+	Allocation                  *allocationView
+	ActiveWorkspace             *domain.Workspace
+	WorkspaceAccess             map[string]workspaceAccess
+	FileListing                 *files.Listing
+	FileMounts                  []workspace.FileMount
+	FileError                   string
+	Groups                      []domain.Group
+	UserGroupIDs                map[string][]string
+	UserGroups                  map[string][]domain.Group
+	EditUser                    *domain.User
+	EditUserGroups              []string
+	EditGroup                   *domain.Group
+	GroupQuota                  quotaFormData
+	GroupQuotaAssigned          bool
+	RuntimeWorkspaces           []runtimeWorkspaceView
+	UserImport                  *userImportPageData
 }
 
 type workspaceAccess struct {
@@ -645,7 +650,9 @@ func (s *Server) workspacesNew(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to load workspace templates", http.StatusInternalServerError)
 		return
 	}
-	s.render(w, http.StatusOK, "workspace-new-page", pageData{Title: "Create workspace | COWS", User: user, Templates: templates, CSRFToken: s.ensureCSRF(w, r)})
+	data := pageData{Title: "Create workspace | COWS", User: user, Templates: templates, CSRFToken: s.ensureCSRF(w, r)}
+	s.setWorkspaceAvailability(r.Context(), user.ID, &data)
+	s.render(w, http.StatusOK, "workspace-new-page", data)
 }
 
 func (s *Server) workspacesCreate(w http.ResponseWriter, r *http.Request) {
@@ -662,14 +669,38 @@ func (s *Server) workspacesCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	form := workspaceFormData{Name: r.FormValue("name"), TemplateID: r.FormValue("template_id")}
-	if _, err := s.workspace.CreateWorkspace(r.Context(), user.ID, workspace.CreateWorkspaceInput{Name: form.Name, TemplateID: form.TemplateID}); err != nil {
-		form.Error = workspaceFormError(err)
+	form := workspaceFormData{Name: r.FormValue("name"), TemplateID: r.FormValue("template_id"), CPUMillis: r.FormValue("cpu_millis"), MemoryMiB: r.FormValue("memory_mib")}
+	cpuMillis, err := parseOptionalPositiveInt(form.CPUMillis)
+	if err != nil {
+		form.Error = "The selected CPU value is invalid."
+	} else {
+		memoryMiB, memoryErr := parseOptionalPositiveInt(form.MemoryMiB)
+		if memoryErr != nil || memoryMiB > (1<<62)/(1<<20) {
+			form.Error = "The selected memory value is invalid."
+		} else if _, err := s.workspace.CreateWorkspace(r.Context(), user.ID, workspace.CreateWorkspaceInput{Name: form.Name, TemplateID: form.TemplateID, CPUMillis: cpuMillis, MemoryBytes: memoryMiB * (1 << 20)}); err != nil {
+			form.Error = workspaceFormError(err)
+		} else {
+			http.Redirect(w, r, "/workspaces", http.StatusSeeOther)
+			return
+		}
+	}
+	if form.Error != "" {
 		templates, _ := s.workspace.ListAvailableTemplates(r.Context(), user.ID)
-		s.render(w, http.StatusBadRequest, "workspace-new-page", pageData{Title: "Create workspace | COWS", User: user, Templates: templates, CSRFToken: s.ensureCSRF(w, r), Workspace: form})
+		data := pageData{Title: "Create workspace | COWS", User: user, Templates: templates, CSRFToken: s.ensureCSRF(w, r), Workspace: form}
+		s.setWorkspaceAvailability(r.Context(), user.ID, &data)
+		s.render(w, http.StatusBadRequest, "workspace-new-page", data)
 		return
 	}
-	http.Redirect(w, r, "/workspaces", http.StatusSeeOther)
+}
+
+func (s *Server) setWorkspaceAvailability(ctx context.Context, userID string, data *pageData) {
+	available, err := s.workspace.ResourceAvailability(ctx, userID)
+	if err != nil {
+		return
+	}
+	data.WorkspaceAvailabilityKnown = true
+	data.WorkspaceAvailableCPUMillis = available.CPUMillis
+	data.WorkspaceAvailableMemoryMiB = available.MemoryBytes / (1 << 20)
 }
 
 func (s *Server) workspaceStart(w http.ResponseWriter, r *http.Request) {
@@ -2048,7 +2079,7 @@ func (s *Server) parseTemplateForm(r *http.Request) (templateFormData, workspace
 		MaxCPUMillis:           r.FormValue("max_cpu_millis"),
 		DefaultMemoryMiB:       r.FormValue("default_memory_mib"),
 		MaxMemoryMiB:           r.FormValue("max_memory_mib"),
-		DefaultStorageGiB:      r.FormValue("default_storage_gib"),
+		ResourcesConfigurable:  r.FormValue("resources_configurable") == "on",
 		InitialConnectionHours: r.FormValue("initial_connection_hours"),
 		StoppedRetentionHours:  r.FormValue("stopped_retention_hours"),
 		ConfigurationJSON:      r.FormValue("configuration_json"),
@@ -2100,10 +2131,6 @@ func (s *Server) parseTemplateForm(r *http.Request) (templateFormData, workspace
 	if err != nil {
 		return form, workspace.TemplateInput{}, workspace.ErrInvalidTemplate
 	}
-	defaultStorage, err := parseResource(form.DefaultStorageGiB, 1<<30)
-	if err != nil {
-		return form, workspace.TemplateInput{}, workspace.ErrInvalidTemplate
-	}
 	configuration := domain.TemplateConfiguration{}
 	if strings.TrimSpace(form.ConfigurationJSON) != "" {
 		if err := decodeTemplateConfiguration(form.ConfigurationJSON, &configuration); err != nil {
@@ -2140,7 +2167,7 @@ func (s *Server) parseTemplateForm(r *http.Request) (templateFormData, workspace
 		MaxCPUMillis:                    maxCPU,
 		DefaultMemoryBytes:              defaultMemory,
 		MaxMemoryBytes:                  maxMemory,
-		DefaultStorageBytes:             defaultStorage,
+		ResourcesConfigurable:           form.ResourcesConfigurable,
 		Configuration:                   configuration,
 		InitialConnectionTimeoutSeconds: initialConnection,
 		StoppedRetentionSeconds:         stoppedRetention,
@@ -2174,6 +2201,13 @@ func parsePositiveInt(value string) (int64, error) {
 		return 0, errors.New("value must be positive")
 	}
 	return parsed, nil
+}
+
+func parseOptionalPositiveInt(value string) (int64, error) {
+	if strings.TrimSpace(value) == "" {
+		return 0, nil
+	}
+	return parsePositiveInt(value)
 }
 
 func parseResource(value string, multiplier int64) (int64, error) {
@@ -2377,7 +2411,7 @@ func settingsFormFromDomain(settings domain.HostSettings) settingsFormData {
 }
 
 func defaultTemplateForm() templateFormData {
-	return templateFormData{DefaultCPUMillis: "1000", MaxCPUMillis: "4000", DefaultMemoryMiB: "2048", MaxMemoryMiB: "8192", DefaultStorageGiB: "20", InitialConnectionHours: "24", StoppedRetentionHours: "24", ConfigurationJSON: "{}", TerminalAccess: true, UserRole: true, GroupAccessMode: domain.GroupAccessExclude, Enabled: true}
+	return templateFormData{DefaultCPUMillis: "1000", MaxCPUMillis: "4000", DefaultMemoryMiB: "2048", MaxMemoryMiB: "8192", InitialConnectionHours: "24", StoppedRetentionHours: "24", ConfigurationJSON: "{}", TerminalAccess: true, UserRole: true, GroupAccessMode: domain.GroupAccessExclude, Enabled: true}
 }
 
 func hasTerminalUID(configuration domain.TemplateConfiguration, want int64) bool {
@@ -2394,7 +2428,7 @@ func templateFormFromDomain(template domain.WorkspaceTemplate) templateFormData 
 	if len(configurationJSON) == 0 {
 		configurationJSON = []byte("{}")
 	}
-	form := templateFormData{ID: template.ID, Editing: true, Name: template.Name, Description: template.Description, ImageReference: template.ImageReference, ImageDigest: template.ImageDigest, DefaultCPUMillis: strconv.FormatInt(template.DefaultCPUMillis, 10), MaxCPUMillis: strconv.FormatInt(template.MaxCPUMillis, 10), DefaultMemoryMiB: strconv.FormatInt(template.DefaultMemoryBytes/(1<<20), 10), MaxMemoryMiB: strconv.FormatInt(template.MaxMemoryBytes/(1<<20), 10), DefaultStorageGiB: strconv.FormatInt(template.DefaultStorageBytes/(1<<30), 10), InitialConnectionHours: strconv.FormatInt(template.InitialConnectionTimeoutSeconds/3600, 10), StoppedRetentionHours: strconv.FormatInt(template.StoppedRetentionSeconds/3600, 10), GroupAccessMode: template.GroupAccessMode, AllowedGroupIDs: append([]string(nil), template.AllowedGroupIDs...), ConfigurationJSON: string(configurationJSON), TerminalRootAllowed: hasTerminalUID(template.Configuration, 0), Enabled: template.Enabled}
+	form := templateFormData{ID: template.ID, Editing: true, Name: template.Name, Description: template.Description, ImageReference: template.ImageReference, ImageDigest: template.ImageDigest, DefaultCPUMillis: strconv.FormatInt(template.DefaultCPUMillis, 10), MaxCPUMillis: strconv.FormatInt(template.MaxCPUMillis, 10), DefaultMemoryMiB: strconv.FormatInt(template.DefaultMemoryBytes/(1<<20), 10), MaxMemoryMiB: strconv.FormatInt(template.MaxMemoryBytes/(1<<20), 10), ResourcesConfigurable: template.ResourcesConfigurable, InitialConnectionHours: strconv.FormatInt(template.InitialConnectionTimeoutSeconds/3600, 10), StoppedRetentionHours: strconv.FormatInt(template.StoppedRetentionSeconds/3600, 10), GroupAccessMode: template.GroupAccessMode, AllowedGroupIDs: append([]string(nil), template.AllowedGroupIDs...), ConfigurationJSON: string(configurationJSON), TerminalRootAllowed: hasTerminalUID(template.Configuration, 0), Enabled: template.Enabled}
 	for _, method := range template.AccessMethods {
 		switch method {
 		case domain.AccessTerminal:
@@ -2645,6 +2679,8 @@ func templateActionError(err error) string {
 
 func workspaceFormError(err error) string {
 	switch {
+	case errors.Is(err, workspace.ErrInvalidWorkspaceResources):
+		return "The selected resources must stay between the template defaults and maximums."
 	case errors.Is(err, workspace.ErrInvalidWorkspace):
 		return "Enter a workspace name and select an approved template."
 	case errors.Is(err, workspace.ErrTemplateNotAvailable):

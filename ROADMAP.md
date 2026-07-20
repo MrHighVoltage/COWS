@@ -61,8 +61,8 @@ Validated administrator templates, role access rules, typed command/environment/
 mount/service configuration, workspace configuration snapshots, persisted port
 allocations, resource policy fields, the COWS-facing runtime interface, an
 inspection coordinator, and a rootless Podman adapter are now present. Remaining work is stronger runtime connectivity
-reporting, orphan/partial-operation reconciliation, fake-runtime contract
-coverage, and runtime-enforced storage policy. The adapter detects rootless
+reporting, orphan/partial-operation reconciliation, and fake-runtime contract
+coverage. The adapter detects rootless
 Podman capabilities and refuses unsafe creates when required CPU, memory, or
 process limits are unavailable. Docker support is intentionally out of scope.
 A dedicated secret
@@ -80,9 +80,12 @@ details, rootless Podman lifecycle operations, and a
 reconciler-driven timeout worker are now present. Warning-event hooks exist in
 the lifecycle model. Each start resets the initial-connection observation period, and
 explicit deletion records retained named-volume metadata before removing the
-workspace record. Remaining
-exit work includes reconciliation handling for orphaned and partially-created
-objects, runtime-enforced storage policy, idempotence across restart,
+workspace record. Templates now explicitly choose fixed defaults or
+user-selectable CPU and memory ranges, with live advisory availability and
+authoritative create-time checks. Storage is measured for display and user
+allowances but is no longer a per-template or per-workspace allocation.
+Remaining exit work includes reconciliation handling for orphaned and partially-created
+objects, idempotence across restart,
 long-running operation execution, and irreversible-operation failure-path
 tests. The user page now shows allocated resources, quota progress, operation
 status, and automatically refreshed state.
