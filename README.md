@@ -5,6 +5,12 @@ platform for containerized user workspaces. It is intended for universities,
 research institutes, and similar teams that provide preconfigured software
 environments through one authenticated HTTPS endpoint.
 
+> **Active development:** COWS is under active development and is not
+> production-ready.
+>
+> **Development note:** This project is currently 100% vibe-coded. Review,
+> testing, and security validation are required before production use.
+
 ## Project status
 
 COWS has completed the initial **Milestone 8: restricted file manager** checkpoint. The
