@@ -2,6 +2,7 @@ const shell = document.querySelector("[data-access]");
 if (shell) {
   const tabs = Array.from(shell.querySelectorAll("[data-access-tab]"));
   const panels = Array.from(shell.querySelectorAll("[data-access-panel]"));
+  const controls = Array.from(shell.querySelectorAll("[data-access-controls]"));
   const loaded = new Set();
 
   function loadScript(source) {
@@ -61,6 +62,9 @@ if (shell) {
     });
     panels.forEach((panel) => {
       panel.hidden = panel.dataset.accessPanel !== tab;
+    });
+    controls.forEach((control) => {
+      control.hidden = control.dataset.accessControls !== tab;
     });
     const url = new URL(window.location.href);
     url.searchParams.set("tab", tab);

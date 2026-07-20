@@ -6,11 +6,12 @@
     root.dataset.terminalInitialized = "true";
 
     const target = root.querySelector("#terminal");
-    const status = root.querySelector("#terminal-status");
+    const controls = document.querySelector(root.dataset.controlsTarget) || root;
+    const status = controls.querySelector("#terminal-status");
     const error = root.querySelector("#terminal-error");
-    const connectButton = root.querySelector("[data-terminal-connect]");
-    const fitButton = root.querySelector("[data-terminal-fit]");
-    const fullscreenButton = root.querySelector("[data-terminal-fullscreen]");
+    const connectButton = controls.querySelector("[data-terminal-connect]");
+    const fitButton = controls.querySelector("[data-terminal-fit]");
+    const fullscreenButton = controls.querySelector("[data-terminal-fullscreen]");
     const fullscreenRoot = document.getElementById(root.dataset.fullscreenTarget) || root;
     const terminal = new Terminal({
       convertEol: true,
@@ -20,7 +21,7 @@
     });
     terminal.open(target);
     const fitAddon = typeof FitAddon !== "undefined" ? new FitAddon.FitAddon() : null;
-    const terminalUID = root.querySelector("[data-terminal-uid]");
+    const terminalUID = controls.querySelector("[data-terminal-uid]");
     if (fitAddon) terminal.loadAddon(fitAddon);
 
     let socket = null;

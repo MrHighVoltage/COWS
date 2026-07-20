@@ -10,11 +10,15 @@
 </section>
 
 <section id="workspace-access-shell" class="workspace-access-shell" data-access data-initial-tab="{{ .AccessTab }}" data-files-url="{{ .AccessFilesURL }}" aria-label="Workspace access methods">
-  <nav class="access-tabs" role="tablist" aria-label="Workspace access methods">
-    {{ if .Access.Terminal }}<button class="access-tab" type="button" role="tab" data-access-tab="terminal" aria-controls="access-terminal-panel">Terminal</button>{{ end }}
-    {{ if .Access.Desktop }}<button class="access-tab" type="button" role="tab" data-access-tab="desktop" aria-controls="access-desktop-panel">Desktop</button>{{ end }}
-    {{ if .Access.Files }}<button class="access-tab" type="button" role="tab" data-access-tab="files" aria-controls="access-files-panel">Files</button>{{ end }}
-  </nav>
+  <div class="access-tabs">
+    <nav class="access-tab-list" role="tablist" aria-label="Workspace access methods">
+      {{ if .Access.Terminal }}<button class="access-tab" type="button" role="tab" data-access-tab="terminal" aria-controls="access-terminal-panel">Terminal</button>{{ end }}
+      {{ if .Access.Desktop }}<button class="access-tab" type="button" role="tab" data-access-tab="desktop" aria-controls="access-desktop-panel">Desktop</button>{{ end }}
+      {{ if .Access.Files }}<button class="access-tab" type="button" role="tab" data-access-tab="files" aria-controls="access-files-panel">Files</button>{{ end }}
+    </nav>
+    {{ if .Access.Terminal }}{{ template "workspace-terminal-controls" . }}{{ end }}
+    {{ if .Access.Desktop }}{{ template "workspace-desktop-controls" . }}{{ end }}
+  </div>
   <div class="access-panels">
     {{ if .Access.Terminal }}<div id="access-terminal-panel" class="access-panel" data-access-panel="terminal" role="tabpanel" aria-label="Terminal access" hidden>{{ template "workspace-terminal-panel" . }}</div>{{ end }}
     {{ if .Access.Desktop }}<div id="access-desktop-panel" class="access-panel" data-access-panel="desktop" role="tabpanel" aria-label="Desktop access" hidden>{{ template "workspace-desktop-panel" . }}</div>{{ end }}

@@ -1,10 +1,16 @@
 {{ define "workspace-terminal-panel" }}
-<section class="terminal-panel access-service-panel" data-terminal data-terminal-url="/workspaces/{{ .ActiveWorkspace.ID }}/terminal/ws" data-fullscreen-target="workspace-access-shell" aria-labelledby="terminal-panel-title">
-  <div class="access-control-bar"><h2 id="terminal-panel-title">Terminal</h2>{{ if .ActiveWorkspace.TemplateConfiguration.TerminalUIDs }}<label class="terminal-identity">User ID <select data-terminal-uid aria-label="Terminal user ID">{{ range .ActiveWorkspace.TemplateConfiguration.TerminalUIDs }}<option value="{{ . }}">{{ . }}{{ if eq . 0 }} (root){{ end }}</option>{{ end }}</select></label>{{ end }}<span id="terminal-status" class="badge connection-status">Not connected</span><button class="secondary-button connection-toggle" type="button" data-terminal-connect>Connect</button><button class="secondary-button" type="button" data-terminal-fit>Fit</button><button class="secondary-button" type="button" data-terminal-fullscreen>Full screen</button></div>
+<section class="terminal-panel access-service-panel" data-terminal data-terminal-url="/workspaces/{{ .ActiveWorkspace.ID }}/terminal/ws" data-fullscreen-target="workspace-access-shell" data-controls-target="#terminal-controls" aria-labelledby="terminal-panel-title">
   <p class="access-session-note">The session expires after inactivity or one hour.</p>
   <div id="terminal" class="terminal" role="application" aria-label="Workspace terminal"></div>
   <p id="terminal-error" class="alert alert-error" role="alert" hidden></p>
 </section>
+{{ end }}
+
+{{ define "workspace-terminal-controls" }}
+<div id="terminal-controls" class="access-control-bar access-tab-controls" data-access-controls="terminal" role="group" aria-label="Terminal controls">
+  {{ if .ActiveWorkspace.TemplateConfiguration.TerminalUIDs }}<label class="terminal-identity">User ID <select data-terminal-uid aria-label="Terminal user ID">{{ range .ActiveWorkspace.TemplateConfiguration.TerminalUIDs }}<option value="{{ . }}">{{ . }}{{ if eq . 0 }} (root){{ end }}</option>{{ end }}</select></label>{{ end }}
+  <span id="terminal-status" class="badge connection-status">Not connected</span><button class="secondary-button connection-toggle" type="button" data-terminal-connect>Connect</button><button class="secondary-button" type="button" data-terminal-fit>Fit</button><button class="secondary-button" type="button" data-terminal-fullscreen>Full screen</button>
+</div>
 {{ end }}
 
 {{ define "workspace-terminal-page" }}
@@ -17,6 +23,7 @@
     <a class="secondary-button button-link" href="/workspaces">Back to workspaces</a>
   </div>
 </section>
+{{ template "workspace-terminal-controls" . }}
 {{ template "workspace-terminal-panel" . }}
 <script src="/static/vendor/xterm/xterm.js"></script>
 <script src="/static/vendor/xterm/xterm-addon-fit.js"></script>
