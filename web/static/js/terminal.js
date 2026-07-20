@@ -18,12 +18,13 @@
       cursorBlink: true,
       scrollback: 2000,
       customGlyphs: true,
-      fontFamily: "'JetBrainsMono Nerd Font', 'FiraCode Nerd Font', 'MesloLGS NF', 'JetBrains Mono', 'Fira Code', 'Symbols Nerd Font Mono', 'Cascadia Mono', 'DejaVu Sans Mono', monospace",
+      fontFamily: "'COWS Terminal', 'JetBrainsMono Nerd Font', 'FiraCode Nerd Font', 'MesloLGS NF', 'JetBrains Mono', 'Fira Code', 'Symbols Nerd Font Mono', 'Cascadia Mono', 'DejaVu Sans Mono', monospace",
       fontSize: 14,
       fontWeight: "400",
       fontWeightBold: "700",
       theme: { background: "#101820", foreground: "#f4f6f8" }
     });
+    const fontReady = document.fonts && document.fonts.load ? document.fonts.load("14px 'COWS Terminal'") : Promise.resolve();
     terminal.open(target);
     const fitAddon = typeof FitAddon !== "undefined" ? new FitAddon.FitAddon() : null;
     const terminalUID = controls.querySelector("[data-terminal-uid]");
@@ -57,6 +58,8 @@
         sendResize();
       });
     }
+
+    fontReady.then(fitTerminal);
 
     function terminalURL() {
       const endpoint = new URL(root.dataset.terminalUrl, window.location.origin);
