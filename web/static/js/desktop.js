@@ -5,11 +5,12 @@ export function initDesktop(root) {
   root.dataset.desktopInitialized = "true";
 
   const display = root.querySelector("#desktop-display");
-  const status = root.querySelector("#desktop-status");
+  const controls = document.querySelector(root.dataset.controlsTarget) || root;
+  const status = controls.querySelector("#desktop-status");
   const error = root.querySelector("#desktop-error");
-  const connectButton = root.querySelector("[data-desktop-connect]");
-  const fitButton = root.querySelector("[data-desktop-fit]");
-  const fullscreenButton = root.querySelector("[data-desktop-fullscreen]");
+  const connectButton = controls.querySelector("[data-desktop-connect]");
+  const fitButton = controls.querySelector("[data-desktop-fit]");
+  const fullscreenButton = controls.querySelector("[data-desktop-fullscreen]");
   const fullscreenRoot = document.getElementById(root.dataset.fullscreenTarget) || root;
   const scheme = window.location.protocol === "https:" ? "wss:" : "ws:";
   const url = scheme + "//" + window.location.host + root.dataset.desktopUrl;
