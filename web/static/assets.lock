@@ -6,4 +6,4 @@ file|web/static/vendor/xterm/xterm.css|https://cdn.jsdelivr.net/npm/xterm@5.3.0/
 file|web/static/vendor/xterm/xterm-addon-fit.js|https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js|-|10f3194c5f17c1786fb7d5db865c1ec8539b6736a318063fd38bdaaf7c46848f
 font|web/static/fonts/JetBrainsMonoNerdFontMono-Regular.woff2|https://github.com/ryanoasis/nerd-fonts/releases/download/v3.4.0/JetBrainsMono.tar.xz|JetBrainsMonoNerdFontMono-Regular.ttf|eba8cd079fd0607bb0a834688d42c48e5666259ec44716444b949ef51233504c
 font|web/static/fonts/JetBrainsMonoNerdFontMono-Bold.woff2|https://github.com/ryanoasis/nerd-fonts/releases/download/v3.4.0/JetBrainsMono.tar.xz|JetBrainsMonoNerdFontMono-Bold.ttf|30cb695f00ea436a9a80b5428a5bfbbbb154401f433ab6ecc4b241ee6d5792cf
-tree|web/static/vendor/novnc|https://github.com/novnc/noVNC/archive/refs/tags/v1.6.0.tar.gz|-|a7c63aa58460dd507ad589ba10d9fb484c0963c915a4aab01342f1e8836f49ce
+tree|web/static/vendor/novnc|https://github.com/novnc/noVNC/archive/refs/tags/v1.6.0.tar.gz|-|aa454207e9fa4423880bb427ffb8bfe63ce4571dede3b4b638230a6bb0e2101b
