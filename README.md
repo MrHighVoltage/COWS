@@ -50,6 +50,7 @@ Requirements: Go 1.26 or newer within the supported Go release policy. Node.js
 and npm are deliberately not required.
 
 ```sh
+tools/web-assets.sh verify
 go test ./...
 go vet ./...
 go build -o bin/cows ./cmd/cows

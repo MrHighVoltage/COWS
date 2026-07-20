@@ -101,6 +101,7 @@ the authoritative timeout worker.
 ## Development commands
 
 ```sh
+tools/web-assets.sh verify
 gofmt -w .
 go test ./...
 go vet ./...

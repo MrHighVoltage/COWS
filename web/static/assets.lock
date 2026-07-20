@@ -1,0 +1,9 @@
+# kind|target|source|member|sha256
+file|web/static/vendor/htmx/htmx.min.js|https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js|-|71ea67185bfa8c98c39d31717c6fce5d852370fcdfd129db4543774d3145c0de
+file|web/static/vendor/alpine/alpine.min.js|https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js|-|3ed1eed252488921df65e363d6715deb04d7f92aaedb9e52199fdf73cb1e0ad3
+file|web/static/vendor/xterm/xterm.js|https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js|-|f0aea0f75f48559013ae6643c2479dd737d26da42d5524e6d2b70915ae6523c7
+file|web/static/vendor/xterm/xterm.css|https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css|-|832f3f2c603b43ad4351ff04970150cc7a873014276db126a6065c6dd81e4872
+file|web/static/vendor/xterm/xterm-addon-fit.js|https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js|-|10f3194c5f17c1786fb7d5db865c1ec8539b6736a318063fd38bdaaf7c46848f
+font|web/static/fonts/JetBrainsMonoNerdFontMono-Regular.woff2|https://github.com/ryanoasis/nerd-fonts/releases/download/v3.4.0/JetBrainsMono.tar.xz|JetBrainsMonoNerdFontMono-Regular.ttf|eba8cd079fd0607bb0a834688d42c48e5666259ec44716444b949ef51233504c
+font|web/static/fonts/JetBrainsMonoNerdFontMono-Bold.woff2|https://github.com/ryanoasis/nerd-fonts/releases/download/v3.4.0/JetBrainsMono.tar.xz|JetBrainsMonoNerdFontMono-Bold.ttf|30cb695f00ea436a9a80b5428a5bfbbbb154401f433ab6ecc4b241ee6d5792cf
+tree|web/static/vendor/novnc|https://github.com/novnc/noVNC/archive/refs/tags/v1.6.0.tar.gz|-|a7c63aa58460dd507ad589ba10d9fb484c0963c915a4aab01342f1e8836f49ce
