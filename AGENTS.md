@@ -98,6 +98,10 @@ Use a persisted, deduplicated notification boundary with retries, never log
 SMTP credentials or message contents, and keep warning delivery separate from
 the authoritative timeout worker.
 
+Project code is intended to remain under `AGPL-3.0-or-later`; consult
+`docs/decisions/0018-project-license.md` before changing licensing or
+contribution terms.
+
 ## Development commands
 
 ```sh
