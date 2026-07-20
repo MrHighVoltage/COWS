@@ -17,6 +17,11 @@
       convertEol: true,
       cursorBlink: true,
       scrollback: 2000,
+      customGlyphs: true,
+      fontFamily: "'JetBrainsMono Nerd Font', 'FiraCode Nerd Font', 'MesloLGS NF', 'JetBrains Mono', 'Fira Code', 'Symbols Nerd Font Mono', 'Cascadia Mono', 'DejaVu Sans Mono', monospace",
+      fontSize: 14,
+      fontWeight: "400",
+      fontWeightBold: "700",
       theme: { background: "#101820", foreground: "#f4f6f8" }
     });
     terminal.open(target);

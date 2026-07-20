@@ -130,7 +130,7 @@ code { color: #465866; font-size: .82rem; }
 .quota-over { display: block; color: #8c2d1a; font-size: .82rem; font-weight: 700; }
 .operation-progress { width: 7rem; height: .6rem; accent-color: #db9b27; }
 .terminal-panel { padding-bottom: 1rem; }
-.terminal { height: min(65vh, 42rem); min-height: 28rem; padding: .75rem; overflow: hidden; border: 1px solid #263746; border-radius: .35rem; color: #f4f6f8; background: #101820; }
+.terminal { height: min(65vh, 42rem); min-height: 28rem; padding: .75rem; overflow: hidden; border: 1px solid #263746; border-radius: .35rem; color: #f4f6f8; background: #101820; font-family: 'JetBrainsMono Nerd Font', 'FiraCode Nerd Font', 'MesloLGS NF', 'JetBrains Mono', 'Fira Code', 'Symbols Nerd Font Mono', 'Cascadia Mono', 'DejaVu Sans Mono', monospace; }
 .terminal .xterm { height: 100%; }
 .terminal-panel .alert { margin-bottom: 0; }
 .desktop-panel { padding-bottom: 1rem; }
