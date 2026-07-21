@@ -165,9 +165,11 @@ code { color: #465866; font-size: .82rem; }
 .quota-over { display: block; color: #8c2d1a; font-size: .82rem; font-weight: 700; }
 .operation-progress { width: 7rem; height: .6rem; accent-color: #db9b27; }
 .template-image-status { display: grid; gap: .2rem; margin-top: .35rem; }
-.template-image-status progress { width: 100%; height: .55rem; accent-color: #176b8f; }
 .template-image-status form { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
 .template-image-status .pull-indicator { color: #176b8f; font-size: .8rem; }
+.image-pull-working { display: inline-flex; align-items: center; gap: .35rem; }
+.image-pull-spinner { width: .75rem; height: .75rem; border: 2px solid #b7d1da; border-top-color: #176b8f; border-radius: 50%; animation: image-pull-spin .8s linear infinite; }
+@keyframes image-pull-spin { to { transform: rotate(360deg); } }
 .terminal-panel { padding-bottom: 1rem; }
 .terminal { height: min(65vh, 42rem); min-height: 28rem; padding: .75rem; overflow: hidden; border: 1px solid #263746; border-radius: .35rem; color: #f4f6f8; background: #101820; font-family: 'COWS Terminal', 'JetBrainsMono Nerd Font', 'FiraCode Nerd Font', 'MesloLGS NF', 'JetBrains Mono', 'Fira Code', 'Symbols Nerd Font Mono', 'Cascadia Mono', 'DejaVu Sans Mono', monospace; }
 .terminal .xterm { height: 100%; }

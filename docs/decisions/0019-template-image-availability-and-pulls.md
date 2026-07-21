@@ -10,11 +10,13 @@ configured rootless Podman image store before a workspace can be created.
 
 The administrator template list checks the exact configured image reference,
 including an optional digest, and reports whether it is available locally. An
-administrator may explicitly start a pull from that page. Pull progress is
-held in process memory and returned through a small HTMX polling fragment.
+administrator may explicitly start a pull from that page. Pull activity is
+held in process memory and returned through a small HTMX polling fragment. The
+page shows only that the pull is still working; byte counts are intentionally
+not displayed because Podman reports parallel layer downloads independently.
 
 The pull operation is intentionally not persisted. A process restart loses its
-progress display, but does not corrupt the runtime operation; the next page
+activity display, but does not corrupt the runtime operation; the next page
 load checks the image store again. Only one pull operation per template is
 started at a time. The runtime adapter parses Podman's streaming pull response
 and keeps Podman-specific response types inside the adapter.

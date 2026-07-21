@@ -93,7 +93,7 @@ func TestImageAvailableUsesImageInspection(t *testing.T) {
 	}
 }
 
-func TestPullImageReportsStreamingProgress(t *testing.T) {
+func TestPullImageConsumesStreamingResponse(t *testing.T) {
 	adapter := &Adapter{}
 	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		switch request.URL.Path {
@@ -107,12 +107,8 @@ func TestPullImageReportsStreamingProgress(t *testing.T) {
 	})
 	adapter.client = &http.Client{Transport: transport}
 	adapter.streamClient = &http.Client{Transport: transport}
-	var progress []runtime.ImagePullProgress
-	if err := adapter.PullImage(context.Background(), runtime.Image{Reference: "registry.example/research:1"}, func(value runtime.ImagePullProgress) { progress = append(progress, value) }); err != nil {
+	if err := adapter.PullImage(context.Background(), runtime.Image{Reference: "registry.example/research:1"}); err != nil {
 		t.Fatalf("pull image: %v", err)
-	}
-	if len(progress) != 2 || progress[0].Current != 10 || progress[0].Total != 100 || progress[1].Status != "Download complete" {
-		t.Fatalf("progress = %+v", progress)
 	}
 }
 

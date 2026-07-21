@@ -158,16 +158,12 @@ type templateImageView struct {
 	Status    string
 	Message   string
 	Pulling   bool
-	Current   int64
-	Total     int64
 }
 
 type imagePullOperation struct {
 	Reference string
 	Status    string
 	Message   string
-	Current   int64
-	Total     int64
 }
 
 type pageData struct {
@@ -1881,8 +1877,6 @@ func (s *Server) templateImageViews(ctx context.Context, templates []domain.Work
 			view.Status = operation.Status
 			view.Message = operation.Message
 			view.Pulling = operation.Status == "pulling"
-			view.Current = operation.Current
-			view.Total = operation.Total
 		} else if supported {
 			available, err := imageRuntime.ImageAvailable(ctx, image)
 			switch {
@@ -1936,17 +1930,7 @@ func (s *Server) startImagePull(templateID string, image runtime.Image, imageRun
 }
 
 func (s *Server) runImagePull(templateID string, image runtime.Image, imageRuntime runtime.ImageRuntime) {
-	err := imageRuntime.PullImage(context.Background(), image, func(progress runtime.ImagePullProgress) {
-		s.imagePullMu.Lock()
-		if operation := s.imagePulls[templateID]; operation != nil {
-			operation.Current = progress.Current
-			operation.Total = progress.Total
-			if progress.Status != "" {
-				operation.Message = progress.Status
-			}
-		}
-		s.imagePullMu.Unlock()
-	})
+	err := imageRuntime.PullImage(context.Background(), image)
 	s.imagePullMu.Lock()
 	defer s.imagePullMu.Unlock()
 	operation := s.imagePulls[templateID]
@@ -1993,7 +1977,7 @@ func (s *Server) adminTemplateImagePull(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	operation := s.startImagePull(templateValue.ID, runtime.Image{Reference: templateValue.ImageReference, Digest: templateValue.ImageDigest}, imageRuntime)
-	view := templateImageView{WorkspaceTemplate: templateValue, CSRFToken: s.ensureCSRF(w, r), Status: operation.Status, Message: operation.Message, Pulling: operation.Status == "pulling", Current: operation.Current, Total: operation.Total}
+	view := templateImageView{WorkspaceTemplate: templateValue, CSRFToken: s.ensureCSRF(w, r), Status: operation.Status, Message: operation.Message, Pulling: operation.Status == "pulling"}
 	s.render(w, http.StatusOK, "admin-template-image-status", pageData{TemplateImage: &view})
 }
 
