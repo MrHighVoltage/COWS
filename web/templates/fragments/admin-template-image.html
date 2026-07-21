@@ -17,9 +17,7 @@
     </form>
   {{ else if eq .Status "pulling" }}
     <span class="status-value status-pending">Pulling</span>
-    <span class="table-subtext">{{ .Message }}</span>
-    {{ if gt .Total 0 }}<progress max="{{ .Total }}" value="{{ .Current }}" aria-label="Image pull progress"></progress>{{ else }}<progress aria-label="Image pull progress"></progress>{{ end }}
-    <span class="table-subtext">{{ .Current }} / {{ .Total }} bytes</span>
+    <span class="table-subtext image-pull-working"><span class="image-pull-spinner" aria-hidden="true"></span>{{ .Message }}</span>
   {{ else if eq .Status "failed" }}
     <span class="status-value status-disabled">Pull failed</span>
     <span class="table-subtext">{{ .Message }}</span>

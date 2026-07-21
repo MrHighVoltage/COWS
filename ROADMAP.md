@@ -66,7 +66,7 @@ coverage. The adapter detects rootless
 Podman capabilities and refuses unsafe creates when required CPU, memory, or
 process limits are unavailable. Docker support is intentionally out of scope.
 A template list now checks exact local image availability and lets
-administrators explicitly pull missing images with live in-memory progress.
+administrators explicitly pull missing images with a live activity indicator.
 A dedicated secret
 store, graphical gateway routing, and separate reusable administrator port-pool
 management remain future work.
@@ -143,7 +143,7 @@ Email warning exit criteria:
 Live workspace usage now reads non-streaming rootless Podman statistics for
 running workspaces and displays CPU, memory, and PID observations. Lifecycle
 operations publish phases such as preparing, creating, starting, stopping, and
-archiving; image-pull progress and persistent historical metrics remain future
+archiving; image-pull history and persistent historical metrics remain future
 work.
 
 ## Milestone 8: Restricted file manager

@@ -79,17 +79,11 @@ type Image struct {
 	Digest    string
 }
 
-type ImagePullProgress struct {
-	Status  string
-	Current int64
-	Total   int64
-}
-
 // ImageRuntime is optional so runtimes without image-management support can
 // still be used for lifecycle tests and read-only inspection.
 type ImageRuntime interface {
 	ImageAvailable(ctx context.Context, image Image) (bool, error)
-	PullImage(ctx context.Context, image Image, progress func(ImagePullProgress)) error
+	PullImage(ctx context.Context, image Image) error
 }
 
 type EnvironmentVariable struct {

@@ -36,12 +36,6 @@ type Adapter struct {
 }
 
 type imagePullMessage struct {
-	Status         string `json:"status"`
-	ID             string `json:"id"`
-	ProgressDetail struct {
-		Current int64 `json:"current"`
-		Total   int64 `json:"total"`
-	} `json:"progressDetail"`
 	Error       string `json:"error"`
 	ErrorDetail struct {
 		Message string `json:"message"`
@@ -135,7 +129,7 @@ func (a *Adapter) ImageAvailable(ctx context.Context, image runtime.Image) (bool
 	return true, nil
 }
 
-func (a *Adapter) PullImage(ctx context.Context, image runtime.Image, progress func(runtime.ImagePullProgress)) error {
+func (a *Adapter) PullImage(ctx context.Context, image runtime.Image) error {
 	imageReference, err := imageReference(image)
 	if err != nil {
 		return runtime.ErrConflict
@@ -174,9 +168,6 @@ func (a *Adapter) PullImage(ctx context.Context, image runtime.Image, progress f
 				failure = message.ErrorDetail.Message
 			}
 			return fmt.Errorf("%w: %s", runtime.ErrConflict, failure)
-		}
-		if progress != nil {
-			progress(runtime.ImagePullProgress{Status: message.Status, Current: message.ProgressDetail.Current, Total: message.ProgressDetail.Total})
 		}
 	}
 	if err := scanner.Err(); err != nil {
