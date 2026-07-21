@@ -1,0 +1,36 @@
+{{ define "admin-template-image-status" }}
+{{ template "admin-template-image-status-content" .TemplateImage }}
+{{ end }}
+
+{{ define "admin-template-image-status-content" }}
+<div id="template-image-{{ .ID }}" class="template-image-status" role="status" aria-live="polite"{{ if .Pulling }} hx-get="/admin/templates/{{ .ID }}/image/status" hx-trigger="every 1s" hx-swap="outerHTML"{{ end }}>
+  {{ if eq .Status "available" }}
+    <span class="status-value status-ok">Available</span>
+    <span class="table-subtext">{{ .Message }}</span>
+  {{ else if eq .Status "missing" }}
+    <span class="status-value status-disabled">Not available</span>
+    <span class="table-subtext">{{ .Message }}</span>
+    <form method="post" action="/admin/templates/{{ .ID }}/image/pull" hx-post="/admin/templates/{{ .ID }}/image/pull" hx-target="#template-image-{{ .ID }}" hx-swap="outerHTML" hx-indicator="#template-image-{{ .ID }} .pull-indicator">
+      <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
+      <button class="table-action" type="submit">Pull image</button>
+      <span class="pull-indicator htmx-indicator" aria-label="Pulling image">Working...</span>
+    </form>
+  {{ else if eq .Status "pulling" }}
+    <span class="status-value status-pending">Pulling</span>
+    <span class="table-subtext">{{ .Message }}</span>
+    {{ if gt .Total 0 }}<progress max="{{ .Total }}" value="{{ .Current }}" aria-label="Image pull progress"></progress>{{ else }}<progress aria-label="Image pull progress"></progress>{{ end }}
+    <span class="table-subtext">{{ .Current }} / {{ .Total }} bytes</span>
+  {{ else if eq .Status "failed" }}
+    <span class="status-value status-disabled">Pull failed</span>
+    <span class="table-subtext">{{ .Message }}</span>
+    <form method="post" action="/admin/templates/{{ .ID }}/image/pull" hx-post="/admin/templates/{{ .ID }}/image/pull" hx-target="#template-image-{{ .ID }}" hx-swap="outerHTML" hx-indicator="#template-image-{{ .ID }} .pull-indicator">
+      <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
+      <button class="table-action" type="submit">Try again</button>
+      <span class="pull-indicator htmx-indicator" aria-label="Pulling image">Working...</span>
+    </form>
+  {{ else }}
+    <span class="status-value status-disabled">Unavailable</span>
+    <span class="table-subtext">{{ .Message }}</span>
+  {{ end }}
+</div>
+{{ end }}

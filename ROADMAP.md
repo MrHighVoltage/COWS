@@ -65,6 +65,8 @@ reporting, orphan/partial-operation reconciliation, and fake-runtime contract
 coverage. The adapter detects rootless
 Podman capabilities and refuses unsafe creates when required CPU, memory, or
 process limits are unavailable. Docker support is intentionally out of scope.
+A template list now checks exact local image availability and lets
+administrators explicitly pull missing images with live in-memory progress.
 A dedicated secret
 store, graphical gateway routing, and separate reusable administrator port-pool
 management remain future work.

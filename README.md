@@ -26,7 +26,9 @@ mounts, and optional lifecycle email warnings. Rootless Podman file access uses
 the local namespace helper described
 in [ADR 0011](docs/decisions/0011-runtime-file-access.md). It does not provide
 generic proxied application access, archive extraction, or automatic retention
-archival. It is not production-ready.
+archival. Administrators can inspect exact local template-image availability
+and explicitly pull missing images; COWS never pulls images during workspace
+creation. It is not production-ready.
 
 ## Goals
 

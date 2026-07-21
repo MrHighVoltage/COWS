@@ -73,6 +73,49 @@ func TestListManagedUsesVersionedPodmanAPI(t *testing.T) {
 	}
 }
 
+func TestImageAvailableUsesImageInspection(t *testing.T) {
+	adapter := &Adapter{client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path == "/version" {
+			return podmanResponse(http.StatusOK, `{"ApiVersion":"1.45"}`), nil
+		}
+		if strings.HasSuffix(request.URL.Path, "/images/registry.example/research:1/json") {
+			return podmanResponse(http.StatusOK, `{}`), nil
+		}
+		return podmanResponse(http.StatusNotFound, `not found`), nil
+	})}}
+	available, err := adapter.ImageAvailable(context.Background(), runtime.Image{Reference: "registry.example/research:1"})
+	if err != nil || !available {
+		t.Fatalf("available image = %v, err=%v; want true", available, err)
+	}
+	available, err = adapter.ImageAvailable(context.Background(), runtime.Image{Reference: "registry.example/missing:1"})
+	if err != nil || available {
+		t.Fatalf("missing image = %v, err=%v; want false", available, err)
+	}
+}
+
+func TestPullImageReportsStreamingProgress(t *testing.T) {
+	adapter := &Adapter{}
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/version":
+			return podmanResponse(http.StatusOK, `{"ApiVersion":"1.45"}`), nil
+		case "/v1.45/images/create":
+			return podmanResponse(http.StatusOK, "{\"status\":\"Downloading\",\"progressDetail\":{\"current\":10,\"total\":100}}\n{\"status\":\"Download complete\"}\n"), nil
+		default:
+			return podmanResponse(http.StatusNotFound, `not found`), nil
+		}
+	})
+	adapter.client = &http.Client{Transport: transport}
+	adapter.streamClient = &http.Client{Transport: transport}
+	var progress []runtime.ImagePullProgress
+	if err := adapter.PullImage(context.Background(), runtime.Image{Reference: "registry.example/research:1"}, func(value runtime.ImagePullProgress) { progress = append(progress, value) }); err != nil {
+		t.Fatalf("pull image: %v", err)
+	}
+	if len(progress) != 2 || progress[0].Current != 10 || progress[0].Total != 100 || progress[1].Status != "Download complete" {
+		t.Fatalf("progress = %+v", progress)
+	}
+}
+
 func TestLifecycleUsesApprovedPodmanRequests(t *testing.T) {
 	var calls []string
 	adapter := &Adapter{client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
