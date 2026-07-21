@@ -17,10 +17,10 @@
     <table>
       <thead><tr><th>Name</th><th>Image</th><th>Resources</th><th>Access</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody>
-      {{ range .Templates }}
+      {{ range .TemplateImages }}
         <tr>
           <td><strong>{{ .Name }}</strong><span class="table-subtext">{{ .Description }}</span></td>
-          <td><code>{{ .ImageReference }}</code>{{ if .ImageDigest }}<span class="table-subtext">{{ .ImageDigest }}</span>{{ end }}</td>
+          <td><code>{{ .ImageReference }}</code>{{ if .ImageDigest }}<span class="table-subtext">{{ .ImageDigest }}</span>{{ end }}{{ template "admin-template-image-status-content" . }}</td>
           <td><span class="table-subtext">CPU {{ .DefaultCPUMillis }} / {{ .MaxCPUMillis }} mCPU</span><span class="table-subtext">Memory {{ mib .DefaultMemoryBytes }} / {{ mib .MaxMemoryBytes }} MiB</span><span class="table-subtext">{{ if .ResourcesConfigurable }}User selectable{{ else }}Fixed defaults{{ end }}</span></td>
           <td><span class="table-subtext">{{ range .AccessMethods }}{{ . }} {{ end }}</span><span class="table-subtext">Roles: {{ range .AllowedRoles }}{{ . }} {{ end }}</span></td>
           <td>{{ if .Enabled }}<span class="status-value status-ok">Enabled</span>{{ else }}<span class="status-value status-disabled">Disabled</span>{{ end }}</td>

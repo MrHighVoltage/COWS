@@ -40,6 +40,9 @@ The runtime adapter is the only application boundary allowed to communicate
 with rootless Podman. The user service socket should be available only to the COWS
 process, or later to a narrowly privileged host agent. Containers use private
 networking where practical; no workspace port is a public routing mechanism.
+The optional image-management capability can inspect the local image store and
+stream an explicitly requested template image pull. It is administrator-only;
+workspace creation and startup never pull images implicitly.
 
 The application is prepared for HTTPS termination by a reverse proxy. The
 repository's Caddy example keeps COWS on loopback, enables secure cookies, and
@@ -67,6 +70,13 @@ mounts are created below the configured COWS mount root with names of the form
 directory or named-volume mount read-only or read-write for the browser file
 manager. Users cannot choose arbitrary host paths or rendered runtime
 arguments.
+
+Template images are checked against the local rootless Podman image store by
+their exact reference and optional digest. The administrator template list
+marks missing images and offers an explicit pull action. Pull progress is an
+in-memory operation displayed through HTMX polling. A process restart loses
+only the progress display; the image store remains authoritative. Registry
+credentials, image update policies, and image garbage collection are deferred.
 
 Templates may opt into a typed `container_user` block. COWS uses the existing
 application username as the default container username and resolves the

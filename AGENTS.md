@@ -21,6 +21,8 @@ Email notification changes must follow
 `docs/decisions/0015-email-notifications.md`.
 User disable/delete and group lifecycle changes must follow
 `docs/decisions/0017-user-and-group-lifecycle.md`.
+Template image availability and explicit pull changes must follow
+`docs/decisions/0019-template-image-availability-and-pulls.md`.
 
 ## Technology constraints
 

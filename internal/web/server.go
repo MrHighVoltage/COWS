@@ -19,6 +19,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -60,6 +61,8 @@ type Server struct {
 	templates   *template.Template
 	static      fs.FS
 	userImports *userImportStore
+	imagePullMu sync.Mutex
+	imagePulls  map[string]*imagePullOperation
 }
 
 type healthSnapshot struct {
@@ -149,6 +152,24 @@ type templateFormData struct {
 	Error                  string
 }
 
+type templateImageView struct {
+	domain.WorkspaceTemplate
+	CSRFToken string
+	Status    string
+	Message   string
+	Pulling   bool
+	Current   int64
+	Total     int64
+}
+
+type imagePullOperation struct {
+	Reference string
+	Status    string
+	Message   string
+	Current   int64
+	Total     int64
+}
+
 type pageData struct {
 	Title                       string
 	User                        *domain.User
@@ -159,6 +180,8 @@ type pageData struct {
 	Users                       []domain.User
 	Form                        userFormData
 	Templates                   []domain.WorkspaceTemplate
+	TemplateImages              []templateImageView
+	TemplateImage               *templateImageView
 	Template                    templateFormData
 	Password                    passwordFormData
 	Registration                registrationFormData
@@ -287,7 +310,7 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 		return nil, fmt.Errorf("open static assets: %w", err)
 	}
 	fileAccessRuntime, _ := runtimeAdapter.(runtime.FileAccessRuntime)
-	return &Server{db: db, auth: authService, workspace: templateService, quota: quotaService, runtime: runtimeAdapter, files: files.New(templateService, fileAccessRuntime), options: options, templates: templates, static: static, userImports: newUserImportStore()}, nil
+	return &Server{db: db, auth: authService, workspace: templateService, quota: quotaService, runtime: runtimeAdapter, files: files.New(templateService, fileAccessRuntime), options: options, templates: templates, static: static, userImports: newUserImportStore(), imagePulls: make(map[string]*imagePullOperation)}, nil
 }
 
 func quotaProgressClass(current, limit int64) string {
@@ -381,6 +404,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/templates/{id}/edit", s.adminTemplatesEdit)
 	mux.HandleFunc("POST /admin/templates/{id}", s.adminTemplatesUpdate)
 	mux.HandleFunc("POST /admin/templates/{id}/enabled", s.adminTemplateEnabled)
+	mux.HandleFunc("POST /admin/templates/{id}/image/pull", s.adminTemplateImagePull)
+	mux.HandleFunc("GET /admin/templates/{id}/image/status", s.adminTemplateImageStatus)
 	mux.HandleFunc("GET /admin/runtime", s.adminRuntime)
 	mux.HandleFunc("GET /", s.home)
 	return securityHeaders(mux)
@@ -1842,7 +1867,152 @@ func (s *Server) adminTemplates(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to load workspace templates", http.StatusInternalServerError)
 		return
 	}
-	s.render(w, http.StatusOK, "admin-templates-page", pageData{Title: "Templates | COWS", User: &user, Templates: templates, CSRFToken: s.ensureCSRF(w, r)})
+	csrfToken := s.ensureCSRF(w, r)
+	s.render(w, http.StatusOK, "admin-templates-page", pageData{Title: "Templates | COWS", User: &user, Templates: templates, TemplateImages: s.templateImageViews(r.Context(), templates, csrfToken), CSRFToken: csrfToken})
+}
+
+func (s *Server) templateImageViews(ctx context.Context, templates []domain.WorkspaceTemplate, csrfToken string) []templateImageView {
+	views := make([]templateImageView, 0, len(templates))
+	imageRuntime, supported := s.runtime.(runtime.ImageRuntime)
+	for _, value := range templates {
+		view := templateImageView{WorkspaceTemplate: value, CSRFToken: csrfToken, Status: "unavailable", Message: "Runtime image status unavailable."}
+		image := runtime.Image{Reference: value.ImageReference, Digest: value.ImageDigest}
+		if operation := s.imagePullSnapshot(value.ID); operation != nil && operation.Reference == imageReference(image) {
+			view.Status = operation.Status
+			view.Message = operation.Message
+			view.Pulling = operation.Status == "pulling"
+			view.Current = operation.Current
+			view.Total = operation.Total
+		} else if supported {
+			available, err := imageRuntime.ImageAvailable(ctx, image)
+			switch {
+			case err != nil:
+				view.Status = "unavailable"
+				view.Message = "Runtime image status unavailable."
+			case available:
+				view.Status = "available"
+				view.Message = "Available on this system."
+			default:
+				view.Status = "missing"
+				view.Message = "Not available on this system. Pull it before creating a workspace."
+			}
+		}
+		views = append(views, view)
+	}
+	return views
+}
+
+func imageReference(image runtime.Image) string {
+	if image.Digest == "" {
+		return image.Reference
+	}
+	return image.Reference + "@" + image.Digest
+}
+
+func (s *Server) imagePullSnapshot(templateID string) *imagePullOperation {
+	s.imagePullMu.Lock()
+	defer s.imagePullMu.Unlock()
+	operation := s.imagePulls[templateID]
+	if operation == nil {
+		return nil
+	}
+	copy := *operation
+	return &copy
+}
+
+func (s *Server) startImagePull(templateID string, image runtime.Image, imageRuntime runtime.ImageRuntime) *imagePullOperation {
+	s.imagePullMu.Lock()
+	if operation := s.imagePulls[templateID]; operation != nil && operation.Status == "pulling" {
+		copy := *operation
+		s.imagePullMu.Unlock()
+		return &copy
+	}
+	operation := &imagePullOperation{Reference: imageReference(image), Status: "pulling", Message: "Pulling image..."}
+	s.imagePulls[templateID] = operation
+	copy := *operation
+	s.imagePullMu.Unlock()
+	go s.runImagePull(templateID, image, imageRuntime)
+	return &copy
+}
+
+func (s *Server) runImagePull(templateID string, image runtime.Image, imageRuntime runtime.ImageRuntime) {
+	err := imageRuntime.PullImage(context.Background(), image, func(progress runtime.ImagePullProgress) {
+		s.imagePullMu.Lock()
+		if operation := s.imagePulls[templateID]; operation != nil {
+			operation.Current = progress.Current
+			operation.Total = progress.Total
+			if progress.Status != "" {
+				operation.Message = progress.Status
+			}
+		}
+		s.imagePullMu.Unlock()
+	})
+	s.imagePullMu.Lock()
+	defer s.imagePullMu.Unlock()
+	operation := s.imagePulls[templateID]
+	if operation == nil {
+		return
+	}
+	if err != nil {
+		operation.Status = "failed"
+		operation.Message = "Image pull failed. Check Podman availability and the image reference."
+		return
+	}
+	available, err := imageRuntime.ImageAvailable(context.Background(), image)
+	if err != nil || !available {
+		operation.Status = "failed"
+		operation.Message = "Image pull finished, but the image is not available locally."
+		return
+	}
+	operation.Status = "available"
+	operation.Message = "Available on this system."
+}
+
+func (s *Server) adminTemplateImagePull(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if !s.validCSRF(r) {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return
+	}
+	templateValue, err := s.workspace.GetTemplate(r.Context(), user.ID, r.PathValue("id"))
+	if errors.Is(err, repository.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to load workspace template", http.StatusInternalServerError)
+		return
+	}
+	imageRuntime, supported := s.runtime.(runtime.ImageRuntime)
+	if !supported {
+		http.Error(w, "image management is not supported by the runtime", http.StatusServiceUnavailable)
+		return
+	}
+	operation := s.startImagePull(templateValue.ID, runtime.Image{Reference: templateValue.ImageReference, Digest: templateValue.ImageDigest}, imageRuntime)
+	view := templateImageView{WorkspaceTemplate: templateValue, CSRFToken: s.ensureCSRF(w, r), Status: operation.Status, Message: operation.Message, Pulling: operation.Status == "pulling", Current: operation.Current, Total: operation.Total}
+	s.render(w, http.StatusOK, "admin-template-image-status", pageData{TemplateImage: &view})
+}
+
+func (s *Server) adminTemplateImageStatus(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	templateValue, err := s.workspace.GetTemplate(r.Context(), user.ID, r.PathValue("id"))
+	if errors.Is(err, repository.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to load workspace template", http.StatusInternalServerError)
+		return
+	}
+	views := s.templateImageViews(r.Context(), []domain.WorkspaceTemplate{templateValue}, s.ensureCSRF(w, r))
+	s.render(w, http.StatusOK, "admin-template-image-status", pageData{TemplateImage: &views[0]})
 }
 
 func (s *Server) adminTemplatesNew(w http.ResponseWriter, r *http.Request) {

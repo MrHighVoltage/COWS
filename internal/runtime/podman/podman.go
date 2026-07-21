@@ -1,6 +1,7 @@
 package podman
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -32,6 +33,19 @@ type Adapter struct {
 	streamClient     *http.Client
 	helperExecutable string
 	podmanBinary     string
+}
+
+type imagePullMessage struct {
+	Status         string `json:"status"`
+	ID             string `json:"id"`
+	ProgressDetail struct {
+		Current int64 `json:"current"`
+		Total   int64 `json:"total"`
+	} `json:"progressDetail"`
+	Error       string `json:"error"`
+	ErrorDetail struct {
+		Message string `json:"message"`
+	} `json:"errorDetail"`
 }
 
 func New(socketPath string) (*Adapter, error) {
@@ -103,6 +117,72 @@ func (a *Adapter) HostCapacity(ctx context.Context) (runtime.HostCapacity, error
 		return runtime.HostCapacity{}, fmt.Errorf("%w: COWS requires rootless Podman", runtime.ErrNotSupported)
 	}
 	return runtime.HostCapacity{CPUMillis: int64(info.NCPU) * 1000, MemoryBytes: info.MemTotal}, nil
+}
+
+func (a *Adapter) ImageAvailable(ctx context.Context, image runtime.Image) (bool, error) {
+	imageReference, err := imageReference(image)
+	if err != nil {
+		return false, runtime.ErrConflict
+	}
+	var details struct{}
+	err = a.get(ctx, "/images/"+url.PathEscape(imageReference)+"/json", &details)
+	if errors.Is(err, runtime.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (a *Adapter) PullImage(ctx context.Context, image runtime.Image, progress func(runtime.ImagePullProgress)) error {
+	imageReference, err := imageReference(image)
+	if err != nil {
+		return runtime.ErrConflict
+	}
+	version, err := a.version(ctx)
+	if err != nil {
+		return err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://podman/v"+version+"/images/create?fromImage="+url.QueryEscape(imageReference), nil)
+	if err != nil {
+		return fmt.Errorf("create Podman image pull request: %w", err)
+	}
+	client := a.streamClient
+	if client == nil {
+		client = a.client
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("%w: Podman image pull: %v", runtime.ErrUnavailable, err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		body, _ := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes))
+		return fmt.Errorf("%w: Podman image pull returned %s: %s", runtime.ErrUnavailable, response.Status, strings.TrimSpace(string(body)))
+	}
+	scanner := bufio.NewScanner(response.Body)
+	scanner.Buffer(make([]byte, 4096), 1<<20)
+	for scanner.Scan() {
+		var message imagePullMessage
+		if err := json.Unmarshal(scanner.Bytes(), &message); err != nil {
+			return fmt.Errorf("decode Podman image pull response: %w", err)
+		}
+		if message.Error != "" || message.ErrorDetail.Message != "" {
+			failure := message.Error
+			if failure == "" {
+				failure = message.ErrorDetail.Message
+			}
+			return fmt.Errorf("%w: %s", runtime.ErrConflict, failure)
+		}
+		if progress != nil {
+			progress(runtime.ImagePullProgress{Status: message.Status, Current: message.ProgressDetail.Current, Total: message.ProgressDetail.Total})
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("read Podman image pull response: %w", err)
+	}
+	return nil
 }
 
 func (a *Adapter) ListManaged(ctx context.Context) ([]runtime.ObservedWorkspace, error) {
@@ -188,12 +268,9 @@ func (a *Adapter) CreateWorkspace(ctx context.Context, spec runtime.WorkspaceSpe
 	if !capabilities.SupportsCPUResourceLimits || !capabilities.SupportsMemoryResourceLimits || !capabilities.SupportsPIDLimits {
 		return runtime.WorkspaceHandle{}, runtime.ErrNotSupported
 	}
-	imageReference := spec.Image.Reference
-	if spec.Image.Digest != "" {
-		if !validImageDigest(spec.Image.Digest) {
-			return runtime.WorkspaceHandle{}, runtime.ErrConflict
-		}
-		imageReference += "@" + spec.Image.Digest
+	imageReference, err := imageReference(spec.Image)
+	if err != nil {
+		return runtime.WorkspaceHandle{}, err
 	}
 	networkMode := spec.NetworkMode
 	if networkMode == "" {
@@ -849,6 +926,19 @@ func (a *Adapter) requestMethod(ctx context.Context, method, path string, input,
 
 func validImage(image runtime.Image) bool {
 	return image.Reference != "" && len(image.Reference) <= 255 && !strings.ContainsAny(image.Reference, " \t\r\n")
+}
+
+func imageReference(image runtime.Image) (string, error) {
+	if !validImage(image) {
+		return "", runtime.ErrConflict
+	}
+	if image.Digest != "" && !validImageDigest(image.Digest) {
+		return "", runtime.ErrConflict
+	}
+	if image.Digest == "" {
+		return image.Reference, nil
+	}
+	return image.Reference + "@" + image.Digest, nil
 }
 
 func validImageDigest(value string) bool {
