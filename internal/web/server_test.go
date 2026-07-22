@@ -344,6 +344,23 @@ func TestLoginAndAdministratorUserManagement(t *testing.T) {
 	if templateRecorder.Code != http.StatusSeeOther {
 		t.Fatalf("create template status = %d body=%s", templateRecorder.Code, templateRecorder.Body.String())
 	}
+	admin, _, err := authService.Authenticate(ctx, "admin", "changed correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate administrator for copy: %v", err)
+	}
+	templates, err := server.workspace.ListTemplates(ctx, admin.ID)
+	if err != nil || len(templates) != 1 {
+		t.Fatalf("load created template for copy: count=%d err=%v", len(templates), err)
+	}
+	copyRequest := httptest.NewRequest(http.MethodGet, "/admin/templates/"+templates[0].ID+"/copy", nil)
+	copyRequest.AddCookie(sessionCookie)
+	copyRequest.AddCookie(csrfCookie)
+	copyRecorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(copyRecorder, copyRequest)
+	copyBody := copyRecorder.Body.String()
+	if copyRecorder.Code != http.StatusOK || !strings.Contains(copyBody, `name="name" type="text" value=""`) || !strings.Contains(copyBody, `name="image_reference" type="text" value="registry.example/research:1"`) {
+		t.Fatalf("copy template form: status=%d body=%s", copyRecorder.Code, copyBody)
+	}
 }
 
 func TestAdministratorRouteRedirectsUnauthenticatedUsers(t *testing.T) {

@@ -398,6 +398,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/templates/new", s.adminTemplatesNew)
 	mux.HandleFunc("POST /admin/templates", s.adminTemplatesCreate)
 	mux.HandleFunc("GET /admin/templates/{id}/edit", s.adminTemplatesEdit)
+	mux.HandleFunc("GET /admin/templates/{id}/copy", s.adminTemplatesCopy)
 	mux.HandleFunc("POST /admin/templates/{id}", s.adminTemplatesUpdate)
 	mux.HandleFunc("POST /admin/templates/{id}/enabled", s.adminTemplateEnabled)
 	mux.HandleFunc("POST /admin/templates/{id}/image/pull", s.adminTemplateImagePull)
@@ -2056,6 +2057,27 @@ func (s *Server) adminTemplatesEdit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, http.StatusOK, "admin-template-form-page", pageData{Title: "Edit template | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), Template: templateFormFromDomain(template), Groups: s.templateGroups(r.Context(), user.ID)})
+}
+
+func (s *Server) adminTemplatesCopy(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	templateValue, err := s.workspace.GetTemplate(r.Context(), user.ID, r.PathValue("id"))
+	if errors.Is(err, repository.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to load workspace template", http.StatusInternalServerError)
+		return
+	}
+	form := templateFormFromDomain(templateValue)
+	form.ID = ""
+	form.Editing = false
+	form.Name = ""
+	s.render(w, http.StatusOK, "admin-template-form-page", pageData{Title: "Copy workspace template | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), Template: form, Groups: s.templateGroups(r.Context(), user.ID)})
 }
 
 func (s *Server) adminTemplatesUpdate(w http.ResponseWriter, r *http.Request) {
