@@ -26,6 +26,7 @@
           <td>{{ if .Enabled }}<span class="status-value status-ok">Enabled</span>{{ else }}<span class="status-value status-disabled">Disabled</span>{{ end }}</td>
           <td class="action-stack">
             <a class="table-action button-link" href="/admin/templates/{{ .ID }}/edit">Edit</a>
+            <a class="table-action button-link" href="/admin/templates/{{ .ID }}/copy">Copy</a>
             <form method="post" action="/admin/templates/{{ .ID }}/enabled" x-on:submit="if (!confirm('Change this template status?')) $event.preventDefault()">
               <input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}">
               <input type="hidden" name="enabled" value="{{ if .Enabled }}false{{ else }}true{{ end }}">
