@@ -849,6 +849,9 @@ func (s *Store) CreatePasswordResetToken(ctx context.Context, token domain.Passw
 	if _, err := tx.ExecContext(ctx, "DELETE FROM password_reset_tokens WHERE user_id = ?", token.UserID); err != nil {
 		return fmt.Errorf("replace password reset token: %w", err)
 	}
+	if _, err := tx.ExecContext(ctx, "UPDATE password_reset_emails SET status = 'canceled' WHERE user_id = ? AND status = 'pending'", token.UserID); err != nil {
+		return fmt.Errorf("cancel previous password reset emails: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, "INSERT INTO password_reset_tokens (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)", token.TokenHash, token.UserID, token.ExpiresAt.Unix(), token.CreatedAt.Unix()); err != nil {
 		return fmt.Errorf("store password reset token: %w", err)
 	}
