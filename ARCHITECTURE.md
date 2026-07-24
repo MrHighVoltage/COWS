@@ -175,8 +175,9 @@ change. The commit is transactional. A credential CSV containing imported
 fields and new passwords is retained only in memory for a short download
 window and is never logged or persisted in SQLite.
 
-There is no email verification or password-reset flow yet. Those flows need
-short-lived single-use tokens and a recovery policy before they are enabled.
+Local password reset uses a separate short-lived, single-use hashed token and
+email outbox. It is non-enumerating and invalidates all sessions after use.
+Email verification and institutional identity are intentionally deferred.
 
 Account disablement is an administrative lifecycle operation. The database
 transaction marks the account disabled and invalidates all of its sessions

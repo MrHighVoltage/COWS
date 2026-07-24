@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/cows-project/cows/internal/domain"
@@ -23,9 +25,14 @@ type Sender interface {
 	Send(ctx context.Context, notification domain.EmailNotification) error
 }
 
+type MessageSender interface {
+	SendMessage(ctx context.Context, recipient, subject, body string) error
+}
+
 type Service struct {
 	store         repository.Store
 	sender        Sender
+	messageSender MessageSender
 	warningLead   time.Duration
 	retryInterval time.Duration
 	now           func() time.Time
@@ -38,7 +45,31 @@ func New(store repository.Store, sender Sender, warningLead, retryInterval time.
 	if retryInterval <= 0 {
 		return nil, errors.New("email retry interval must be positive")
 	}
-	return &Service{store: store, sender: sender, warningLead: warningLead, retryInterval: retryInterval, now: time.Now}, nil
+	service := &Service{store: store, sender: sender, warningLead: warningLead, retryInterval: retryInterval, now: time.Now}
+	if messageSender, ok := sender.(MessageSender); ok {
+		service.messageSender = messageSender
+	}
+	return service, nil
+}
+
+func (s *Service) EnqueuePasswordReset(ctx context.Context, requestUserID, recipient, rawToken, baseURL string, expiresAt time.Time) error {
+	if s.messageSender == nil || requestUserID == "" || recipient == "" || rawToken == "" {
+		return nil
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return errors.New("invalid password reset base URL")
+	}
+	values := parsed.Query()
+	values.Set("token", rawToken)
+	parsed.Path = strings.TrimRight(parsed.Path, "/") + "/password/reset/confirm"
+	parsed.RawQuery = values.Encode()
+	now := s.now().UTC()
+	return s.store.UpsertPasswordResetEmail(ctx, domain.PasswordResetEmail{
+		UserID: requestUserID, Recipient: recipient, Subject: "COWS password reset",
+		Body:   fmt.Sprintf("A COWS password reset was requested for your account. Open this link within one hour to choose a new password:\n\n%s\n\nIf you did not request this, ignore this message.", parsed.String()),
+		Status: "pending", NextAttemptAt: now, CreatedAt: now,
+	})
 }
 
 func (s *Service) EnqueueTimeoutWarnings(ctx context.Context) error {
@@ -90,41 +121,66 @@ func (s *Service) EnqueueTimeoutWarnings(ctx context.Context) error {
 }
 
 func (s *Service) Deliver(ctx context.Context) error {
-	if s.sender == nil {
+	if s.sender == nil && s.messageSender == nil {
 		return nil
 	}
 	now := s.now().UTC()
-	notifications, err := s.store.ListPendingEmailNotifications(ctx, now, maxBatchSize)
-	if err != nil {
-		return err
-	}
 	failed := false
-	for _, notification := range notifications {
-		current, err := s.notificationIsCurrent(ctx, notification, now)
+	if s.sender != nil {
+		notifications, err := s.store.ListPendingEmailNotifications(ctx, now, maxBatchSize)
 		if err != nil {
 			return err
 		}
-		if !current {
-			if err := s.store.MarkEmailNotificationCanceled(ctx, notification.ID); err != nil && !errors.Is(err, repository.ErrNotFound) {
+		for _, notification := range notifications {
+			current, err := s.notificationIsCurrent(ctx, notification, now)
+			if err != nil {
 				return err
 			}
-			continue
-		}
-		if err := s.sender.Send(ctx, notification); err != nil {
-			failed = true
-			attempts := notification.Attempts + 1
-			if err := s.store.MarkEmailNotificationFailed(ctx, notification.ID, attempts, now.Add(s.retryInterval), "smtp_send_failed"); err != nil {
-				return err
-			}
-			if attempts >= maxDeliveryAttempts {
+			if !current {
 				if err := s.store.MarkEmailNotificationCanceled(ctx, notification.ID); err != nil && !errors.Is(err, repository.ErrNotFound) {
 					return err
 				}
+				continue
 			}
-			continue
+			if err := s.sender.Send(ctx, notification); err != nil {
+				failed = true
+				attempts := notification.Attempts + 1
+				if err := s.store.MarkEmailNotificationFailed(ctx, notification.ID, attempts, now.Add(s.retryInterval), "smtp_send_failed"); err != nil {
+					return err
+				}
+				if attempts >= maxDeliveryAttempts {
+					if err := s.store.MarkEmailNotificationCanceled(ctx, notification.ID); err != nil && !errors.Is(err, repository.ErrNotFound) {
+						return err
+					}
+				}
+				continue
+			}
+			if err := s.store.MarkEmailNotificationSent(ctx, notification.ID, now); err != nil {
+				return err
+			}
 		}
-		if err := s.store.MarkEmailNotificationSent(ctx, notification.ID, now); err != nil {
+	}
+	if s.messageSender != nil {
+		messages, err := s.store.ListPendingPasswordResetEmails(ctx, now, maxBatchSize)
+		if err != nil {
 			return err
+		}
+		for _, message := range messages {
+			if err := s.messageSender.SendMessage(ctx, message.Recipient, message.Subject, message.Body); err != nil {
+				failed = true
+				attempts := message.Attempts + 1
+				if attempts >= maxDeliveryAttempts {
+					if err := s.store.MarkPasswordResetEmailCanceled(ctx, message.ID); err != nil && !errors.Is(err, repository.ErrNotFound) {
+						return err
+					}
+				} else if err := s.store.MarkPasswordResetEmailFailed(ctx, message.ID, attempts, now.Add(s.retryInterval), "smtp_send_failed"); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := s.store.MarkPasswordResetEmailSent(ctx, message.ID, now); err != nil {
+				return err
+			}
 		}
 	}
 	if failed {

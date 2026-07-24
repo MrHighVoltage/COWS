@@ -511,8 +511,23 @@ func (s *Service) StartWorkspace(ctx context.Context, actorID, workspaceID strin
 		if err != nil {
 			return err
 		}
+		networkName := workspaceNetworkName(spec.NetworkMode)
+		if networkName != "" {
+			networkRuntime, ok := s.runtime.(runtime.NetworkRuntime)
+			if !ok {
+				return fmt.Errorf("%w: private workspace network support is unavailable", runtime.ErrNotSupported)
+			}
+			if err := networkRuntime.CreateWorkspaceNetwork(ctx, networkName); err != nil {
+				return fmt.Errorf("create private workspace network: %w", err)
+			}
+		}
 		handle, err := s.runtime.CreateWorkspace(ctx, spec)
 		if err != nil {
+			if networkName != "" {
+				if networkRuntime, ok := s.runtime.(runtime.NetworkRuntime); ok {
+					_ = networkRuntime.RemoveWorkspaceNetwork(ctx, networkName)
+				}
+			}
 			_ = s.store.UpdateWorkspaceObservedState(ctx, value.ID, string(runtime.StateFailed), "", "runtime_create_failed", err.Error(), s.now().UTC(), s.now().UTC())
 			_ = s.finishOperation(ctx, value.ID, "start", "failed", err.Error(), operationStarted)
 			return err
@@ -617,6 +632,10 @@ func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID stri
 		return err
 	}
 	archiveAction := archiveMountActivityAction(configuration.Mounts)
+	networkName := ""
+	if s.networkIsolation && len(configuration.Services) > 0 {
+		networkName = workspaceNetworkName("cows-net-" + value.ID)
+	}
 	if value.RuntimeID == "" {
 		if err := s.logArchiveActivity(value, "workspace_delete_started", "started", nil); err != nil {
 			return err
@@ -659,6 +678,14 @@ func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID stri
 		if err := s.logArchiveActivity(value, "runtime_container_removed", "succeeded", nil); err != nil {
 			_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
 			return err
+		}
+	}
+	if networkName != "" {
+		if networkRuntime, ok := s.runtime.(runtime.NetworkRuntime); ok {
+			if err := networkRuntime.RemoveWorkspaceNetwork(ctx, networkName); err != nil {
+				_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
+				return err
+			}
 		}
 	}
 	_ = s.updateOperationPhase(ctx, value.ID, "delete:archiving")
@@ -1150,6 +1177,9 @@ func (s *Service) runtimeSpec(ctx context.Context, value domain.Workspace) (runt
 	networkMode := "none"
 	if len(resolved.Ports) > 0 {
 		networkMode = "bridge"
+		if s.networkIsolation {
+			networkMode = "cows-net-" + value.ID
+		}
 	}
 	mounts := make([]runtime.Mount, 0, len(configuration.Mounts))
 	for _, definition := range configuration.Mounts {
@@ -1164,6 +1194,18 @@ func (s *Service) runtimeSpec(ctx context.Context, value domain.Workspace) (runt
 		image = runtime.Image{Reference: template.ImageReference, Digest: template.ImageDigest}
 	}
 	return runtime.WorkspaceSpec{WorkspaceID: value.ID, Image: image, Limits: runtime.ResourceLimits{CPUMillis: value.AllocatedCPUMillis, MemoryBytes: value.AllocatedMemoryBytes}, Labels: runtime.ManagedLabels(value.ID), Command: resolved.Command, Environment: resolved.Environment, Mounts: mounts, Ports: resolved.Ports, NetworkMode: networkMode, User: resolved.User}, nil
+}
+
+func workspaceNetworkName(value string) string {
+	if !strings.HasPrefix(value, "cows-net-") || len(value) <= len("cows-net-") {
+		return ""
+	}
+	for _, char := range value {
+		if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') && (char < '0' || char > '9') && char != '-' && char != '_' {
+			return ""
+		}
+	}
+	return value
 }
 
 func (s *Service) effectiveConfiguration(ctx context.Context, value domain.Workspace) (domain.TemplateConfiguration, error) {

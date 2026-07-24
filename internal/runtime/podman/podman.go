@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -570,6 +571,51 @@ func (a *Adapter) RemoveWorkspace(ctx context.Context, runtimeID string) error {
 		return runtime.ErrNotFound
 	}
 	return a.mutation(ctx, http.MethodDelete, "/containers/"+url.PathEscape(runtimeID), nil, nil)
+}
+
+func (a *Adapter) CreateWorkspaceNetwork(ctx context.Context, name string) error {
+	if !validWorkspaceNetworkName(name) {
+		return runtime.ErrConflict
+	}
+	if a.podmanBinary == "" {
+		return fmt.Errorf("%w: Podman executable is unavailable", runtime.ErrNotSupported)
+	}
+	if err := exec.CommandContext(ctx, a.podmanBinary, "network", "inspect", name).Run(); err == nil {
+		return nil
+	}
+	command := exec.CommandContext(ctx, a.podmanBinary, "network", "create", "--internal", "--disable-dns", name)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: create private Podman network: %s", runtime.ErrUnavailable, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func (a *Adapter) RemoveWorkspaceNetwork(ctx context.Context, name string) error {
+	if !validWorkspaceNetworkName(name) {
+		return runtime.ErrConflict
+	}
+	if a.podmanBinary == "" {
+		return fmt.Errorf("%w: Podman executable is unavailable", runtime.ErrNotSupported)
+	}
+	command := exec.CommandContext(ctx, a.podmanBinary, "network", "rm", name)
+	output, err := command.CombinedOutput()
+	if err != nil && strings.TrimSpace(string(output)) != "" {
+		return fmt.Errorf("%w: remove private Podman network: %s", runtime.ErrUnavailable, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func validWorkspaceNetworkName(value string) bool {
+	if len(value) < len("cows-net-")+1 || len(value) > 63 || !strings.HasPrefix(value, "cows-net-") {
+		return false
+	}
+	for _, char := range value {
+		if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') && (char < '0' || char > '9') && char != '-' && char != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *Adapter) OpenShell(ctx context.Context, runtimeID string, command []string) (runtime.Terminal, error) {

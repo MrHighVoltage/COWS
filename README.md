@@ -38,10 +38,11 @@ Implemented today:
   binary, plus optional lifecycle warning email delivery.
 
 The implementation is not production-ready. Remaining high-impact gaps include
-stronger network isolation between workspaces, robust recovery of partial
-lifecycle operations, a constrained web-application proxy, password recovery
-and identity integration, richer audit/metrics operations, and deployment
-hardening. See [ROADMAP.md](ROADMAP.md) for the complete status.
+robust recovery of partial lifecycle operations, a constrained web-application
+proxy, historical metrics, volume restore, and deployment hardening. Local
+password reset, richer audit/metrics views, named-volume recovery, and optional
+network isolation are implemented. See [ROADMAP.md](ROADMAP.md) for the
+complete status.
 
 ## Goals
 

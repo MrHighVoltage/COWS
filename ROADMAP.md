@@ -165,18 +165,19 @@ Remaining work: named-volume administrator recovery and cleanup, stronger
 symlink-race integration tests, total temporary-storage policy, file previews,
 bulk operations, and archive extraction only after a dedicated security design.
 
-## Milestone 9: Institutional authentication — not started
+## Milestone 9: Local account recovery and operations visibility — implemented
 
-Evaluate OpenID Connect, account linking/provisioning, role mapping, and a
-recovery-administrator strategy. Do not add email verification or password
-reset as an incidental part of this milestone.
+Local password-reset email with hashed single-use tokens, a retryable email
+outbox, a bounded administrator audit view, live runtime metrics, and
+administrator retained-volume recovery/download/removal. Institutional
+authentication is deliberately excluded from the current plan.
 
-## Milestone 10: Network isolation — planned
+## Milestone 10: Optional network isolation — implemented
 
-Design and implement per-workspace/private networks or equivalent Podman
-policy, explicit cross-workspace denial, controlled egress, DNS policy, and
-tests proving that one workspace cannot reach another. Preserve the COWS
-WebSocket access gateway and avoid public service ports.
+New service-enabled workspaces can use server-generated internal per-workspace
+Podman networks. Creation fails closed when isolation is enabled but the
+runtime cannot provide it. Stronger host-level egress policy and migration of
+existing workspaces remain future work.
 
 ## Later
 

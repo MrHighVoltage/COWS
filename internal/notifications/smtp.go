@@ -43,6 +43,14 @@ func NewSMTPSender(config SMTPConfig) (*SMTPSender, error) {
 }
 
 func (s *SMTPSender) Send(ctx context.Context, notification domain.EmailNotification) error {
+	return s.sendMessage(ctx, notification.Recipient, notification.Subject, notification.Body)
+}
+
+func (s *SMTPSender) SendMessage(ctx context.Context, recipient, subject, body string) error {
+	return s.sendMessage(ctx, recipient, subject, body)
+}
+
+func (s *SMTPSender) sendMessage(ctx context.Context, recipient, subject, body string) error {
 	dialer := &net.Dialer{Timeout: 15 * time.Second}
 	connection, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(s.config.Host, strconv.Itoa(s.config.Port)))
 	if err != nil {
@@ -69,14 +77,14 @@ func (s *SMTPSender) Send(ctx context.Context, notification domain.EmailNotifica
 	if err := client.Mail(s.config.From); err != nil {
 		return fmt.Errorf("set SMTP sender: %w", err)
 	}
-	if err := client.Rcpt(notification.Recipient); err != nil {
+	if err := client.Rcpt(recipient); err != nil {
 		return fmt.Errorf("set SMTP recipient: %w", err)
 	}
 	writer, err := client.Data()
 	if err != nil {
 		return fmt.Errorf("start SMTP message: %w", err)
 	}
-	message := "From: " + s.config.From + "\r\nTo: " + notification.Recipient + "\r\nSubject: " + notification.Subject + "\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n" + notification.Body + "\r\n"
+	message := "From: " + s.config.From + "\r\nTo: " + recipient + "\r\nSubject: " + subject + "\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n" + body + "\r\n"
 	if _, err := io.WriteString(writer, message); err != nil {
 		_ = writer.Close()
 		return fmt.Errorf("write SMTP message: %w", err)

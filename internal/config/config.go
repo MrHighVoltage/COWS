@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math"
 	"net/mail"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -30,6 +31,8 @@ type Config struct {
 	ShutdownTimeout             time.Duration
 	SessionLifetime             time.Duration
 	CookieSecure                bool
+	ExternalBaseURL             string
+	NetworkIsolationEnabled     bool
 	BootstrapAdminUsername      string
 	BootstrapAdminPassword      string
 	RegistrationEnabled         bool
@@ -64,6 +67,8 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	shutdownTimeout := envOr(lookup, "COWS_SHUTDOWN_TIMEOUT", "10s")
 	sessionLifetime := envOr(lookup, "COWS_SESSION_LIFETIME", "8h")
 	cookieSecureValue := envOr(lookup, "COWS_COOKIE_SECURE", "false")
+	externalBaseURL := envOr(lookup, "COWS_EXTERNAL_BASE_URL", "")
+	networkIsolationValue := envOr(lookup, "COWS_NETWORK_ISOLATION_ENABLED", "false")
 	bootstrapUsername := envOr(lookup, "COWS_BOOTSTRAP_ADMIN_USERNAME", "")
 	bootstrapPassword := envOr(lookup, "COWS_BOOTSTRAP_ADMIN_PASSWORD", "")
 	registrationEnabledValue := envOr(lookup, "COWS_REGISTRATION_ENABLED", "false")
@@ -85,6 +90,10 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	cookieSecure, err := strconv.ParseBool(cookieSecureValue)
 	if err != nil {
 		return Config{}, fmt.Errorf("cookie secure must be true or false: %q", cookieSecureValue)
+	}
+	networkIsolationEnabled, err := strconv.ParseBool(networkIsolationValue)
+	if err != nil {
+		return Config{}, fmt.Errorf("network isolation enabled must be true or false: %q", networkIsolationValue)
 	}
 	registrationEnabled, err := strconv.ParseBool(registrationEnabledValue)
 	if err != nil {
@@ -113,6 +122,8 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	flags.StringVar(&shutdownTimeout, "shutdown-timeout", shutdownTimeout, "graceful shutdown timeout")
 	flags.StringVar(&sessionLifetime, "session-lifetime", sessionLifetime, "authenticated session lifetime")
 	flags.BoolVar(&cookieSecure, "cookie-secure", cookieSecure, "mark browser cookies Secure")
+	flags.StringVar(&externalBaseURL, "external-base-url", externalBaseURL, "trusted external COWS base URL used in email links")
+	flags.BoolVar(&networkIsolationEnabled, "network-isolation-enabled", networkIsolationEnabled, "enable per-workspace internal Podman networks")
 	flags.StringVar(&bootstrapUsername, "bootstrap-admin-username", bootstrapUsername, "initial administrator username")
 	flags.StringVar(&bootstrapPassword, "bootstrap-admin-password", bootstrapPassword, "initial administrator password")
 	flags.BoolVar(&registrationEnabled, "registration-enabled", registrationEnabled, "enable public local-account registration")
@@ -163,6 +174,13 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	}
 	if strings.TrimSpace(podmanSocket) == "" {
 		return Config{}, errors.New("Podman socket path must not be empty")
+	}
+	if strings.TrimSpace(externalBaseURL) != "" {
+		parsed, parseErr := url.Parse(strings.TrimSpace(externalBaseURL))
+		if parseErr != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return Config{}, errors.New("external base URL must be an absolute HTTP or HTTPS URL without query or fragment")
+		}
+		externalBaseURL = strings.TrimRight(parsed.String(), "/")
 	}
 	hostStorageBytes, err := strconv.ParseInt(hostStorageValue, 10, 64)
 	if err != nil || hostStorageBytes < 0 {
@@ -241,6 +259,8 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 		ShutdownTimeout:             timeout,
 		SessionLifetime:             sessionDuration,
 		CookieSecure:                cookieSecure,
+		ExternalBaseURL:             strings.TrimSpace(externalBaseURL),
+		NetworkIsolationEnabled:     networkIsolationEnabled,
 		BootstrapAdminUsername:      bootstrapUsername,
 		BootstrapAdminPassword:      bootstrapPassword,
 		RegistrationEnabled:         registrationEnabled,

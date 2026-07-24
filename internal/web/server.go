@@ -27,6 +27,7 @@ import (
 	"github.com/cows-project/cows/internal/auth"
 	"github.com/cows-project/cows/internal/domain"
 	"github.com/cows-project/cows/internal/files"
+	"github.com/cows-project/cows/internal/notifications"
 	"github.com/cows-project/cows/internal/quota"
 	"github.com/cows-project/cows/internal/repository"
 	"github.com/cows-project/cows/internal/runtime"
@@ -43,11 +44,14 @@ const (
 )
 
 type Options struct {
-	CookieSecure        bool
-	SessionLifetime     time.Duration
-	LoginLimiter        *auth.LoginLimiter
-	RegistrationEnabled bool
-	RegistrationLimiter *auth.LoginLimiter
+	CookieSecure         bool
+	SessionLifetime      time.Duration
+	LoginLimiter         *auth.LoginLimiter
+	RegistrationEnabled  bool
+	RegistrationLimiter  *auth.LoginLimiter
+	Notifications        *notifications.Service
+	ExternalBaseURL      string
+	PasswordResetEnabled bool
 }
 
 type Server struct {
@@ -81,6 +85,13 @@ type userFormData struct {
 
 type passwordFormData struct {
 	Error string
+}
+
+type passwordResetFormData struct {
+	Identifier string
+	Token      string
+	Error      string
+	Notice     string
 }
 
 type registrationFormData struct {
@@ -180,6 +191,8 @@ type pageData struct {
 	TemplateImage               *templateImageView
 	Template                    templateFormData
 	Password                    passwordFormData
+	PasswordReset               passwordResetFormData
+	PasswordResetEnabled        bool
 	Registration                registrationFormData
 	RegistrationEnabled         bool
 	Inspection                  *runtime.Inspection
@@ -346,6 +359,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /fragments/health", s.healthFragment)
 	mux.HandleFunc("GET /login", s.loginGet)
 	mux.HandleFunc("POST /login", s.loginPost)
+	mux.HandleFunc("GET /password/reset", s.passwordResetGet)
+	mux.HandleFunc("POST /password/reset/request", s.passwordResetRequestPost)
+	mux.HandleFunc("GET /password/reset/confirm", s.passwordResetConfirmGet)
+	mux.HandleFunc("POST /password/reset/confirm", s.passwordResetConfirmPost)
 	mux.HandleFunc("GET /register", s.registerGet)
 	mux.HandleFunc("POST /register", s.registerPost)
 	mux.HandleFunc("POST /logout", s.logoutPost)
@@ -445,7 +462,100 @@ func (s *Server) loginGet(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
-	s.render(w, http.StatusOK, "login-page", pageData{Title: "Sign in | COWS", CSRFToken: s.ensureCSRF(w, r), RegistrationEnabled: s.options.RegistrationEnabled})
+	s.render(w, http.StatusOK, "login-page", pageData{Title: "Sign in | COWS", CSRFToken: s.ensureCSRF(w, r), RegistrationEnabled: s.options.RegistrationEnabled, PasswordResetEnabled: s.options.PasswordResetEnabled})
+}
+
+func (s *Server) passwordResetGet(w http.ResponseWriter, r *http.Request) {
+	if !s.options.PasswordResetEnabled {
+		http.NotFound(w, r)
+		return
+	}
+	data := pageData{Title: "Reset password | COWS", CSRFToken: s.ensureCSRF(w, r), PasswordResetEnabled: true}
+	if token := strings.TrimSpace(r.URL.Query().Get("token")); token != "" {
+		data.PasswordReset.Token = token
+		s.render(w, http.StatusOK, "password-reset-confirm-page", data)
+		return
+	}
+	s.render(w, http.StatusOK, "password-reset-request-page", data)
+}
+
+func (s *Server) passwordResetRequestPost(w http.ResponseWriter, r *http.Request) {
+	if !s.options.PasswordResetEnabled || s.options.Notifications == nil {
+		http.NotFound(w, r)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if !s.validCSRF(r) {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	data := pageData{Title: "Reset password | COWS", CSRFToken: s.ensureCSRF(w, r), PasswordResetEnabled: true}
+	key := "password-reset:" + loginRateLimitKey(r)
+	if !s.options.LoginLimiter.Allow(key) {
+		data.PasswordReset.Notice = "If the account is eligible, a reset message will be sent. Check your email or try again later."
+		s.render(w, http.StatusOK, "password-reset-request-page", data)
+		return
+	}
+	request, err := s.auth.RequestPasswordReset(r.Context(), r.FormValue("identifier"))
+	if err == nil && request.Token != "" {
+		err = s.options.Notifications.EnqueuePasswordReset(r.Context(), request.User.ID, request.User.Email, request.Token, s.options.ExternalBaseURL, request.ExpiresAt)
+	}
+	// Do not distinguish unknown accounts or delivery failures in this response.
+	data.PasswordReset.Notice = "If the account is eligible, a password reset message has been queued. Check your email."
+	if err != nil {
+		data.PasswordReset.Notice = "If the account is eligible, a password reset message will be sent. Check your email or try again later."
+	}
+	s.render(w, http.StatusOK, "password-reset-request-page", data)
+}
+
+func (s *Server) passwordResetConfirmGet(w http.ResponseWriter, r *http.Request) {
+	if !s.options.PasswordResetEnabled {
+		http.NotFound(w, r)
+		return
+	}
+	token := strings.TrimSpace(r.URL.Query().Get("token"))
+	if token == "" || len(token) > 256 {
+		http.Redirect(w, r, "/password/reset", http.StatusSeeOther)
+		return
+	}
+	s.render(w, http.StatusOK, "password-reset-confirm-page", pageData{Title: "Choose new password | COWS", CSRFToken: s.ensureCSRF(w, r), PasswordResetEnabled: true, PasswordReset: passwordResetFormData{Token: token}})
+}
+
+func (s *Server) passwordResetConfirmPost(w http.ResponseWriter, r *http.Request) {
+	if !s.options.PasswordResetEnabled {
+		http.NotFound(w, r)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if !s.validCSRF(r) {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	data := pageData{Title: "Choose new password | COWS", CSRFToken: s.ensureCSRF(w, r), PasswordResetEnabled: true, PasswordReset: passwordResetFormData{Token: r.FormValue("token")}}
+	if r.FormValue("new_password") != r.FormValue("confirm_password") {
+		data.PasswordReset.Error = "The new passwords do not match."
+		s.render(w, http.StatusBadRequest, "password-reset-confirm-page", data)
+		return
+	}
+	if err := s.auth.ResetPassword(r.Context(), r.FormValue("token"), r.FormValue("new_password")); err != nil {
+		switch {
+		case errors.Is(err, auth.ErrInvalidInput):
+			data.PasswordReset.Error = "The new password must be between 12 and 72 characters."
+		default:
+			data.PasswordReset.Error = "This reset link is invalid or expired. Request a new one."
+		}
+		s.render(w, http.StatusBadRequest, "password-reset-confirm-page", data)
+		return
+	}
+	s.render(w, http.StatusOK, "login-page", pageData{Title: "Sign in | COWS", CSRFToken: s.ensureCSRF(w, r), RegistrationEnabled: s.options.RegistrationEnabled, PasswordResetEnabled: s.options.PasswordResetEnabled, Notice: "Your password was changed. You can now sign in."})
 }
 
 func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {

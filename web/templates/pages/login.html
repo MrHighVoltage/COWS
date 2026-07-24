@@ -14,6 +14,7 @@
     <button class="primary-button" type="submit">Sign in</button>
   </form>
   {{ if .RegistrationEnabled }}<p class="form-note">Need an account? <a href="/register">Register</a></p>{{ end }}
+  {{ if .PasswordResetEnabled }}<p class="form-note"><a href="/password/reset">Forgot your password?</a></p>{{ end }}
 </section>
 {{ template "base-end" . }}
 {{ end }}
