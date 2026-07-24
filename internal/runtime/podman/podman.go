@@ -606,6 +606,27 @@ func (a *Adapter) RemoveWorkspaceNetwork(ctx context.Context, name string) error
 	return nil
 }
 
+func (a *Adapter) VolumeExists(ctx context.Context, name string) (bool, error) {
+	if !validWorkspaceID(name) {
+		return false, runtime.ErrConflict
+	}
+	_, err := a.volumePath(ctx, name)
+	if errors.Is(err, runtime.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (a *Adapter) RemoveVolume(ctx context.Context, name string) error {
+	if !validWorkspaceID(name) {
+		return runtime.ErrConflict
+	}
+	return a.mutation(ctx, http.MethodDelete, "/libpod/volumes/"+url.PathEscape(name), nil, nil)
+}
+
 func validWorkspaceNetworkName(value string) bool {
 	if len(value) < len("cows-net-")+1 || len(value) > 63 || !strings.HasPrefix(value, "cows-net-") {
 		return false

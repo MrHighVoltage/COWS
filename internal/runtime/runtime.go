@@ -231,6 +231,11 @@ type FileAccessRuntime interface {
 	OpenFileAccess(ctx context.Context, spec FileAccessSpec) (FileAccess, error)
 }
 
+type VolumeRuntime interface {
+	VolumeExists(ctx context.Context, name string) (bool, error)
+	RemoveVolume(ctx context.Context, name string) error
+}
+
 type StorageUsageSpec struct {
 	RuntimeID string
 	Mounts    []FileAccessSpec

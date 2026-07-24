@@ -24,6 +24,9 @@
         {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a class="nav-tab" href="/admin/settings">Settings</a>{{ end }}
         {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a class="nav-tab" href="/admin/templates">Templates</a>{{ end }}
         {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a class="nav-tab" href="/admin/runtime">Runtime</a>{{ end }}
+        {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a class="nav-tab" href="/admin/metrics">Metrics</a>{{ end }}
+        {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a class="nav-tab" href="/admin/audit">Audit</a>{{ end }}
+        {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a class="nav-tab" href="/admin/volumes">Volumes</a>{{ end }}
         <form class="sign-out-form" method="post" action="/logout">
           <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
           <button class="link-button sign-out-button" type="submit">Sign out</button>
