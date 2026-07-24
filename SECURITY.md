@@ -19,7 +19,10 @@ partial operations, and compromised or misconfigured images.
 - COWS HTTP handlers are the public application boundary.
 - Domain services enforce ownership, role, template, quota, and state policy.
 - The runtime adapter is the only boundary to the local rootless Podman service.
-- Managed containers are isolated workloads, not trusted application code.
+- Managed containers are untrusted workloads. Templates without internal
+  services use `none` networking; desktop-enabled templates currently use the
+  Podman bridge with loopback-only host mappings. This is not yet a complete
+  per-workspace network isolation or egress policy.
 - A reverse proxy is part of the deployment security boundary and must preserve
   HTTPS, secure headers, and correct client identity handling.
 
@@ -140,8 +143,9 @@ warnings must not include secrets, tokens, terminal contents, or sensitive
 workspace data.
 
 The current scheduler counts CPU and memory only for observed running
-workspaces and checks selected resources against live host capacity. It does not
-support overcommit, GPU capacity, or multiple active schedulers.
+workspaces and checks selected resources against live host capacity after the
+configured CPU and memory overbooking factors. It does not support GPU
+capacity, host-level storage admission, or multiple active schedulers.
 
 ## File-manager risks
 
@@ -212,8 +216,8 @@ stored email fields, server-side opaque sessions, CSRF protected forms,
 administrator checks, login rate limiting, and basic audit persistence now
 exist. Account disablement, safe user deletion, and group lifecycle controls
 are implemented. The implementation has no password recovery or generic
-application proxy. A Caddy HTTPS reverse-proxy example is prepared but is not
-enabled by the development process. The initial file manager supports approved
+application proxy. Caddy, nginx, and Apache HTTPS reverse-proxy examples are
+prepared but are not enabled by the development process. The initial file manager supports approved
 directory and named-volume listing, bounded upload,
 individual file download, streamed directory ZIP download, folder creation,
 rename, and deletion; it does not support archive extraction.
@@ -226,11 +230,11 @@ Terminal access uses a fixed server-resolved template shell, optionally with a
 template allowlist of container UIDs, and desktop access uses a template-approved VNC service through the rootless Podman adapter; desktop sessions
 automatically authenticate using the template-selected VNC secret when one is
 configured. Both require runtime support for the selected container. Podman lifecycle
-operations are limited to approved images,
-labels, resource limits, and isolated network policy; runtime-specific
-integration and audit failure handling still need further review. Operational
-alerts also need a deliberate policy. Do not deploy it as a
-service for untrusted users.
+operations are limited to approved images, labels, and runtime-enforced
+resource limits. Cross-workspace network isolation, runtime-specific
+integration, and audit failure handling still need further review. Operational
+alerts also need a deliberate policy. Do not deploy it as a service for
+untrusted users.
 
 ## Reporting vulnerabilities
 

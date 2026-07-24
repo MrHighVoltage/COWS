@@ -1,172 +1,186 @@
 # COWS Roadmap
 
-This roadmap is a sequence of reviewable milestones, not a promise that every
-feature will be implemented. Each milestone must meet its exit criteria before
-the next one expands the security surface.
+This roadmap describes the current implementation state, not a promise to
+ship every future feature. A milestone is complete only when its exit criteria
+and security review are complete.
 
-## Milestone 0: Project foundation
+## Current status
 
-Scope: documentation, Go module, configuration, structured logging, graceful
-HTTP server, SQLite migration mechanism, templates, local HTMX/Alpine assets,
-health page, one HTMX interaction, and basic tests.
+Milestone 0 is complete. Milestones 1 through 5 and 7 through 8 have useful
+initial implementations, but several remain in hardening status. COWS is a
+single-server, rootless-Podman system and is not production-ready.
 
-Exit criteria:
+Implemented now:
 
-- `go test ./...`, `go vet ./...`, and `go build ./cmd/cows` pass.
-- The binary starts with documented defaults and shuts down on SIGINT/SIGTERM.
-- `/healthz` returns a stable JSON health response.
-- A browser page is rendered by Go templates and served with local assets.
-- A button receives a server-rendered health fragment through HTMX.
-- SQLite initializes with WAL, foreign keys, busy timeout, and one migration.
-- No Node.js, npm, frontend build step, runtime socket, or container operation
-  is required.
-- Documentation describes the architecture, security limits, and next steps.
+- local authentication, password changes, self-registration, CSV user import,
+  groups, quotas, account lifecycle, sessions, CSRF, and basic audit events;
+- typed administrator templates, resource selection, container identity,
+  terminal UID policy, VNC secrets, managed mounts, image availability, pulls,
+  and template copying;
+- workspace lifecycle, desired/observed state, reconciliation, timeout
+  processing, measured storage, overbooked host admission, and explicit data
+  archival;
+- authenticated terminal, noVNC desktop, restricted file manager, bounded
+  uploads, and streamed directory ZIP downloads;
+- optional persisted lifecycle-warning email delivery.
 
-## Milestone 1: Local users, registration, and authorization foundation (in progress)
+Not implemented or incomplete:
 
-Implemented so far: administrator bootstrap, bcrypt password hashing,
-login/logout, mandatory first-login password changes, authenticated password
-changes, stored user email addresses, opaque server-side sessions, CSRF
-protection, user and administrator roles, basic user management, and the first
-audit events. Disabled-by-default self-registration now requires email and
-password confirmation, applies server-assigned default quotas and groups
-atomically, and has registration rate limiting. Remaining exit work includes
-authorization coverage for every state-changing handler, operational audit
-review, a documented recovery procedure, and broader registration-abuse tests.
-Login and registration rate limiting are process-local and must move to shared
-infrastructure if COWS ever runs multiple active instances.
-Administrator CSV user import now provides bounded preview, existing-user
-matching, additive group assignment, transactional commit, generated temporary
-passwords, and a short-lived credential export. Password reset and email
-verification remain intentionally deferred. Disabling an account immediately
-invalidates its sessions and stops its running workspaces. Deletion requires a
-disabled account, archives/deletes its workspaces first, and then removes the
-user. Group membership removal and deletion are available; existing workspaces
-are retained, group deletion rejects template references, and quota reductions
-show temporary over-quota usage while blocking new allocations.
+- complete network isolation and egress policy between workspaces;
+- robust persistent recovery for every partial or interrupted lifecycle
+  operation;
+- the constrained web-application proxy and any other service exposure;
+- password reset, email verification, OpenID Connect, and institutional
+  identity provisioning;
+- a complete administrator audit viewer, metrics history, and operational
+  alerting;
+- named-volume administrator recovery/cleanup workflows;
+- archive extraction, file previews, bulk file operations, and stronger
+  filesystem race/integration coverage;
+- multi-host agents, host pools, PostgreSQL, high availability, GPUs, and
+  shared storage;
+- packaged service units, upgrade/backup tooling, and production deployment
+  hardening.
 
-Exit additions for this checkpoint:
+## Milestone 0: Project foundation — complete
 
-- Disabled users cannot authenticate with existing sessions.
-- Disablement reports runtime cleanup failures without re-enabling the user.
-- User deletion is blocked until disabled and does not remove data when
-  workspace cleanup fails.
-- Group membership and group deletion preserve existing workspaces.
-- Quota reductions are visible as over-quota rather than falsely presented as
-  within quota.
+Go module, configuration, structured logging, graceful shutdown, SQLite
+migrations, Go templates, embedded local assets, health endpoint, HTMX proof,
+tests, dependency verification, and core architecture/security documentation.
 
-## Milestone 2: Templates and runtime inspection (in progress)
+Exit criteria: the documented build, test, vet, asset verification, and local
+run commands work without Node.js, npm, or a frontend build step.
 
-Validated administrator templates, role access rules, typed command/environment/
-mount/service configuration, workspace configuration snapshots, persisted port
-allocations, resource policy fields, the COWS-facing runtime interface, an
-inspection coordinator, and a rootless Podman adapter are now present. Remaining work is stronger runtime connectivity
-reporting, orphan/partial-operation reconciliation, and fake-runtime contract
-coverage. The adapter detects rootless
-Podman capabilities and refuses unsafe creates when required CPU, memory, or
-process limits are unavailable. Docker support is intentionally out of scope.
-A template list now checks exact local image availability and lets
-administrators explicitly pull missing images with a live activity indicator.
-A dedicated secret
-store, graphical gateway routing, and separate reusable administrator port-pool
-management remain future work.
+## Milestone 1: Accounts and authorization — initial implementation
 
-## Milestone 3: Workspace lifecycle (persistence prepared)
+Implemented: administrator bootstrap, bcrypt passwords, login/logout, opaque
+sessions, CSRF protection, mandatory first-login password changes, user email
+addresses, password changes, local self-registration with server defaults,
+registration rate limiting, bounded CSV import with preview and credential
+export, roles, groups, quotas, disable/delete safety, group lifecycle, and
+basic audit persistence.
 
-Workspace persistence, owner/template foreign keys, desired/observed state,
-user creation/listing, quota assignment, and deterministic quota/host-capacity
-admission checks are now present, including persistent administrator-managed
-host capacity and reserved-resource settings. Administrator-defined initial
-connection and stopped-container retention timeouts, user-visible policy
-details, rootless Podman lifecycle operations, and a
-reconciler-driven timeout worker are now present. Warning-event hooks exist in
-the lifecycle model. Each start resets the initial-connection observation period, and
-explicit deletion records retained named-volume metadata before removing the
-workspace record. Templates now explicitly choose fixed defaults or
-user-selectable CPU and memory ranges, with live advisory availability and
-authoritative create-time checks. Storage is measured for display and user
-allowances but is no longer a per-template or per-workspace allocation.
-Remaining exit work includes reconciliation handling for orphaned and partially-created
-objects, idempotence across restart,
-long-running operation execution, and irreversible-operation failure-path
-tests. The user page now shows allocated resources, quota progress, operation
-status, and automatically refreshed state.
+Remaining exit criteria:
 
-## Milestone 4: Terminal access
+- review every state-changing route and access session for independent
+  authorization coverage;
+- define recovery procedures for the first administrator and lost credentials;
+- add broader abuse, session invalidation, and import failure tests;
+- replace process-local rate limits before supporting multiple active instances;
+- add a dedicated design before password reset or email verification.
 
-Completed initial implementation: local xterm.js 5.3.0 assets, an authenticated
-WebSocket, template-selected shell execution with `/bin/sh -l` as the default,
-resize handling, idle and maximum session expiry, cleanup, audit events, and
-Podman exec stream adapter tests.
-Exit criteria for this checkpoint are met. Browser accessibility review and
-rootless Podman integration tests remain hardening work.
+## Milestone 2: Templates and runtime inspection — initial implementation
 
-## Milestone 5: Graphical desktop access
+Implemented: validated typed templates, role and group access, resource policy,
+runtime configuration snapshots, the COWS runtime boundary, rootless Podman
+capability checks, managed labels, runtime overview, orphan observation audit,
+exact local image availability, explicit image pulls, and template copying.
 
-Completed initial implementation: local noVNC 1.6.0 core modules, an
-authenticated COWS WebSocket, template-controlled `desktop` TCP service access,
-loopback port verification, session cleanup, and tests proving that non-loopback
-VNC mappings are rejected. Templates can define static or generated secrets,
-bind one to the desktop service, and use it through `{{cows.secret.name}}` in
-environment values; COWS supplies the selected value automatically to noVNC
-after authorization. Browser accessibility review and rootless Podman
-integration tests against VNC-enabled images remain hardening work.
+Remaining exit criteria:
 
-## Milestone 6: Workspace web applications
+- complete runtime connectivity and readiness reporting;
+- define and test restart/reconcile behavior for missing, duplicate, orphaned,
+  and partially-created objects;
+- expand fake-runtime contract tests and optional rootless-Podman integration
+  tests;
+- add a focused administrator audit view.
 
-Add template-defined applications and a constrained authenticated proxy with
-WebSocket support, SSRF defenses, origin/redirect handling, and size/time
-limits. Do not create a generic reverse proxy.
+Docker support is intentionally removed from the roadmap. A second runtime is
+not planned until Podman behavior and isolation requirements justify it.
 
-## Milestone 7: Resource policies and email notifications
+## Milestone 3: Workspace lifecycle and resource policy — initial implementation
 
-The initial optional email implementation now warns about upcoming automatic
-stop and deletion using the standard library SMTP client, persisted
-deduplication, bounded retries, and a separate worker. Remaining work includes
-richer host capacity views, idle shutdown, expiration,
-cleanup policies, and administrator capacity inspection. Keep high-frequency
-samples out of the main SQLite control-plane tables. Email must never block or
-decide lifecycle operations.
+Implemented: create/start/stop/restart/delete, ownership enforcement, desired
+and observed state, runtime reconciliation, lifecycle operation status,
+initial-connection stop timeout, stopped-container deletion timeout, explicit
+directory archival, retained-volume tombstones, measured storage, user/group
+quotas, running and total workspace limits, CPU/memory overbooking factors,
+resource selection between template defaults and maxima, and detailed user
+errors.
 
-Timeout policy execution belongs to Milestone 3. Milestone 7 may add richer
-idle detection and resource-driven policies, but must not replace the explicit
-timeout phases with browser-only or metrics-only behavior.
+Remaining exit criteria:
 
-Email warning exit criteria:
+- make lifecycle operations durable and restart-safe across every partial
+  failure;
+- define repair behavior for a database record without a container and an
+  orphaned managed container;
+- close admission races beyond the current single-process coordination;
+- add irreversible-operation failure-path and archive recovery tests;
+- improve administrator capacity and reconciliation diagnostics.
 
-- SMTP is disabled unless explicitly configured.
-- Upcoming stop and deletion warnings are deduplicated per workspace deadline.
-- Delivery retries are persisted and bounded without blocking reconciliation.
-- Messages contain only the workspace name, action, and deadline.
-- SMTP credentials and message contents are absent from logs and audit events.
+Storage is measured for workspace display and finite user allowances. It is not
+a per-template or per-workspace runtime limit and host storage does not block
+creation.
 
-Live workspace usage now reads non-streaming rootless Podman statistics for
-running workspaces and displays CPU, memory, and PID observations. Lifecycle
-operations publish phases such as preparing, creating, starting, stopping, and
-archiving; image-pull history and persistent historical metrics remain future
-work.
+## Milestone 4: Terminal access — initial implementation
 
-## Milestone 8: Restricted file manager
+Implemented: local xterm.js, authenticated WebSocket sessions, server-selected
+template shells, login-shell execution, optional template-selected terminal
+UIDs, resize forwarding, idle/max lifetime limits, cleanup, audit events, and
+Podman exec streaming.
 
-Templates can enable the `files` access method and mark approved directory or
-named-volume mounts read-only or read-write. COWS creates engine-managed
-directory names below its configured mount root, supports server-side listings,
-bounded uploads, downloads, folder creation, rename, deletion, and streamed
-bounded ZIP downloads. Rootless Podman operations use the runtime-backed file
-access helper in ADR 0011, preserving the mapped container identity. Explicit
-workspace deletion archives managed directory mounts while timeout cleanup
-leaves data in place. Explicit deletion retains named volumes with durable
-control-plane tombstones for later administrator recovery or cleanup. Remaining
-file access is available for running, stopped, and exited workspaces and is
-serialized with lifecycle operations. Explicit archive activity is recorded in
-a permission-restricted JSONL recovery log. Directory listings and individual
-downloads now have explicit bounds, and file mutations and downloads create
-structured audit events. Remaining exit work is stronger total temporary-storage
-policy, additional symlink-race integration tests, and broader browser
-accessibility review.
+Remaining hardening: rootless-Podman integration coverage, accessibility review,
+session observability, and a more explicit policy for templates that allow UID
+0.
+
+## Milestone 5: Graphical desktop access — initial implementation
+
+Implemented: local noVNC core modules, authenticated WebSocket routing,
+template-controlled desktop service, loopback mapping verification, automatic
+template-selected VNC credentials, session cleanup, fullscreen/resize behavior,
+and no public VNC port.
+
+Remaining hardening: rootless-Podman integration against representative VNC
+images, browser accessibility review, and stronger network isolation for
+desktop-enabled workspaces.
+
+## Milestone 6: Workspace web applications — not started
+
+Implement only a constrained, template-defined authenticated gateway for
+approved internal HTTP services. It must address authorization, SSRF, allowed
+ports/protocols, redirects, cookies, origins, path rewriting, WebSockets,
+request/response limits, and timeouts. Do not build a generic proxy.
+
+## Milestone 7: Resource monitoring and email — initial implementation
+
+Implemented: live Podman CPU, memory, and PID observations, host overbooking
+settings, user-visible allocation bars, timeout warning events, optional SMTP
+delivery, persisted deduplication, bounded retries, and separate notification
+processing.
+
+Remaining work: richer capacity views, historical metrics only if justified,
+operational alerting, and additional warning policies. Email must remain
+advisory and must never decide or block lifecycle actions.
+
+## Milestone 8: Restricted file manager — initial implementation
+
+Implemented: approved directory and named-volume mounts, read-only/read-write
+policy, rooted server-side paths, stopped-workspace access, listing, folder
+creation, rename, deletion, bounded uploads, individual downloads, streamed
+bounded directory ZIP downloads, rootless namespace-helper access, lifecycle
+serialization, explicit archive activity logging, and storage measurement
+caching.
+
+Remaining work: named-volume administrator recovery and cleanup, stronger
+symlink-race integration tests, total temporary-storage policy, file previews,
+bulk operations, and archive extraction only after a dedicated security design.
+
+## Milestone 9: Institutional authentication — not started
+
+Evaluate OpenID Connect, account linking/provisioning, role mapping, and a
+recovery-administrator strategy. Do not add email verification or password
+reset as an incidental part of this milestone.
+
+## Milestone 10: Network isolation — planned
+
+Design and implement per-workspace/private networks or equivalent Podman
+policy, explicit cross-workspace denial, controlled egress, DNS policy, and
+tests proving that one workspace cannot reach another. Preserve the COWS
+WebSocket access gateway and avoid public service ports.
 
 ## Later
 
 Evaluate a privileged multi-host COWS agent, host pools, PostgreSQL, high
-availability, external metrics, GPUs, shared storage, and advanced policy only
-when deployment requirements justify them.
+availability, external metrics, GPUs, shared storage, packaged service units,
+backup/restore tooling, and production upgrade procedures only when real
+deployment requirements justify them.
