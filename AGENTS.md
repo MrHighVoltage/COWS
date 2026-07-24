@@ -23,6 +23,14 @@ User disable/delete and group lifecycle changes must follow
 `docs/decisions/0017-user-and-group-lifecycle.md`.
 Template image availability and explicit pull changes must follow
 `docs/decisions/0019-template-image-availability-and-pulls.md`.
+Local password reset and email outbox changes must follow
+`docs/decisions/0020-password-reset-and-email-outbox.md`.
+Audit and live metrics changes must follow
+`docs/decisions/0021-audit-and-live-metrics.md`.
+Named-volume recovery changes must follow
+`docs/decisions/0022-named-volume-recovery.md`.
+Optional network isolation changes must follow
+`docs/decisions/0023-optional-workspace-network-isolation.md`.
 
 ## Technology constraints
 
@@ -75,7 +83,8 @@ workspace deletion archives the complete per-container directory in the
 sibling archive root; timeout cleanup must not silently delete or archive user
 data. Explicit deletion retains named volumes and must persist their tombstone
 metadata before removing the workspace record. Retained-volume metadata does
-not authorize restore, mount, or cleanup. Directory ZIP downloads are streamed and bounded;
+not authorize user access, restore, or mounting; administrator recovery must
+use the separate authorized download/remove workflow. Directory ZIP downloads are streamed and bounded;
 do not add archive extraction without dedicated security tests.
 
 Workspace timeout policies are backend-enforced and must not depend on browser
@@ -92,8 +101,9 @@ diagnostic detail.
 Self-registration is disabled by default. When enabled, it creates only user
 accounts, requires a valid email address and password confirmation, applies
 server-configured default quota and group membership atomically, and must not
-accept a role, quota, group, or template from the browser. Do not add email
-verification or password-reset tokens without a dedicated security design.
+accept a role, quota, group, or template from the browser. Password reset uses
+the dedicated hashed-token/email-outbox design; do not add email verification
+or institutional auth incidentally.
 
 Email delivery is optional and must not block workspace lifecycle operations.
 Use a persisted, deduplicated notification boundary with retries, never log
@@ -109,8 +119,8 @@ contribution terms.
 ```sh
 tools/web-assets.sh verify
 gofmt -w .
-go test ./...
-go vet ./...
+go test ./cmd/cows ./internal/auth ./internal/config ./internal/database ./internal/domain ./internal/fileagent ./internal/files ./internal/notifications ./internal/quota ./internal/repository ./internal/repository/sqlite ./internal/runtime ./internal/runtime/podman ./internal/web ./internal/workspace
+go vet ./cmd/cows ./internal/auth ./internal/config ./internal/database ./internal/domain ./internal/fileagent ./internal/files ./internal/notifications ./internal/quota ./internal/repository ./internal/repository/sqlite ./internal/runtime ./internal/runtime/podman ./internal/web ./internal/workspace
 go build -o bin/cows ./cmd/cows
 ```
 
