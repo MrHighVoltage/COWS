@@ -46,12 +46,24 @@ type Session struct {
 }
 
 type AuditEvent struct {
+	ID          int64
 	ActorUserID string
 	EventType   string
 	TargetType  string
 	TargetID    string
 	Metadata    map[string]string
 	CreatedAt   time.Time
+}
+
+type AuditRecord struct {
+	AuditEvent
+	ActorUsername string
+}
+
+type AuditQuery struct {
+	Limit     int
+	Offset    int
+	EventType string
 }
 
 type AccessMethod string

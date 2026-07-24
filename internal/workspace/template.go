@@ -58,12 +58,17 @@ type Service struct {
 	mountArchiveRoot string
 	storageUsage     *StorageUsageProvider
 	resourceUsage    runtime.ResourceUsageRuntime
+	networkIsolation bool
 	fileAccessLocks  sync.Map
 	// ponytail: one process-wide admission lock; database reservations belong to
 	// the future multi-instance deployment.
 	admissionMu sync.Mutex
 	now         func() time.Time
 }
+
+// SetNetworkIsolation configures the process-wide network policy during
+// startup. It is intentionally not user-editable or template-editable.
+func (s *Service) SetNetworkIsolation(enabled bool) { s.networkIsolation = enabled }
 
 func New(store repository.Store, schedulers ...*quota.Scheduler) *Service {
 	return newService(store, nil, schedulers...)

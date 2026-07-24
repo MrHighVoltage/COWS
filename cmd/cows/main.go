@@ -93,7 +93,19 @@ func run(ctx context.Context, args []string) error {
 	storageProvider := workspace.NewStorageUsageProvider(podmanRuntime, cfg.MountRoot)
 	scheduler := quota.NewScheduler(store, podmanRuntime, storageProvider)
 	templateService := workspace.NewWithRuntimeAndMountRootsAndStorage(store, podmanRuntime, cfg.MountRoot, cfg.MountArchiveRoot, storageProvider, scheduler)
-	webServer, err := web.New(db, authService, templateService, quotaService, podmanRuntime, web.Options{CookieSecure: cfg.CookieSecure, SessionLifetime: cfg.SessionLifetime, RegistrationEnabled: cfg.RegistrationEnabled})
+	templateService.SetNetworkIsolation(cfg.NetworkIsolationEnabled)
+	var notificationService *notifications.Service
+	if cfg.EmailEnabled {
+		sender, err := notifications.NewSMTPSender(notifications.SMTPConfig{Host: cfg.SMTPHost, Port: cfg.SMTPPort, From: cfg.SMTPFrom, Username: cfg.SMTPUsername, Password: cfg.SMTPPassword, RequireTLS: cfg.SMTPRequireTLS})
+		if err != nil {
+			return fmt.Errorf("initialize email sender: %w", err)
+		}
+		notificationService, err = notifications.New(store, sender, cfg.EmailWarningLeadTime, cfg.EmailRetryInterval)
+		if err != nil {
+			return fmt.Errorf("initialize notification service: %w", err)
+		}
+	}
+	webServer, err := web.New(db, authService, templateService, quotaService, podmanRuntime, web.Options{CookieSecure: cfg.CookieSecure, SessionLifetime: cfg.SessionLifetime, RegistrationEnabled: cfg.RegistrationEnabled, Notifications: notificationService, ExternalBaseURL: cfg.ExternalBaseURL, PasswordResetEnabled: notificationService != nil && cfg.ExternalBaseURL != ""})
 	if err != nil {
 		return fmt.Errorf("initialize web server: %w", err)
 	}
@@ -110,15 +122,7 @@ func run(ctx context.Context, args []string) error {
 		serverErrors <- server.ListenAndServe()
 	}()
 	go runTimeoutLoop(ctx, templateService, logger)
-	if cfg.EmailEnabled {
-		sender, err := notifications.NewSMTPSender(notifications.SMTPConfig{Host: cfg.SMTPHost, Port: cfg.SMTPPort, From: cfg.SMTPFrom, Username: cfg.SMTPUsername, Password: cfg.SMTPPassword, RequireTLS: cfg.SMTPRequireTLS})
-		if err != nil {
-			return fmt.Errorf("initialize email sender: %w", err)
-		}
-		notificationService, err := notifications.New(store, sender, cfg.EmailWarningLeadTime, cfg.EmailRetryInterval)
-		if err != nil {
-			return fmt.Errorf("initialize notification service: %w", err)
-		}
+	if notificationService != nil {
 		go runNotificationLoop(ctx, notificationService, logger)
 	}
 

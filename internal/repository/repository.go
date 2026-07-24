@@ -31,6 +31,7 @@ type UserRepository interface {
 	CountUsers(ctx context.Context) (int, error)
 	CountActiveAdministrators(ctx context.Context) (int, error)
 	FindUserByUsername(ctx context.Context, username string) (UserRecord, error)
+	FindUserByEmail(ctx context.Context, email string) (UserRecord, error)
 	FindUserByID(ctx context.Context, id string) (domain.User, error)
 	FindUserCredentialsByID(ctx context.Context, id string) (UserRecord, error)
 	ListUsers(ctx context.Context) ([]domain.User, error)
@@ -39,6 +40,7 @@ type UserRepository interface {
 	RegisterUser(ctx context.Context, user domain.User, passwordHash string, groupIDs []string, userQuota domain.UserQuota) error
 	DeleteUser(ctx context.Context, id string) error
 	UpdateUserPassword(ctx context.Context, id, passwordHash string, mustChangePassword bool) error
+	ResetPasswordUsingToken(ctx context.Context, tokenHash, passwordHash string, now time.Time) (domain.User, error)
 	SetUserDisabled(ctx context.Context, id string, disabled bool) error
 	ListUserGroupIDs(ctx context.Context, userID string) ([]string, error)
 	SetUserGroups(ctx context.Context, userID string, groupIDs []string) error
@@ -62,6 +64,19 @@ type SessionRepository interface {
 
 type AuditRepository interface {
 	RecordAuditEvent(ctx context.Context, event domain.AuditEvent) error
+	ListAuditEvents(ctx context.Context, query domain.AuditQuery) ([]domain.AuditRecord, error)
+}
+
+type PasswordResetRepository interface {
+	CreatePasswordResetToken(ctx context.Context, token domain.PasswordResetToken) error
+}
+
+type PasswordResetEmailRepository interface {
+	UpsertPasswordResetEmail(ctx context.Context, email domain.PasswordResetEmail) error
+	ListPendingPasswordResetEmails(ctx context.Context, now time.Time, limit int) ([]domain.PasswordResetEmail, error)
+	MarkPasswordResetEmailSent(ctx context.Context, id int64, sentAt time.Time) error
+	MarkPasswordResetEmailFailed(ctx context.Context, id int64, attempts int, nextAttemptAt time.Time, errorCode string) error
+	MarkPasswordResetEmailCanceled(ctx context.Context, id int64) error
 }
 
 type NotificationRepository interface {
@@ -98,6 +113,8 @@ type WorkspaceRepository interface {
 	DeleteWorkspace(ctx context.Context, id string) error
 	DeleteWorkspaceRetainingVolumes(ctx context.Context, id string, volumes []domain.RetainedWorkspaceVolume) error
 	ListRetainedWorkspaceVolumes(ctx context.Context, workspaceID string) ([]domain.RetainedWorkspaceVolume, error)
+	ListAllRetainedWorkspaceVolumes(ctx context.Context) ([]domain.RetainedWorkspaceVolume, error)
+	DeleteRetainedWorkspaceVolume(ctx context.Context, volumeName string) error
 	SetWorkspaceDesiredState(ctx context.Context, id string, state domain.DesiredWorkspaceState, updatedAt time.Time) error
 	UpdateWorkspaceObservedState(ctx context.Context, id, observedState, runtimeID, observedErrorCode, observedError string, observedAt, updatedAt time.Time) error
 	UpdateWorkspaceLifecycle(ctx context.Context, id string, startedAt, lastConnectedAt, stoppedAt, containerDeletedAt, dataArchiveEligibleAt, updatedAt time.Time) error
@@ -134,4 +151,6 @@ type Store interface {
 	QuotaRepository
 	HostSettingsRepository
 	NotificationRepository
+	PasswordResetRepository
+	PasswordResetEmailRepository
 }

@@ -30,6 +30,7 @@ var (
 	ErrUserMustBeDisabled      = errors.New("user must be disabled before deletion")
 	ErrRegistrationDisabled    = errors.New("registration is disabled")
 	ErrRegistrationUnavailable = errors.New("registration is unavailable")
+	ErrInvalidResetToken       = errors.New("invalid or expired password reset token")
 )
 
 const (
@@ -68,6 +69,14 @@ type RegisterUserInput struct {
 	Password             string
 	PasswordConfirmation string
 }
+
+type PasswordResetRequest struct {
+	User      domain.User
+	Token     string
+	ExpiresAt time.Time
+}
+
+const passwordResetLifetime = time.Hour
 
 func New(store repository.Store, sessionLifetime time.Duration, policies ...RegistrationPolicy) (*Service, error) {
 	if sessionLifetime <= 0 {
@@ -172,6 +181,59 @@ func (s *Service) ChangePassword(ctx context.Context, userID, currentPassword, n
 		return err
 	}
 	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: userID, EventType: "password.changed", TargetType: "user", TargetID: userID})
+	return nil
+}
+
+// RequestPasswordReset deliberately returns no error for an unknown or
+// disabled account. The caller can therefore show the same response for every
+// identifier without allowing account enumeration.
+func (s *Service) RequestPasswordReset(ctx context.Context, identifier string) (PasswordResetRequest, error) {
+	identifier = strings.TrimSpace(identifier)
+	if identifier == "" || len(identifier) > 320 {
+		return PasswordResetRequest{}, nil
+	}
+	record, err := s.store.FindUserByEmail(ctx, identifier)
+	if errors.Is(err, repository.ErrNotFound) {
+		record, err = s.store.FindUserByUsername(ctx, normalizeUsername(identifier))
+	}
+	if errors.Is(err, repository.ErrNotFound) || err != nil || record.User.Disabled || record.User.Email == "" {
+		if err != nil && !errors.Is(err, repository.ErrNotFound) {
+			return PasswordResetRequest{}, err
+		}
+		return PasswordResetRequest{}, nil
+	}
+	rawToken, err := randomToken()
+	if err != nil {
+		return PasswordResetRequest{}, fmt.Errorf("create password reset token: %w", err)
+	}
+	now := s.now().UTC()
+	expiresAt := now.Add(passwordResetLifetime)
+	if err := s.store.CreatePasswordResetToken(ctx, domain.PasswordResetToken{TokenHash: hashToken(rawToken), UserID: record.User.ID, ExpiresAt: expiresAt, CreatedAt: now}); err != nil {
+		return PasswordResetRequest{}, err
+	}
+	s.recordAudit(ctx, domain.AuditEvent{EventType: "password.reset.requested", TargetType: "user", TargetID: record.User.ID})
+	return PasswordResetRequest{User: record.User, Token: rawToken, ExpiresAt: expiresAt}, nil
+}
+
+func (s *Service) ResetPassword(ctx context.Context, rawToken, newPassword string) error {
+	if rawToken == "" || !validPassword(newPassword) {
+		if !validPassword(newPassword) {
+			return ErrInvalidInput
+		}
+		return ErrInvalidResetToken
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("hash reset password: %w", err)
+	}
+	user, err := s.store.ResetPasswordUsingToken(ctx, hashToken(rawToken), string(hash), s.now().UTC())
+	if errors.Is(err, repository.ErrNotFound) {
+		return ErrInvalidResetToken
+	}
+	if err != nil {
+		return err
+	}
+	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: user.ID, EventType: "password.reset.completed", TargetType: "user", TargetID: user.ID})
 	return nil
 }
 

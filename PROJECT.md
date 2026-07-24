@@ -54,8 +54,8 @@ overview. A constrained web-application gateway remains future work.
   metrics.
 - A complete permissions framework before the basic user/administrator roles
   are proven.
-- Institutional identity, email verification, and password-reset email flows
-  before their dedicated security designs are complete.
+- Institutional identity and email verification. Local password-reset email is
+  supported when explicitly configured and uses its own security design.
 - PostgreSQL or high availability during the SQLite deployment phase.
 - An application-specific frontend development server.
 
@@ -120,7 +120,8 @@ does not automatically repair every partial operation.
 - Docker is not a supported runtime; deployments use rootless Podman.
 - Templates without internal services use private networking. Desktop-enabled
   templates currently use bridge networking with loopback-only host mapping;
-  complete cross-workspace network isolation is a later milestone.
+  optional per-workspace internal network isolation can be enabled for new
+  service-enabled workspaces.
 
 ## Terminology
 

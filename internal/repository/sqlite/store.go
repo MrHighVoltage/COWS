@@ -42,6 +42,12 @@ func (s *Store) FindUserByUsername(ctx context.Context, username string) (reposi
 	return scanUserRecord(row)
 }
 
+func (s *Store) FindUserByEmail(ctx context.Context, email string) (repository.UserRecord, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT id, username, email, display_name, password_hash, role, disabled, must_change_password, created_at, updated_at
+		FROM users WHERE lower(email) = lower(?)`, email)
+	return scanUserRecord(row)
+}
+
 func (s *Store) FindUserByID(ctx context.Context, id string) (domain.User, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id, username, email, display_name, password_hash, role, disabled, must_change_password, created_at, updated_at
 		FROM users WHERE id = ?`, id)
@@ -176,6 +182,46 @@ func (s *Store) UpdateUserPassword(ctx context.Context, id, passwordHash string,
 		return repository.ErrNotFound
 	}
 	return nil
+}
+
+func (s *Store) ResetPasswordUsingToken(ctx context.Context, tokenHash, passwordHash string, now time.Time) (domain.User, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.User{}, fmt.Errorf("begin password reset: %w", err)
+	}
+	defer tx.Rollback()
+	row := tx.QueryRowContext(ctx, `SELECT u.id, u.username, u.email, u.display_name, u.password_hash, u.role,
+		u.disabled, u.must_change_password, u.created_at, u.updated_at
+		FROM password_reset_tokens t JOIN users u ON u.id = t.user_id
+		WHERE t.token_hash = ? AND t.used_at IS NULL AND t.expires_at > ?`, tokenHash, now.Unix())
+	record, err := scanUserRecord(row)
+	if err != nil {
+		return domain.User{}, err
+	}
+	if record.User.Disabled {
+		return domain.User{}, repository.ErrNotFound
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE users SET password_hash = ?, must_change_password = 0, updated_at = ? WHERE id = ?", passwordHash, now.Unix(), record.User.ID); err != nil {
+		return domain.User{}, fmt.Errorf("update reset password: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE user_id = ?", record.User.ID); err != nil {
+		return domain.User{}, fmt.Errorf("invalidate reset sessions: %w", err)
+	}
+	result, err := tx.ExecContext(ctx, "UPDATE password_reset_tokens SET used_at = ? WHERE token_hash = ? AND used_at IS NULL", now.Unix(), tokenHash)
+	if err != nil {
+		return domain.User{}, fmt.Errorf("consume password reset token: %w", err)
+	}
+	if count, err := result.RowsAffected(); err != nil {
+		return domain.User{}, fmt.Errorf("check password reset token: %w", err)
+	} else if count == 0 {
+		return domain.User{}, repository.ErrNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return domain.User{}, fmt.Errorf("commit password reset: %w", err)
+	}
+	record.User.MustChangePassword = false
+	record.User.UpdatedAt = now
+	return record.User, nil
 }
 
 func (s *Store) SetUserDisabled(ctx context.Context, id string, disabled bool) error {
@@ -398,6 +444,50 @@ func (s *Store) RecordAuditEvent(ctx context.Context, event domain.AuditEvent) e
 		return fmt.Errorf("record audit event: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) ListAuditEvents(ctx context.Context, query domain.AuditQuery) ([]domain.AuditRecord, error) {
+	limit := query.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	offset := query.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	args := []any{}
+	where := ""
+	if query.EventType != "" {
+		where = " WHERE a.event_type = ?"
+		args = append(args, query.EventType)
+	}
+	args = append(args, limit, offset)
+	rows, err := s.db.QueryContext(ctx, `SELECT a.id, COALESCE(a.actor_user_id, ''), a.event_type,
+		a.target_type, COALESCE(a.target_id, ''), a.metadata_json, a.created_at,
+		COALESCE(u.username, '') FROM audit_events a LEFT JOIN users u ON u.id = a.actor_user_id`+where+` ORDER BY a.created_at DESC, a.id DESC LIMIT ? OFFSET ?`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list audit events: %w", err)
+	}
+	defer rows.Close()
+	result := make([]domain.AuditRecord, 0)
+	for rows.Next() {
+		var record domain.AuditRecord
+		var metadataJSON, actorUsername string
+		var createdUnix int64
+		if err := rows.Scan(&record.ID, &record.ActorUserID, &record.EventType, &record.TargetType, &record.TargetID, &metadataJSON, &createdUnix, &actorUsername); err != nil {
+			return nil, fmt.Errorf("scan audit event: %w", err)
+		}
+		if err := json.Unmarshal([]byte(metadataJSON), &record.Metadata); err != nil {
+			return nil, fmt.Errorf("decode audit metadata: %w", err)
+		}
+		record.CreatedAt = timeFromUnix(createdUnix)
+		record.ActorUsername = actorUsername
+		result = append(result, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate audit events: %w", err)
+	}
+	return result, nil
 }
 
 func (s *Store) ListTemplates(ctx context.Context) ([]domain.WorkspaceTemplate, error) {
@@ -711,6 +801,138 @@ func (s *Store) ListRetainedWorkspaceVolumes(ctx context.Context, workspaceID st
 		return nil, fmt.Errorf("iterate retained workspace volumes: %w", err)
 	}
 	return volumes, nil
+}
+
+func (s *Store) ListAllRetainedWorkspaceVolumes(ctx context.Context) ([]domain.RetainedWorkspaceVolume, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT volume_name, workspace_id, owner_user_id, template_id,
+		mount_name, container_path, read_only, retained_at FROM retained_workspace_volumes ORDER BY retained_at DESC, volume_name`)
+	if err != nil {
+		return nil, fmt.Errorf("list all retained workspace volumes: %w", err)
+	}
+	defer rows.Close()
+	volumes := make([]domain.RetainedWorkspaceVolume, 0)
+	for rows.Next() {
+		var volume domain.RetainedWorkspaceVolume
+		var readOnly, retainedUnix int64
+		if err := rows.Scan(&volume.VolumeName, &volume.WorkspaceID, &volume.OwnerUserID, &volume.TemplateID, &volume.MountName, &volume.ContainerPath, &readOnly, &retainedUnix); err != nil {
+			return nil, fmt.Errorf("scan retained workspace volume: %w", err)
+		}
+		volume.ReadOnly = readOnly != 0
+		volume.RetainedAt = timeFromUnix(retainedUnix)
+		volumes = append(volumes, volume)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate retained workspace volumes: %w", err)
+	}
+	return volumes, nil
+}
+
+func (s *Store) DeleteRetainedWorkspaceVolume(ctx context.Context, volumeName string) error {
+	result, err := s.db.ExecContext(ctx, "DELETE FROM retained_workspace_volumes WHERE volume_name = ?", volumeName)
+	if err != nil {
+		return fmt.Errorf("delete retained volume metadata: %w", err)
+	}
+	if count, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("check retained volume metadata deletion: %w", err)
+	} else if count == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) CreatePasswordResetToken(ctx context.Context, token domain.PasswordResetToken) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin password reset token: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, "DELETE FROM password_reset_tokens WHERE user_id = ?", token.UserID); err != nil {
+		return fmt.Errorf("replace password reset token: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "INSERT INTO password_reset_tokens (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)", token.TokenHash, token.UserID, token.ExpiresAt.Unix(), token.CreatedAt.Unix()); err != nil {
+		return fmt.Errorf("store password reset token: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit password reset token: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) UpsertPasswordResetEmail(ctx context.Context, email domain.PasswordResetEmail) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO password_reset_emails
+		(user_id, recipient, subject, body, status, attempts, next_attempt_at, last_error_code, created_at, sent_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, email.UserID, email.Recipient, email.Subject, email.Body, email.Status,
+		email.Attempts, email.NextAttemptAt.Unix(), email.LastErrorCode, email.CreatedAt.Unix(), unixOrZero(email.SentAt))
+	if err != nil {
+		return fmt.Errorf("store password reset email: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ListPendingPasswordResetEmails(ctx context.Context, now time.Time, limit int) ([]domain.PasswordResetEmail, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id, user_id, recipient, subject, body, status, attempts,
+		next_attempt_at, last_error_code, created_at, COALESCE(sent_at, 0)
+		FROM password_reset_emails WHERE status = 'pending' AND next_attempt_at <= ? ORDER BY id LIMIT ?`, now.Unix(), limit)
+	if err != nil {
+		return nil, fmt.Errorf("list pending password reset emails: %w", err)
+	}
+	defer rows.Close()
+	result := make([]domain.PasswordResetEmail, 0)
+	for rows.Next() {
+		var email domain.PasswordResetEmail
+		var nextAttempt, created, sent int64
+		if err := rows.Scan(&email.ID, &email.UserID, &email.Recipient, &email.Subject, &email.Body, &email.Status, &email.Attempts, &nextAttempt, &email.LastErrorCode, &created, &sent); err != nil {
+			return nil, fmt.Errorf("scan password reset email: %w", err)
+		}
+		email.NextAttemptAt, email.CreatedAt, email.SentAt = timeFromUnix(nextAttempt), timeFromUnix(created), timeFromUnix(sent)
+		result = append(result, email)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate password reset emails: %w", err)
+	}
+	return result, nil
+}
+
+func (s *Store) MarkPasswordResetEmailSent(ctx context.Context, id int64, sentAt time.Time) error {
+	result, err := s.db.ExecContext(ctx, "UPDATE password_reset_emails SET status = 'sent', sent_at = ? WHERE id = ? AND status = 'pending'", sentAt.Unix(), id)
+	if err != nil {
+		return fmt.Errorf("mark password reset email sent: %w", err)
+	}
+	if count, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("check password reset email sent: %w", err)
+	} else if count == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) MarkPasswordResetEmailFailed(ctx context.Context, id int64, attempts int, nextAttemptAt time.Time, errorCode string) error {
+	result, err := s.db.ExecContext(ctx, "UPDATE password_reset_emails SET attempts = ?, next_attempt_at = ?, last_error_code = ? WHERE id = ? AND status = 'pending'", attempts, nextAttemptAt.Unix(), errorCode, id)
+	if err != nil {
+		return fmt.Errorf("mark password reset email failed: %w", err)
+	}
+	if count, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("check password reset email failure: %w", err)
+	} else if count == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) MarkPasswordResetEmailCanceled(ctx context.Context, id int64) error {
+	result, err := s.db.ExecContext(ctx, "UPDATE password_reset_emails SET status = 'canceled' WHERE id = ? AND status = 'pending'", id)
+	if err != nil {
+		return fmt.Errorf("cancel password reset email: %w", err)
+	}
+	if count, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("check password reset email cancellation: %w", err)
+	} else if count == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
 }
 
 func (s *Store) SetWorkspaceDesiredState(ctx context.Context, id string, state domain.DesiredWorkspaceState, updatedAt time.Time) error {

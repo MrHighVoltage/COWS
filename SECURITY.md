@@ -20,9 +20,11 @@ partial operations, and compromised or misconfigured images.
 - Domain services enforce ownership, role, template, quota, and state policy.
 - The runtime adapter is the only boundary to the local rootless Podman service.
 - Managed containers are untrusted workloads. Templates without internal
-  services use `none` networking; desktop-enabled templates currently use the
-  Podman bridge with loopback-only host mappings. This is not yet a complete
-  per-workspace network isolation or egress policy.
+  services use `none` networking; desktop-enabled templates use loopback-only
+  host mappings. Optional isolation gives new service-enabled workspaces
+  separate internal Podman networks and fails closed if creation fails. It is
+  not a complete host-level egress policy and does not migrate existing
+  containers.
 - A reverse proxy is part of the deployment security boundary and must preserve
   HTTPS, secure headers, and correct client identity handling.
 
@@ -200,8 +202,9 @@ Self-registration is disabled by default. Enabling it permits unauthenticated
 account creation and therefore requires conservative default quotas, rate
 limiting, monitoring, and an operator decision that email addresses do not
 need to be verified yet. The server assigns the user role, default quota, and
-default groups; browser fields cannot select them. Registration does not
-provide password reset or email verification.
+  default groups; browser fields cannot select them. Registration does not
+  provide email verification. Local password reset is a separate,
+  non-enumerating, single-use-token flow and requires an HTTPS external URL.
 
 SMTP credentials must be protected as deployment secrets. Email warnings are
 advisory and may be delayed, duplicated around process crashes, rejected by a
@@ -215,8 +218,8 @@ Local username/password authentication, mandatory first-login password change,
 stored email fields, server-side opaque sessions, CSRF protected forms,
 administrator checks, login rate limiting, and basic audit persistence now
 exist. Account disablement, safe user deletion, and group lifecycle controls
-are implemented. The implementation has no password recovery or generic
-application proxy. Caddy, nginx, and Apache HTTPS reverse-proxy examples are
+are implemented. The implementation has no generic application proxy or
+institutional authentication. Caddy, nginx, and Apache HTTPS reverse-proxy examples are
 prepared but are not enabled by the development process. The initial file manager supports approved
 directory and named-volume listing, bounded upload,
 individual file download, streamed directory ZIP download, folder creation,
@@ -231,10 +234,9 @@ template allowlist of container UIDs, and desktop access uses a template-approve
 automatically authenticate using the template-selected VNC secret when one is
 configured. Both require runtime support for the selected container. Podman lifecycle
 operations are limited to approved images, labels, and runtime-enforced
-resource limits. Cross-workspace network isolation, runtime-specific
-integration, and audit failure handling still need further review. Operational
-alerts also need a deliberate policy. Do not deploy it as a service for
-untrusted users.
+resource limits. Historical metrics, retained-volume restore, stronger
+host-level egress policy, and deeper runtime integration still need review. Do
+not deploy it as a service for untrusted users.
 
 ## Reporting vulnerabilities
 
