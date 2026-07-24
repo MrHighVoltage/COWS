@@ -637,6 +637,15 @@ func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID stri
 		networkName = workspaceNetworkName("cows-net-" + value.ID)
 	}
 	if value.RuntimeID == "" {
+		if networkName != "" {
+			networkRuntime, ok := s.runtime.(runtime.NetworkRuntime)
+			if !ok {
+				return fmt.Errorf("%w: private workspace network support is unavailable", runtime.ErrNotSupported)
+			}
+			if err := networkRuntime.RemoveWorkspaceNetwork(ctx, networkName); err != nil {
+				return err
+			}
+		}
 		if err := s.logArchiveActivity(value, "workspace_delete_started", "started", nil); err != nil {
 			return err
 		}
@@ -681,11 +690,15 @@ func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID stri
 		}
 	}
 	if networkName != "" {
-		if networkRuntime, ok := s.runtime.(runtime.NetworkRuntime); ok {
-			if err := networkRuntime.RemoveWorkspaceNetwork(ctx, networkName); err != nil {
-				_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
-				return err
-			}
+		networkRuntime, ok := s.runtime.(runtime.NetworkRuntime)
+		if !ok {
+			err := fmt.Errorf("%w: private workspace network support is unavailable", runtime.ErrNotSupported)
+			_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
+			return err
+		}
+		if err := networkRuntime.RemoveWorkspaceNetwork(ctx, networkName); err != nil {
+			_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
+			return err
 		}
 	}
 	_ = s.updateOperationPhase(ctx, value.ID, "delete:archiving")
