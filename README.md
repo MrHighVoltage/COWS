@@ -23,7 +23,8 @@ Implemented today:
 
 - local administrator bootstrap, login/logout, sessions, password changes,
   first-login password changes, optional self-registration, CSV user import,
-  groups, quotas, disable/delete safety, and basic audit persistence;
+  groups, quotas, disable/delete safety, local password reset by email, and
+  audit persistence;
 - administrator templates with typed runtime configuration, server-resolved
   environment placeholders, managed directory and volume mounts, resource
   selection, terminal UID allowlists, VNC secrets, image availability checks,
@@ -35,7 +36,9 @@ Implemented today:
   restricted file manager with bounded uploads, mutations, downloads, and
   streamed directory ZIP downloads;
 - local HTMX, Alpine.js, xterm.js, noVNC, and Nerd Font assets embedded in the
-  binary, plus optional lifecycle warning email delivery.
+  binary, plus optional lifecycle warning and password-reset email delivery;
+- administrator audit and live metrics views, retained named-volume recovery,
+  and optional per-workspace internal Podman network isolation.
 
 The implementation is not production-ready. Remaining high-impact gaps include
 robust recovery of partial lifecycle operations, a constrained web-application

@@ -39,10 +39,10 @@ so a future handler cannot accidentally create a bypass.
 The runtime adapter is the only application boundary allowed to communicate
 with rootless Podman. The user service socket should be available only to the COWS
 process, or later to a narrowly privileged host agent. Templates without
-internal services use `none` networking. Desktop-enabled templates currently
-use `bridge` networking with loopback-only host mappings. This prevents direct
-public service exposure but is not yet complete cross-workspace network
-isolation; per-workspace networks and egress policy are future work.
+internal services use `none` networking. Desktop-enabled templates use
+loopback-only host mappings. Optional isolation gives new service-enabled
+workspaces server-generated internal Podman networks; existing workspaces are
+not migrated and host-level egress policy remains future work.
 The optional image-management capability can inspect the local image store and
 stream an explicitly requested template image pull. It is administrator-only;
 workspace creation and startup never pull images implicitly.
@@ -201,9 +201,14 @@ group, avoiding stale access-policy interpretation.
 Timeout evaluation and reconciliation remain authoritative. A separate
 notification worker observes upcoming stop and deletion deadlines, creates a
 deduplicated SQLite event, and attempts delivery through an optional standard
-library SMTP sender. Delivery status and retry timing are control-plane data,
-but message content never contains secrets, terminal output, runtime IDs, host
+library SMTP sender. The same worker delivers local password-reset messages
+from a separate outbox. Delivery status and retry timing are control-plane
+data, but messages never contain passwords, terminal output, runtime IDs, host
 paths, or internal addresses. A mail failure cannot prevent a stop or delete.
+
+Administrators can query bounded audit history, inspect live host/workspace
+metrics, and recover retained named volumes. Metrics are sampled from Podman
+and not persisted per sample; retained-volume actions are download/remove only.
 
 ## Request and state flow
 

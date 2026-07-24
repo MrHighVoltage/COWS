@@ -101,8 +101,8 @@ Self-registration is disabled by default. If enabled, it requires an email
 address and applies server-configured default quota values and default group
 membership atomically. Newly self-registered accounts use the normal user
 role. Administrator-created accounts retain the mandatory first-login password
-change. Authenticated users can change their passwords; password-reset tokens
-and email verification are separate future work.
+change. Authenticated users can change their passwords, and local users can
+request a non-enumerating password reset by email when it is configured.
 
 The database is control-plane state, not a high-frequency metrics store. Runtime
 observations remain authoritative for container existence and running state.
@@ -118,10 +118,9 @@ does not automatically repair every partial operation.
 - Frontend assets are embedded or served locally; no CDN is required.
 - No Node.js, npm, Kubernetes, or shared network filesystem is required.
 - Docker is not a supported runtime; deployments use rootless Podman.
-- Templates without internal services use private networking. Desktop-enabled
-  templates currently use bridge networking with loopback-only host mapping;
-  optional per-workspace internal network isolation can be enabled for new
-  service-enabled workspaces.
+- Templates without internal services use `none` networking. Desktop-enabled
+  templates use loopback-only host mapping; optional per-workspace internal
+  network isolation can be enabled for new service-enabled workspaces.
 
 ## Terminology
 

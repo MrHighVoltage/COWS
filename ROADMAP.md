@@ -26,15 +26,13 @@ Implemented now:
 
 Not implemented or incomplete:
 
-- complete network isolation and egress policy between workspaces;
+- stronger host-level network egress policy between workspaces;
 - robust persistent recovery for every partial or interrupted lifecycle
   operation;
 - the constrained web-application proxy and any other service exposure;
-- password reset, email verification, OpenID Connect, and institutional
-  identity provisioning;
-- a complete administrator audit viewer, metrics history, and operational
-  alerting;
-- named-volume administrator recovery/cleanup workflows;
+- email verification, OpenID Connect, and institutional identity provisioning;
+- metrics history and operational alerting beyond the live administrator view;
+- named-volume restore/reattachment beyond administrator recovery/download;
 - archive extraction, file previews, bulk file operations, and stronger
   filesystem race/integration coverage;
 - multi-host agents, host pools, PostgreSQL, high availability, GPUs, and
@@ -67,7 +65,7 @@ Remaining exit criteria:
 - define recovery procedures for the first administrator and lost credentials;
 - add broader abuse, session invalidation, and import failure tests;
 - replace process-local rate limits before supporting multiple active instances;
-- add a dedicated design before password reset or email verification.
+- add email verification only after a separate identity design.
 
 ## Milestone 2: Templates and runtime inspection — initial implementation
 
@@ -161,8 +159,8 @@ bounded directory ZIP downloads, rootless namespace-helper access, lifecycle
 serialization, explicit archive activity logging, and storage measurement
 caching.
 
-Remaining work: named-volume administrator recovery and cleanup, stronger
-symlink-race integration tests, total temporary-storage policy, file previews,
+Remaining work: stronger symlink-race integration tests, total temporary-storage
+policy, file previews,
 bulk operations, and archive extraction only after a dedicated security design.
 
 ## Milestone 9: Local account recovery and operations visibility — implemented

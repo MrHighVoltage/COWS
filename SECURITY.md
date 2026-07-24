@@ -56,9 +56,9 @@ partial operations, and compromised or misconfigured images.
   multi-instance deployment must move this control to shared infrastructure.
 - Administrator-created users must change their initial password before
   administrator operations are available. Self-registered users choose their
-  password during registration. Email is used only for optional lifecycle
-  warnings; it is not an identity proof, recovery mechanism, or authorization
-  factor.
+  password during registration. Optional local password reset uses a hashed,
+  single-use token and an HTTPS external URL; email is not an identity proof
+  or authorization factor.
 - Runtime capabilities are least privilege. Privileged mode, host networking,
   unrestricted host mounts, arbitrary capabilities, and direct devices are not
   user-selectable.
@@ -172,8 +172,8 @@ file-count, temporary-storage, and generated-download-size tests.
 
 Explicit deletion retains named volumes and records tombstone metadata before
 the workspace row is removed. A retained-volume record is not authorization to
-mount, inspect, restore, or delete that volume. Those actions require a future
-administrator-only workflow with separate authorization and audit events.
+mount or restore that volume. Administrators can use the separate recovery view
+to download or remove a validated tombstone, with audit events.
 
 Explicit deletion also writes an append-only, permission-restricted
 `archive-activity.jsonl` record containing workspace and runtime/container

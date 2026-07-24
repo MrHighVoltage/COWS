@@ -67,7 +67,7 @@ func (s *Service) EnqueuePasswordReset(ctx context.Context, requestUserID, recip
 	now := s.now().UTC()
 	return s.store.UpsertPasswordResetEmail(ctx, domain.PasswordResetEmail{
 		UserID: requestUserID, Recipient: recipient, Subject: "COWS password reset",
-		Body:   fmt.Sprintf("A COWS password reset was requested for your account. Open this link within one hour to choose a new password:\n\n%s\n\nIf you did not request this, ignore this message.", parsed.String()),
+		Body:   fmt.Sprintf("A COWS password reset was requested for your account. Open this link before %s UTC to choose a new password:\n\n%s\n\nIf you did not request this, ignore this message.", expiresAt.UTC().Format("2006-01-02 15:04"), parsed.String()),
 		Status: "pending", NextAttemptAt: now, CreatedAt: now,
 	})
 }
