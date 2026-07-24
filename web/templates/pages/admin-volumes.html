@@ -1,0 +1,21 @@
+{{ define "admin-volumes-page" }}
+{{ template "base-start" . }}
+<section class="intro" aria-labelledby="volumes-title">
+  <p class="eyebrow">Administration</p>
+  <h1 id="volumes-title">Retained named volumes</h1>
+  <p class="lede">Explicitly deleted workspaces retain named volumes for manual recovery. These records do not grant user access.</p>
+</section>
+<section class="panel table-panel">
+  <div class="table-scroll"><table><thead><tr><th>Volume</th><th>Former workspace</th><th>Mount</th><th>Retained</th><th>Status</th><th>Actions</th></tr></thead><tbody>
+  {{ range .RetainedVolumes }}<tr>
+    <td><code>{{ .VolumeName }}</code></td>
+    <td>{{ .WorkspaceID }}</td>
+    <td>{{ .MountName }}<br><span class="muted">{{ .ContainerPath }}</span></td>
+    <td>{{ .RetainedAt.Format "2006-01-02 15:04 UTC" }}</td>
+    <td>{{ if .RuntimePresent }}<span class="status-value status-ok">Present</span>{{ else }}<span class="status-value status-disabled">Missing</span>{{ end }}</td>
+    <td><div class="table-actions"><a class="table-action access-action button-link" href="/admin/volumes/{{ .WorkspaceID }}/{{ .MountName }}/download.zip">Download ZIP</a><form method="post" action="/admin/volumes/{{ .WorkspaceID }}/{{ .MountName }}/delete" x-on:submit="if (!confirm('Remove this retained volume permanently?')) $event.preventDefault()"><input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}"><button class="table-action danger-action" type="submit">Remove</button></form></div></td>
+  </tr>{{ else }}<tr><td colspan="6" class="muted">No retained named volumes.</td></tr>{{ end }}
+  </tbody></table></div>
+</section>
+{{ template "base-end" . }}
+{{ end }}

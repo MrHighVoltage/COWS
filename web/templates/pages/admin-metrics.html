@@ -1,0 +1,35 @@
+{{ define "admin-metrics-page" }}
+{{ template "base-start" . }}
+<section class="intro" aria-labelledby="metrics-title">
+  <p class="eyebrow">Administration</p>
+  <h1 id="metrics-title">Live metrics</h1>
+  <p class="lede">Current values sampled from rootless Podman. COWS does not store every sample in SQLite.</p>
+</section>
+{{ with .Metrics }}
+<section class="panel" aria-labelledby="host-metrics-title">
+  <div class="panel-heading"><div><p class="eyebrow">Host</p><h2 id="host-metrics-title">Capacity and allocation</h2></div><span class="muted">{{ .ObservedAt.Format "2006-01-02 15:04:05 UTC" }}</span></div>
+  {{ if .CapacityError }}<p class="alert alert-error">{{ .CapacityError }}</p>{{ end }}
+  {{ if .AllocationError }}<p class="alert alert-error">{{ .AllocationError }}</p>{{ end }}
+  <div class="runtime-facts">
+    <div><span class="status-label">Host CPU</span><strong>{{ .Capacity.CPUMillis }} mCPU</strong></div>
+    <div><span class="status-label">Allocated CPU</span><strong>{{ .Allocated.Resources.CPUMillis }} mCPU</strong></div>
+    <div><span class="status-label">Host memory</span><strong>{{ gib .Capacity.MemoryBytes }} GiB</strong></div>
+    <div><span class="status-label">Allocated memory</span><strong>{{ gib .Allocated.Resources.MemoryBytes }} GiB</strong></div>
+    <div><span class="status-label">Workspaces</span><strong>{{ .Allocated.WorkspaceCount }}</strong></div>
+    <div><span class="status-label">Running</span><strong>{{ .Allocated.RunningWorkspaceCount }}</strong></div>
+  </div>
+</section>
+<section class="panel table-panel" aria-labelledby="workspace-metrics-title">
+  <h2 id="workspace-metrics-title">Workspace consumption</h2>
+  <div class="table-scroll"><table><thead><tr><th>Workspace</th><th>State</th><th>Allocated</th><th>Consumed</th></tr></thead><tbody>
+  {{ range .Workspaces }}<tr>
+    <td><strong>{{ .Workspace.Name }}</strong><br><span class="muted">{{ .Workspace.ID }}</span></td>
+    <td>{{ .Workspace.ObservedState }}</td>
+    <td>{{ .Workspace.AllocatedCPUMillis }} mCPU / {{ mib .Workspace.AllocatedMemoryBytes }} MiB</td>
+    <td>{{ if .Known }}{{ cpuPercent .Usage.CPUPercentMilli }} / {{ mib .Usage.MemoryBytes }} MiB / {{ .Usage.PIDs }} PIDs{{ else }}<span class="muted">Not available</span>{{ end }}</td>
+  </tr>{{ else }}<tr><td colspan="4" class="muted">No workspaces found.</td></tr>{{ end }}
+  </tbody></table></div>
+</section>
+{{ end }}
+{{ template "base-end" . }}
+{{ end }}

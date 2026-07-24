@@ -64,6 +64,35 @@ func TestBootstrapAuthenticateAndSession(t *testing.T) {
 	}
 }
 
+func TestPasswordResetIsSingleUseAndInvalidatesSessions(t *testing.T) {
+	service := testService(t)
+	ctx := context.Background()
+	created, err := service.BootstrapAdministrator(ctx, CreateUserInput{Username: "admin", Email: "admin@example.test", Password: "correct horse battery staple"})
+	if err != nil || !created {
+		t.Fatalf("bootstrap administrator: created=%v err=%v", created, err)
+	}
+	user, session, err := service.Authenticate(ctx, "admin", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate: %v", err)
+	}
+	request, err := service.RequestPasswordReset(ctx, "admin@example.test")
+	if err != nil || request.Token == "" || request.User.ID != user.ID {
+		t.Fatalf("request password reset: %+v %v", request, err)
+	}
+	if err := service.ResetPassword(ctx, request.Token, "new correct horse battery staple"); err != nil {
+		t.Fatalf("reset password: %v", err)
+	}
+	if _, err := service.UserForSession(ctx, session); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("session after reset = %v, want not found", err)
+	}
+	if _, _, err := service.Authenticate(ctx, "admin", "new correct horse battery staple"); err != nil {
+		t.Fatalf("authenticate with reset password: %v", err)
+	}
+	if err := service.ResetPassword(ctx, request.Token, "another correct horse battery staple"); !errors.Is(err, ErrInvalidResetToken) {
+		t.Fatalf("second reset = %v, want invalid token", err)
+	}
+}
+
 func TestAdministratorCanManageUsersWithSafetyChecks(t *testing.T) {
 	service := testService(t)
 	ctx := context.Background()

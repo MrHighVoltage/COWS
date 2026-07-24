@@ -1,0 +1,25 @@
+{{ define "admin-audit-page" }}
+{{ template "base-start" . }}
+<section class="intro" aria-labelledby="audit-title">
+  <p class="eyebrow">Administration</p>
+  <h1 id="audit-title">Audit events</h1>
+  <p class="lede">Recent security-relevant actions. Secrets, credentials, terminal contents, and file contents are excluded.</p>
+</section>
+<section class="panel table-panel">
+  <form class="inline-form" method="get" action="/admin/audit">
+    <label for="audit-event">Event type</label>
+    <input id="audit-event" name="event" value="{{ .AuditEventFilter }}" maxlength="120" placeholder="All events">
+    <button class="secondary-button" type="submit">Filter</button>
+  </form>
+  <div class="table-scroll"><table><thead><tr><th>Time</th><th>Actor</th><th>Event</th><th>Target</th><th>Metadata</th></tr></thead><tbody>
+  {{ range .AuditEvents }}<tr>
+    <td>{{ .CreatedAt.Format "2006-01-02 15:04:05 UTC" }}</td>
+    <td>{{ if .ActorUsername }}{{ .ActorUsername }}{{ else }}<span class="muted">System</span>{{ end }}</td>
+    <td><code>{{ .EventType }}</code></td>
+    <td>{{ .TargetType }}{{ if .TargetID }}<br><span class="muted">{{ .TargetID }}</span>{{ end }}</td>
+    <td><code>{{ metadataJSON .Metadata }}</code></td>
+  </tr>{{ else }}<tr><td colspan="5" class="muted">No audit events found.</td></tr>{{ end }}
+  </tbody></table></div>
+</section>
+{{ template "base-end" . }}
+{{ end }}

@@ -52,6 +52,7 @@ type Options struct {
 	Notifications        *notifications.Service
 	ExternalBaseURL      string
 	PasswordResetEnabled bool
+	Store                repository.Store
 }
 
 type Server struct {
@@ -225,6 +226,30 @@ type pageData struct {
 	GroupQuotaAssigned          bool
 	RuntimeWorkspaces           []runtimeWorkspaceView
 	UserImport                  *userImportPageData
+	AuditEvents                 []domain.AuditRecord
+	AuditEventFilter            string
+	Metrics                     *metricsView
+	RetainedVolumes             []retainedVolumeView
+}
+
+type retainedVolumeView struct {
+	domain.RetainedWorkspaceVolume
+	RuntimePresent bool
+}
+
+type metricsWorkspaceView struct {
+	Workspace domain.Workspace
+	Usage     runtime.ResourceUsage
+	Known     bool
+}
+
+type metricsView struct {
+	Capacity        runtime.HostCapacity
+	Allocated       domain.AllocationSummary
+	Workspaces      []metricsWorkspaceView
+	ObservedAt      time.Time
+	CapacityError   string
+	AllocationError string
 }
 
 type workspaceAccess struct {
@@ -309,6 +334,10 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 				return "Not available"
 			}
 			return value.Local().Format("2006-01-02 15:04")
+		},
+		"metadataJSON": func(value map[string]string) string {
+			encoded, _ := json.Marshal(value)
+			return string(encoded)
 		},
 	}).ParseFS(webassets.Files, "templates/layouts/*.html", "templates/pages/*.html", "templates/fragments/*.html")
 	if err != nil {
@@ -421,6 +450,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/templates/{id}/image/pull", s.adminTemplateImagePull)
 	mux.HandleFunc("GET /admin/templates/{id}/image/status", s.adminTemplateImageStatus)
 	mux.HandleFunc("GET /admin/runtime", s.adminRuntime)
+	mux.HandleFunc("GET /admin/audit", s.adminAudit)
+	mux.HandleFunc("GET /admin/metrics", s.adminMetrics)
+	mux.HandleFunc("GET /admin/volumes", s.adminVolumes)
+	mux.HandleFunc("GET /admin/volumes/{workspace_id}/{mount_name}/download.zip", s.adminVolumeDownload)
+	mux.HandleFunc("POST /admin/volumes/{workspace_id}/{mount_name}/delete", s.adminVolumeDelete)
 	mux.HandleFunc("GET /", s.home)
 	return securityHeaders(mux)
 }
@@ -2278,6 +2312,177 @@ func (s *Server) adminRuntime(w http.ResponseWriter, r *http.Request) {
 		data.RuntimeWorkspaces = s.runtimeWorkspaceViews(r.Context(), user.ID, inspection.Workspaces)
 	}
 	s.render(w, status, "admin-runtime-page", data)
+}
+
+func (s *Server) adminAudit(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	if s.options.Store == nil {
+		http.Error(w, "audit storage is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	eventType := strings.TrimSpace(r.URL.Query().Get("event"))
+	events, err := s.options.Store.ListAuditEvents(r.Context(), domain.AuditQuery{Limit: 100, EventType: eventType})
+	if err != nil {
+		http.Error(w, "failed to load audit events", http.StatusInternalServerError)
+		return
+	}
+	s.render(w, http.StatusOK, "admin-audit-page", pageData{Title: "Audit | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), AuditEvents: events, AuditEventFilter: eventType})
+}
+
+func (s *Server) adminMetrics(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	view := &metricsView{ObservedAt: time.Now().UTC()}
+	if capacity, err := runtimeCapacity(r.Context(), s.runtime); err != nil {
+		view.CapacityError = "Host capacity is unavailable."
+	} else {
+		view.Capacity = capacity
+	}
+	if s.options.Store != nil {
+		if allocated, err := s.options.Store.AllWorkspaceAllocations(r.Context()); err != nil {
+			view.AllocationError = "Workspace allocation data is unavailable."
+		} else {
+			view.Allocated = allocated
+		}
+	}
+	values, err := s.workspace.ListWorkspacesForRuntimeOverview(r.Context(), user.ID)
+	if err == nil {
+		view.Workspaces = make([]metricsWorkspaceView, 0, len(values))
+		usageRuntime, _ := s.runtime.(runtime.ResourceUsageRuntime)
+		for _, value := range values {
+			item := metricsWorkspaceView{Workspace: value}
+			if usageRuntime != nil && value.RuntimeID != "" && value.ObservedState == string(runtime.StateRunning) {
+				if usage, usageErr := usageRuntime.WorkspaceResourceUsage(r.Context(), value.RuntimeID); usageErr == nil {
+					item.Usage, item.Known = usage, true
+				}
+			}
+			view.Workspaces = append(view.Workspaces, item)
+		}
+	}
+	s.render(w, http.StatusOK, "admin-metrics-page", pageData{Title: "Metrics | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), Metrics: view})
+}
+
+func runtimeCapacity(ctx context.Context, adapter runtime.Runtime) (runtime.HostCapacity, error) {
+	provider, ok := adapter.(runtime.CapacityProvider)
+	if !ok {
+		return runtime.HostCapacity{}, runtime.ErrNotSupported
+	}
+	return provider.HostCapacity(ctx)
+}
+
+func (s *Server) adminVolumes(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	if s.options.Store == nil {
+		http.Error(w, "volume metadata is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	values, err := s.options.Store.ListAllRetainedWorkspaceVolumes(r.Context())
+	if err != nil {
+		http.Error(w, "failed to load retained volumes", http.StatusInternalServerError)
+		return
+	}
+	volumeRuntime, _ := s.runtime.(runtime.VolumeRuntime)
+	views := make([]retainedVolumeView, 0, len(values))
+	for _, value := range values {
+		view := retainedVolumeView{RetainedWorkspaceVolume: value}
+		if volumeRuntime != nil {
+			view.RuntimePresent, _ = volumeRuntime.VolumeExists(r.Context(), value.VolumeName)
+		}
+		views = append(views, view)
+	}
+	s.render(w, http.StatusOK, "admin-volumes-page", pageData{Title: "Retained volumes | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), RetainedVolumes: views})
+}
+
+func (s *Server) retainedVolumeForRoute(ctx context.Context, workspaceID, mountName string) (domain.RetainedWorkspaceVolume, error) {
+	if s.options.Store == nil || workspaceID == "" || mountName == "" {
+		return domain.RetainedWorkspaceVolume{}, repository.ErrNotFound
+	}
+	values, err := s.options.Store.ListRetainedWorkspaceVolumes(ctx, workspaceID)
+	if err != nil {
+		return domain.RetainedWorkspaceVolume{}, err
+	}
+	for _, value := range values {
+		if value.MountName == mountName {
+			return value, nil
+		}
+	}
+	return domain.RetainedWorkspaceVolume{}, repository.ErrNotFound
+}
+
+func (s *Server) adminVolumeDownload(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	volume, err := s.retainedVolumeForRoute(r.Context(), r.PathValue("workspace_id"), r.PathValue("mount_name"))
+	if errors.Is(err, repository.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to load retained volume", http.StatusInternalServerError)
+		return
+	}
+	reader, err := s.files.OpenRuntimeZip(r.Context(), runtime.FileAccessSpec{MountType: "volume", Source: volume.VolumeName, ContainerPath: volume.ContainerPath, ContainerUID: 0, ContainerGID: 0, ReadOnly: true}, volume.MountName)
+	if err != nil {
+		http.Error(w, "the retained volume could not be read", http.StatusServiceUnavailable)
+		return
+	}
+	defer reader.Close()
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+volume.MountName+`.zip"`)
+	s.recordAdminAudit(r.Context(), user.ID, "volume.recovery_downloaded", volume.VolumeName, map[string]string{"workspace_id": volume.WorkspaceID, "mount_name": volume.MountName})
+	_, _ = io.Copy(w, reader)
+}
+
+func (s *Server) adminVolumeDelete(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if !s.validCSRF(r) {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return
+	}
+	volume, err := s.retainedVolumeForRoute(r.Context(), r.PathValue("workspace_id"), r.PathValue("mount_name"))
+	if errors.Is(err, repository.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to load retained volume", http.StatusInternalServerError)
+		return
+	}
+	volumeRuntime, ok := s.runtime.(runtime.VolumeRuntime)
+	if !ok {
+		http.Error(w, "named volume management is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if err := volumeRuntime.RemoveVolume(r.Context(), volume.VolumeName); err != nil && !errors.Is(err, runtime.ErrNotFound) {
+		http.Error(w, "the retained volume could not be removed", http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.options.Store.DeleteRetainedWorkspaceVolume(r.Context(), volume.VolumeName); err != nil && !errors.Is(err, repository.ErrNotFound) {
+		http.Error(w, "the retained volume metadata could not be removed", http.StatusInternalServerError)
+		return
+	}
+	s.recordAdminAudit(r.Context(), user.ID, "volume.recovery_removed", volume.VolumeName, map[string]string{"workspace_id": volume.WorkspaceID, "mount_name": volume.MountName})
+	http.Redirect(w, r, "/admin/volumes", http.StatusSeeOther)
+}
+
+func (s *Server) recordAdminAudit(ctx context.Context, actorID, eventType, targetID string, metadata map[string]string) {
+	if s.options.Store != nil {
+		_ = s.options.Store.RecordAuditEvent(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: eventType, TargetType: "volume", TargetID: targetID, Metadata: metadata, CreatedAt: time.Now().UTC()})
+	}
 }
 
 func (s *Server) runtimeWorkspaceViews(ctx context.Context, actorID string, observations []runtime.ObservedWorkspace) []runtimeWorkspaceView {

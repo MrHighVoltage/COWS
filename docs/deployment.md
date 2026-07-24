@@ -22,6 +22,11 @@ environment or an operator-managed environment file. See
 [configuration.md](configuration.md) for every variable, defaults, bootstrap
 credentials, rootless Podman setup, and development-only remote listening.
 
+For local password reset, configure `COWS_EMAIL_ENABLED=true` and
+`COWS_EXTERNAL_BASE_URL=https://cows.example.edu` only after the reverse proxy
+is serving HTTPS. The same SMTP worker delivers lifecycle warnings and reset
+messages. Institutional authentication is not part of this deployment.
+
 Use a process supervisor for a long-running installation. COWS does not ship a
 systemd unit yet, so the supervisor must set the working directory, the COWS
 environment, the rootless Podman socket, and restrictive file permissions.

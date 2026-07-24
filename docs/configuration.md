@@ -59,6 +59,8 @@ Podman service if it must run without an interactive login.
 | `COWS_SHUTDOWN_TIMEOUT` | `10s` | Graceful HTTP shutdown timeout. |
 | `COWS_SESSION_LIFETIME` | `8h` | Maximum authenticated session lifetime. |
 | `COWS_COOKIE_SECURE` | `false` | Set `true` when the external URL is HTTPS. |
+| `COWS_EXTERNAL_BASE_URL` | empty | Trusted absolute HTTP(S) base URL used for local password-reset links. Configure the HTTPS proxy URL before enabling reset email. |
+| `COWS_NETWORK_ISOLATION_ENABLED` | `false` | Give new service-enabled workspaces separate internal Podman networks. Existing workspaces are not migrated. |
 | `COWS_BOOTSTRAP_ADMIN_USERNAME` | empty | Initial administrator username. Must be paired with the password. |
 | `COWS_BOOTSTRAP_ADMIN_PASSWORD` | empty | Initial administrator password. |
 | `COWS_REGISTRATION_ENABLED` | `false` | Enable local self-registration. |
@@ -68,7 +70,7 @@ Podman service if it must run without an interactive login.
 | `COWS_REGISTRATION_DEFAULT_STORAGE_BYTES` | `21474836480` | Default measured-storage allowance. |
 | `COWS_REGISTRATION_DEFAULT_MAX_WORKSPACES` | `2` | Default total workspace quota. |
 | `COWS_REGISTRATION_DEFAULT_MAX_RUNNING_WORKSPACES` | `1` | Default running workspace quota. |
-| `COWS_EMAIL_ENABLED` | `false` | Enable optional lifecycle warning email delivery. |
+| `COWS_EMAIL_ENABLED` | `false` | Enable optional lifecycle warning and local password-reset email delivery. |
 | `COWS_SMTP_HOST` | empty | SMTP server hostname. Required when email is enabled. |
 | `COWS_SMTP_PORT` | `587` | SMTP server port. |
 | `COWS_SMTP_FROM` | empty | SMTP sender address. |
@@ -100,10 +102,12 @@ ordinary user with no explicit or inherited quota remains unassigned.
 - The SQLite database is on local supported storage, not an unsupported shared
   network filesystem.
 
-COWS uses private networking for templates without internal services. A
-template that defines the fixed desktop service currently requires bridge
-networking and loopback-only host mapping. This is an implementation boundary,
-not complete cross-workspace network isolation; see
+COWS uses `none` networking for templates without internal services. A
+template with approved services normally uses loopback-only host mapping. When
+`COWS_NETWORK_ISOLATION_ENABLED=true`, each newly created service-enabled
+workspace gets a server-generated internal Podman network. COWS fails closed if
+it cannot create that network. Existing workspaces must be recreated; this is
+not complete host-level egress policy. See
 [SECURITY.md](../SECURITY.md).
 
 ## Production configuration

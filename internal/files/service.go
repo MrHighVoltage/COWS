@@ -297,6 +297,26 @@ func (s *Service) OpenZip(ctx context.Context, actorID, workspaceID, mountName, 
 	return reader, name + ".zip", nil
 }
 
+// OpenRuntimeZip is used only by the administrator retained-volume recovery
+// path. The caller has already authenticated and selected a database-backed
+// tombstone; this method accepts no browser path and still uses the runtime
+// file-access boundary.
+func (s *Service) OpenRuntimeZip(ctx context.Context, spec runtime.FileAccessSpec, name string) (io.ReadCloser, error) {
+	if s.runtime == nil || spec.MountType != "volume" || spec.Source == "" || name == "" || strings.ContainsAny(name, "/\\\x00\r\n") {
+		return nil, ErrFileManagerAccess
+	}
+	access, err := s.runtime.OpenFileAccess(ctx, spec)
+	if err != nil {
+		return nil, mapRuntimeError(err)
+	}
+	archive, err := access.OpenZip(ctx, ".")
+	if err != nil {
+		_ = access.Close()
+		return nil, mapRuntimeError(err)
+	}
+	return &accessFile{reader: archive, access: access}, nil
+}
+
 type archiveState struct {
 	bytes   int64
 	entries int
