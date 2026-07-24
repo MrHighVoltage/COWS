@@ -1,0 +1,26 @@
+# Example Apache 2.4 TLS virtual host. Replace the certificate paths and
+# hostname. Enable: proxy, proxy_http, ssl, headers.
+
+<VirtualHost *:443>
+    ServerName cows.example.org
+
+    SSLEngine on
+    SSLCertificateFile /etc/letsencrypt/live/cows.example.org/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/cows.example.org/privkey.pem
+
+    ProxyPreserveHost On
+    ProxyRequests Off
+    ProxyTimeout 3600
+    ProxyPass        "/" "http://127.0.0.1:8080/" connectiontimeout=5 timeout=3600 upgrade=websocket
+    ProxyPassReverse "/" "http://127.0.0.1:8080/"
+
+    RequestHeader set X-Forwarded-Proto "https"
+    Header always set Strict-Transport-Security "max-age=31536000"
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "DENY"
+    Header always set Referrer-Policy "no-referrer"
+    Header always set Permissions-Policy "camera=(), microphone=(), geolocation=()"
+
+    ErrorLog ${APACHE_LOG_DIR}/cows-error.log
+    CustomLog ${APACHE_LOG_DIR}/cows-access.log combined
+</VirtualHost>

@@ -19,11 +19,12 @@ particular image.
 
 ## Primary use cases
 
-Users will eventually be able to select an approved template, create a
-workspace within their quota, start and stop it, inspect its state and resource
-use, and access an approved terminal, graphical desktop, or web application
-through COWS. Administrators will eventually manage users, templates, quotas,
-runtime capacity, policies, and audit information.
+Users can select approved templates, create workspaces within their effective
+quota, start and stop them, inspect state and resource use, and access an
+approved terminal, graphical desktop, or file manager through COWS. The initial
+desktop path is noVNC. Administrators can manage users, groups, templates,
+quotas, runtime capacity, lifecycle policies, image pulls, and the runtime
+overview. A constrained web-application gateway remains future work.
 
 ## Goals
 
@@ -41,13 +42,16 @@ runtime capacity, policies, and audit information.
   server-assigned default quotas and groups.
 - Provide advisory email warnings for upcoming lifecycle actions without making
   email delivery part of the lifecycle safety path.
+- Keep deployment simple enough for one Linux host, while documenting the
+  reverse-proxy boundary needed for HTTPS.
 
 ## Non-goals for the initial milestones
 
 - Kubernetes, microservices, clustering, or a distributed scheduler.
 - Arbitrary container creation or arbitrary runtime arguments.
 - Public per-workspace VNC, SSH, terminal, or application ports.
-- Full file management, uploads, archive extraction, or historical metrics.
+- Archive extraction, file previews, bulk file operations, and historical
+  metrics.
 - A complete permissions framework before the basic user/administrator roles
   are proven.
 - Institutional identity, email verification, and password-reset email flows
@@ -60,21 +64,24 @@ runtime capacity, policies, and audit information.
 The backend must independently authorize every state-changing operation and
 every access session. Workspace ownership is checked in the backend; opaque IDs
 never substitute for authorization. Templates are administrator-controlled and
-validated before use. Runtime-enforced CPU, memory, process, storage, and other
-applicable limits must correspond to the quota and template policy.
+validated before use. CPU, memory, and process limits are enforced by the
+runtime where supported. Storage is measured for display and finite user
+allowances; per-template and per-workspace storage limits are not currently
+runtime-enforced.
 
-The scheduler initially performs deterministic quota and host-capacity checks,
-with no unsafe overcommit by default. Accounting policy must state whether
-stopped workspaces continue to reserve resources.
+The scheduler performs deterministic quota and host-capacity checks. CPU and
+memory allocations count only observed running workspaces; total and running
+workspace counts are separate. Host CPU and memory admission use administrator
+configured overbooking factors. Storage is not a host-capacity admission
+check.
 
 An ordinary user must have either an explicit quota or an effective quota from
 one or more groups before creating a workspace. An explicit user quota
 overrides group quotas. Group limits add together, while zero makes that
 resource unlimited. An administrator without either quota type is unrestricted
-by COWS user quotas. Physical host capacity and reserved host capacity still
-apply to all accounts. Administrators edit explicit user quotas from the user
-edit view and group quotas from the group edit view; there is no separate
-global quota list.
+by COWS user quotas. Physical host CPU and memory capacity apply to all
+accounts. Administrators edit explicit user quotas from the user edit view and
+group quotas from the group edit view; there is no separate global quota list.
 
 Workspace lifecycle policies must support two administrator-defined durations:
 
@@ -99,6 +106,8 @@ and email verification are separate future work.
 
 The database is control-plane state, not a high-frequency metrics store. Runtime
 observations remain authoritative for container existence and running state.
+The current reconciliation worker records missing and orphaned objects but
+does not automatically repair every partial operation.
 
 ## Deployment assumptions
 
@@ -108,6 +117,10 @@ observations remain authoritative for container existence and running state.
 - A reverse proxy may terminate HTTPS.
 - Frontend assets are embedded or served locally; no CDN is required.
 - No Node.js, npm, Kubernetes, or shared network filesystem is required.
+- Docker is not a supported runtime; deployments use rootless Podman.
+- Templates without internal services use private networking. Desktop-enabled
+  templates currently use bridge networking with loopback-only host mapping;
+  complete cross-workspace network isolation is a later milestone.
 
 ## Terminology
 
@@ -119,8 +132,8 @@ observations remain authoritative for container existence and running state.
   user quotas override inherited group quotas.
 - **Allocated resources**: Resources reserved for workspaces under the policy.
 - **Consumed resources**: Resources currently reported as in use by the runtime.
-- **Access gateway**: Authenticated COWS routing for terminal, desktop, or web
-  application sessions.
+- **Access gateway**: Authenticated COWS routing for terminal, desktop, or file
+  manager sessions; web application proxying is not implemented yet.
 - **Managed container**: A runtime object identified by COWS labels or their
   Podman equivalent.
 - **Initial connection timeout**: The maximum time a newly started workspace

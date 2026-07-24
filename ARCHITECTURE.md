@@ -10,7 +10,7 @@ there is no distributed system in the first milestone.
 
 ```mermaid
 flowchart LR
-    Browser[Browser] -->|HTTPS only| HTTP[HTTP server]
+    Browser[Browser] -->|HTTPS via proxy; HTTP in development| HTTP[HTTP server]
     HTTP --> Auth[Authentication and authorization]
     HTTP --> Web[Go templates and HTMX fragments]
     HTTP --> Access[Access gateway]
@@ -38,8 +38,11 @@ so a future handler cannot accidentally create a bypass.
 
 The runtime adapter is the only application boundary allowed to communicate
 with rootless Podman. The user service socket should be available only to the COWS
-process, or later to a narrowly privileged host agent. Containers use private
-networking where practical; no workspace port is a public routing mechanism.
+process, or later to a narrowly privileged host agent. Templates without
+internal services use `none` networking. Desktop-enabled templates currently
+use `bridge` networking with loopback-only host mappings. This prevents direct
+public service exposure but is not yet complete cross-workspace network
+isolation; per-workspace networks and egress policy are future work.
 The optional image-management capability can inspect the local image store and
 stream an explicitly requested template image pull. It is administrator-only;
 workspace creation and startup never pull images implicitly.
@@ -57,9 +60,10 @@ for command, environment, managed mounts, and internal services. The backend
 snapshots this document into each workspace and resolves a small allowlist of
 COWS placeholders only after authorizing the request and allocating resources.
 Users submit neither runtime arguments nor rendered values. Service host ports
-are reserved in SQLite with uniqueness constraints from administrator-defined ranges and are bound to
-loopback by the Podman adapter. This prepares future terminal,
-desktop, and application gateways without exposing container ports directly.
+are reserved in SQLite with uniqueness constraints from administrator-defined
+ranges and are bound to loopback by the Podman adapter. This is used by the
+implemented desktop gateway and leaves a controlled boundary for a future
+application gateway without exposing container ports directly.
 
 The configuration is intentionally not a generic runtime argument map. The
 resolver rejects unknown placeholders, duplicate names, invalid paths, unsafe
@@ -300,8 +304,8 @@ details. PostgreSQL is a future option when multiple active control-plane
 instances or higher availability requirements justify it.
 
 Workspace templates are administrator-controlled records. Their current policy
-surface contains an image reference and optional immutable digest, CPU/memory/
-storage defaults and maxima, supported access-method names, allowed roles,
+surface contains an image reference and optional immutable digest, CPU and
+memory defaults and maxima, supported access-method names, allowed roles,
 enabled state, and initial-connection and stopped-retention durations. Typed
 JSON configuration may also define command, environment,
 managed mounts, loopback service ports, secrets, group access, and an optional
@@ -338,7 +342,7 @@ quota or explicit unassigned/unlimited status.
 Quota checks use measured storage for all existing workspaces, including
 stopped records. CPU and memory are counted only for running workspaces. A
 request must fit total and running workspace-count quotas and the remaining host
-capacity after reserved capacity.
+capacity after the configured CPU and memory overbooking factors.
 Templates can either fix CPU and memory at their defaults or allow users to
 select values between the administrator-defined default and maximum. The
 selection is validated in the workspace service and checked again against live
@@ -410,8 +414,9 @@ Runtime capabilities are read from host information rather than assumed from
 the API compatibility layer. COWS distinguishes CPU, memory, process, storage,
 private-network, and label support. It refuses container creation when the CPU,
 memory, or process limits required by the template cannot be enforced. Storage
-capacity remains an admission-control setting until a portable runtime
-storage-limit implementation is selected.
+limits are not passed to the runtime. Storage is measured for display and
+finite user allowances, while host storage settings are informational and do
+not block workspace creation.
 
 ## Operational direction
 

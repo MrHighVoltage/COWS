@@ -218,6 +218,8 @@ marimo/_lsp/
 __marimo__/
 
 # Go and COWS local runtime data
+!web/static/vendor/novnc/vendor/pako/lib/
+!web/static/vendor/novnc/vendor/pako/lib/**
 /bin/
 /data/
 *.test
