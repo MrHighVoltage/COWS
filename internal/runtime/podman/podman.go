@@ -598,6 +598,9 @@ func (a *Adapter) RemoveWorkspaceNetwork(ctx context.Context, name string) error
 	if a.podmanBinary == "" {
 		return fmt.Errorf("%w: Podman executable is unavailable", runtime.ErrNotSupported)
 	}
+	if err := exec.CommandContext(ctx, a.podmanBinary, "network", "inspect", name).Run(); err != nil {
+		return nil
+	}
 	command := exec.CommandContext(ctx, a.podmanBinary, "network", "rm", name)
 	output, err := command.CombinedOutput()
 	if err != nil && strings.TrimSpace(string(output)) != "" {

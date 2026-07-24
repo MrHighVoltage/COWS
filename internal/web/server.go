@@ -538,6 +538,7 @@ func (s *Server) passwordResetRequestPost(w http.ResponseWriter, r *http.Request
 	if err == nil && request.Token != "" {
 		err = s.options.Notifications.EnqueuePasswordReset(r.Context(), request.User.ID, request.User.Email, request.Token, s.options.ExternalBaseURL, request.ExpiresAt)
 	}
+	s.options.LoginLimiter.Failure(key)
 	// Do not distinguish unknown accounts or delivery failures in this response.
 	data.PasswordReset.Notice = "If the account is eligible, a password reset message has been queued. Check your email."
 	if err != nil {
