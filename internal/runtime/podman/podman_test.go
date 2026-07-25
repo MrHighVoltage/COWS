@@ -396,6 +396,7 @@ func TestCreateWorkspaceUsesPodmanLibpodForPasswdEntry(t *testing.T) {
 				NetNS struct {
 					Mode string `json:"nsmode"`
 				} `json:"netns"`
+				Networks map[string]struct{} `json:"newNetworks"`
 			}
 			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 				t.Fatalf("decode Podman create request: %v", err)
@@ -416,6 +417,48 @@ func TestCreateWorkspaceUsesPodmanLibpodForPasswdEntry(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("create Podman workspace: %v", err)
+	}
+}
+
+func TestCreateWorkspaceUsesNamedNetworkForPodmanLibpod(t *testing.T) {
+	adapter := &Adapter{client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/version":
+			return podmanResponse(http.StatusOK, `{"ApiVersion":"4.9"}`), nil
+		case "/v4.9/info":
+			return podmanResponse(http.StatusOK, `{"NCPU":8,"MemTotal":8589934592,"MemoryLimit":true,"PidsLimit":true,"CgroupVersion":"2","Rootless":true,"IDMappings":{"UIDMap":[{"ContainerID":0,"HostID":100000,"Size":65536}],"GIDMap":[{"ContainerID":0,"HostID":100000,"Size":65536}]}}`), nil
+		case "/v4.9/libpod/info":
+			return podmanResponse(http.StatusOK, `{"host":{"idMappings":{"uidmap":[{"container_id":0,"host_id":1000,"size":1},{"container_id":1,"host_id":100000,"size":65536}],"gidmap":[{"container_id":0,"host_id":1000,"size":1},{"container_id":1,"host_id":100000,"size":65536}]}}}`), nil
+		case "/v4.9/libpod/containers/create":
+			var body struct {
+				NetNS struct {
+					Mode string `json:"nsmode"`
+				} `json:"netns"`
+				Networks map[string]struct{} `json:"newNetworks"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Fatalf("decode Podman create request: %v", err)
+			}
+			if body.NetNS.Mode != "bridge" {
+				t.Fatalf("network namespace mode = %q, want bridge", body.NetNS.Mode)
+			}
+			if _, ok := body.Networks["cows-net-workspace-123"]; !ok || len(body.Networks) != 1 {
+				t.Fatalf("named networks = %#v", body.Networks)
+			}
+			return podmanResponse(http.StatusCreated, `{"Id":"abcdef0123456789"}`), nil
+		default:
+			return podmanResponse(http.StatusNotFound, `not found`), nil
+		}
+	})}}
+	_, err := adapter.CreateWorkspace(context.Background(), runtime.WorkspaceSpec{
+		WorkspaceID: "workspace-123",
+		Image:       runtime.Image{Reference: "registry.example/research:1"},
+		Limits:      runtime.ResourceLimits{CPUMillis: 1000, MemoryBytes: 2 << 30},
+		NetworkMode: "cows-net-workspace-123",
+		User:        &runtime.ContainerUser{Username: "alice", UID: 1000, GID: 1001, Name: "Alice", Home: "/home/alice", Shell: "/bin/bash", PasswdEntry: "alice:x:1000:1001:Alice:/home/alice:/bin/bash"},
+	})
+	if err != nil {
+		t.Fatalf("create Podman workspace with named network: %v", err)
 	}
 }
 

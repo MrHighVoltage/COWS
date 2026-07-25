@@ -375,17 +375,18 @@ func (a *Adapter) createPodmanWorkspace(ctx context.Context, spec runtime.Worksp
 		GIDMappings []idMapping `json:"gidmapping,omitempty"`
 	}
 	body := struct {
-		Name           string            `json:"name,omitempty"`
-		Image          string            `json:"image"`
-		Command        []string          `json:"command,omitempty"`
-		Env            map[string]string `json:"env,omitempty"`
-		Labels         map[string]string `json:"labels,omitempty"`
-		User           string            `json:"user,omitempty"`
-		PasswdEntry    string            `json:"passwd_entry,omitempty"`
-		UserNS         *userNamespace    `json:"userns,omitempty"`
-		NetNS          map[string]string `json:"netns,omitempty"`
-		Mounts         []podmanMount     `json:"mounts,omitempty"`
-		PortMappings   []portMapping     `json:"portmappings,omitempty"`
+		Name           string              `json:"name,omitempty"`
+		Image          string              `json:"image"`
+		Command        []string            `json:"command,omitempty"`
+		Env            map[string]string   `json:"env,omitempty"`
+		Labels         map[string]string   `json:"labels,omitempty"`
+		User           string              `json:"user,omitempty"`
+		PasswdEntry    string              `json:"passwd_entry,omitempty"`
+		UserNS         *userNamespace      `json:"userns,omitempty"`
+		NetNS          map[string]string   `json:"netns,omitempty"`
+		Networks       map[string]struct{} `json:"newNetworks,omitempty"`
+		Mounts         []podmanMount       `json:"mounts,omitempty"`
+		PortMappings   []portMapping       `json:"portmappings,omitempty"`
 		ResourceLimits struct {
 			CPU struct {
 				Quota  int64  `json:"quota,omitempty"`
@@ -402,6 +403,13 @@ func (a *Adapter) createPodmanWorkspace(ctx context.Context, spec runtime.Worksp
 	body.Name = "cows-" + spec.WorkspaceID
 	body.User = strconv.FormatInt(spec.User.UID, 10) + ":" + strconv.FormatInt(spec.User.GID, 10)
 	body.NetNS = map[string]string{"nsmode": networkMode}
+	if validWorkspaceNetworkName(networkMode) {
+		// Libpod separates the network namespace mode from the named networks.
+		// Sending the network name as nsmode works with neither recent Podman
+		// nor the API's typed ContainerNetworkConfig.
+		body.NetNS["nsmode"] = "bridge"
+		body.Networks = map[string]struct{}{networkMode: {}}
+	}
 	info, err := a.hostInfo(ctx)
 	if err != nil {
 		return runtime.WorkspaceHandle{}, err
