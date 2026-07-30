@@ -6,7 +6,7 @@
   <p class="lede">Recent security-relevant actions. Secrets, credentials, terminal contents, and file contents are excluded.</p>
 </section>
 <section class="panel table-panel">
-  <form class="inline-form" method="get" action="/admin/audit">
+  <form class="inline-form filter-form" method="get" action="/admin/audit">
     <label for="audit-event">Event type</label>
     <input id="audit-event" name="event" value="{{ .AuditEventFilter }}" maxlength="120" placeholder="All events">
     <button class="secondary-button" type="submit">Filter</button>

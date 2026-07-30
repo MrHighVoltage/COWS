@@ -26,13 +26,13 @@
 </section>
 <section class="panel table-panel" aria-labelledby="managed-title">
   <h2 id="managed-title">Managed containers</h2>
-  <div class="table-scroll"><table><thead><tr><th>Workspace</th><th>Owner</th><th>Template</th><th>State</th><th>Observed</th><th>Access and controls</th></tr></thead><tbody>
+  <div class="table-scroll"><table class="runtime-table"><thead><tr><th>Workspace</th><th>Owner</th><th>Template</th><th>State</th><th>Observed</th><th class="actions-column">Access and controls</th></tr></thead><tbody>
   {{ range .RuntimeWorkspaces }}<tr>
     <td><strong>{{ .WorkspaceID }}</strong>{{ if not .Managed }}<span class="badge">Orphan</span>{{ else if not .RuntimePresent }}<span class="badge">Runtime missing</span>{{ end }}</td>
     <td>{{ if .Owner }}{{ .Owner }}{{ else }}<span class="muted">Unknown</span>{{ end }}</td>
     <td>{{ if .Template }}{{ .Template }}{{ else }}<span class="muted">Unknown</span>{{ end }}</td>
     <td>{{ .Observed.State }}</td><td>{{ observedTime .Observed.ObservedAt }}</td>
-    <td>
+    <td class="actions-column">
       {{ if .Managed }}
       <div class="table-actions">
         {{ if eq .Observed.State "running" }}
