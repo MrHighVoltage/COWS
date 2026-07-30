@@ -26,7 +26,7 @@
           <td><span class="badge">{{ .Role }}</span></td>
           <td>{{ range index $.UserGroups $user.ID }}<span class="badge">{{ .Name }}</span> {{ else }}<span class="muted">None</span>{{ end }}</td>
           <td>{{ if .Disabled }}<span class="status-value status-disabled">Disabled</span>{{ else }}<span class="status-value status-ok">Active</span>{{ end }}</td>
-          <td>
+          <td><div class="table-actions">
             <a class="table-action button-link" href="/admin/users/{{ .ID }}/edit">Edit user</a>
             {{ if ne .ID $.User.ID }}
             <form method="post" action="/admin/users/{{ .ID }}/disabled" x-on:submit="if (!confirm('{{ if .Disabled }}Enable this user?{{ else }}Disabling this user immediately ends all sessions and stops all of their workspaces. Unsaved work may be lost. Continue?{{ end }}')) $event.preventDefault()">
@@ -39,7 +39,7 @@
               <button class="table-action danger-action" type="submit">Delete</button>
             </form>{{ end }}
             {{ else }}<span class="muted">Current account</span>{{ end }}
-          </td>
+          </div></td>
         </tr>
       {{ else }}
         <tr><td colspan="7" class="muted">No users found.</td></tr>

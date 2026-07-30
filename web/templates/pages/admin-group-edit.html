@@ -1,6 +1,6 @@
 {{ define "admin-group-edit-page" }}
 {{ template "base-start" . }}
-<section class="narrow-section" aria-labelledby="edit-group-title">
+<section class="narrow-section admin-edit-section" aria-labelledby="edit-group-title">
   <p class="eyebrow">Administration</p>
   <h1 id="edit-group-title">Edit group</h1>
   <p class="lede"><strong>{{ .EditGroup.Name }}</strong>{{ if .EditGroup.Description }} · {{ .EditGroup.Description }}{{ end }}</p>
