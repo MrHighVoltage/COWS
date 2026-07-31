@@ -221,6 +221,7 @@ __marimo__/
 !web/static/vendor/novnc/vendor/pako/lib/
 !web/static/vendor/novnc/vendor/pako/lib/**
 /bin/
+/.cows-test/
 /data/
 *.test
 coverage.out

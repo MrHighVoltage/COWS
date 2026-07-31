@@ -119,13 +119,15 @@ contribution terms.
 ```sh
 tools/web-assets.sh verify
 gofmt -w .
-go test ./cmd/cows ./internal/auth ./internal/config ./internal/database ./internal/domain ./internal/fileagent ./internal/files ./internal/notifications ./internal/quota ./internal/repository ./internal/repository/sqlite ./internal/runtime ./internal/runtime/podman ./internal/web ./internal/workspace
-go vet ./cmd/cows ./internal/auth ./internal/config ./internal/database ./internal/domain ./internal/fileagent ./internal/files ./internal/notifications ./internal/quota ./internal/repository ./internal/repository/sqlite ./internal/runtime ./internal/runtime/podman ./internal/web ./internal/workspace
+go test ./...
+go vet ./...
 go build -o bin/cows ./cmd/cows
 ```
 
 If an optional analyzer is installed, run it too. Podman must not be
-required for the ordinary unit-test suite.
+required for the ordinary unit-test suite. Keep live rootless-Podman test data
+in the ignored `.cows-test/` directory or outside the repository; do not place
+mapped runtime directories under `data/` while running `go test ./...`.
 
 ## Working practices
 

@@ -87,6 +87,16 @@ The server defaults to `127.0.0.1:8080` and creates its SQLite database at
 environment variables, flags, rootless Podman setup, bootstrap credentials,
 and production operation.
 
+For a local rootless-Podman test instance, keep runtime data in the ignored
+`.cows-test/` directory so `go test ./...` never scans mapped container data:
+
+```sh
+COWS_DATABASE_PATH=./.cows-test/cows.db \
+COWS_MOUNT_ROOT=./.cows-test/cows-mounts \
+COWS_MOUNT_ARCHIVE_ROOT=./.cows-test/cows-mounts-archive \
+./bin/cows
+```
+
 ## Security warning
 
 COWS is an early development project. Do not expose it to untrusted users or
