@@ -7,6 +7,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -266,6 +268,52 @@ func TestOpenShellUsesPodmanExecUpgradeAndResize(t *testing.T) {
 	}
 	if len(calls) != 6 {
 		t.Fatalf("Podman API calls = %d, want 6: %v", len(calls), calls)
+	}
+}
+
+func TestTerminalCloseTerminatesExec(t *testing.T) {
+	cleanupStarted := false
+	cleanupUser := ""
+	var cleanupCommand []string
+	stream := &testStream{Reader: strings.NewReader("shell> ")}
+	adapter := &Adapter{client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/version":
+			return podmanResponse(http.StatusOK, `{"ApiVersion":"1.45"}`), nil
+		case "/v1.45/containers/abcdef0123456789/exec":
+			var body struct {
+				Cmd  []string `json:"Cmd"`
+				User string   `json:"User"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				return nil, err
+			}
+			if body.User == "0" {
+				cleanupUser = body.User
+				cleanupCommand = body.Cmd
+				return podmanResponse(http.StatusCreated, `{"Id":"c1ea12345678"}`), nil
+			}
+			return podmanResponse(http.StatusCreated, `{"Id":"abc123"}`), nil
+		case "/v1.45/exec/abc123/start":
+			return &http.Response{StatusCode: http.StatusSwitchingProtocols, Status: "101 Switching Protocols", Body: stream, Header: http.Header{"Connection": {"Upgrade"}, "Upgrade": {"tcp"}}}, nil
+		case "/v1.45/exec/abc123/json":
+			return podmanResponse(http.StatusOK, `{"Running":true,"Pid":`+strconv.Itoa(os.Getpid())+`}`), nil
+		case "/v1.45/exec/c1ea12345678/start":
+			cleanupStarted = true
+			return podmanResponse(http.StatusOK, ``), nil
+		default:
+			return podmanResponse(http.StatusNotFound, `not found`), nil
+		}
+	})}}
+	terminal, err := adapter.OpenShell(context.Background(), "abcdef0123456789", []string{"/bin/sh", "-l"})
+	if err != nil {
+		t.Fatalf("open shell: %v", err)
+	}
+	if err := terminal.Close(); err != nil {
+		t.Fatalf("close terminal: %v", err)
+	}
+	if !cleanupStarted || cleanupUser != "0" || len(cleanupCommand) != 3 || cleanupCommand[0] != "/bin/sh" || cleanupCommand[1] != "-c" || !strings.Contains(cleanupCommand[2], "kill -TERM -") {
+		t.Fatalf("unexpected terminal cleanup: started=%v user=%q command=%q", cleanupStarted, cleanupUser, cleanupCommand)
 	}
 }
 
