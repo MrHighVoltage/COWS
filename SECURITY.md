@@ -109,7 +109,10 @@ secrets are resolved separately for each workspace; static template secrets
 are an administrator responsibility. Secrets are not rendered in ordinary
 pages, URLs, logs, or audit events. The current
 control-plane database stores this runtime secret and therefore requires the
-existing restrictive database-file permissions.
+existing restrictive database-file permissions. Terminal disconnects close the
+transport and terminate the server-created Podman exec process group through a
+server-selected cleanup command; failure to clean up must not grant any new
+access and remains a runtime diagnostic condition.
 
 The web-application proxy must be allowlisted by template and internal port.
 It is not a generic URL proxy. SSRF, redirects, cookies, host headers, origins,

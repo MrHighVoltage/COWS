@@ -168,8 +168,8 @@ type ObservedWorkspace struct {
 	ObservedAt  time.Time
 }
 
-// Terminal is an interactive shell stream owned by a runtime adapter. The
-// adapter keeps runtime-specific attach details behind this small interface.
+// Terminal is an interactive shell stream owned by a runtime adapter. Close
+// must terminate the runtime-side command, not only close the transport.
 type Terminal interface {
 	io.ReadWriteCloser
 	Resize(ctx context.Context, cols, rows int) error

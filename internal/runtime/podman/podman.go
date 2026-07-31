@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cows-project/cows/internal/runtime"
@@ -722,7 +723,7 @@ func (a *Adapter) openShell(ctx context.Context, runtimeID, user string, command
 		response.Body.Close()
 		return nil, fmt.Errorf("%w: Podman did not return a writable exec stream", runtime.ErrUnavailable)
 	}
-	return &terminal{stream: stream, adapter: a, execID: created.ID}, nil
+	return &terminal{stream: stream, adapter: a, runtimeID: runtimeID, execID: created.ID, cleanupShell: command[0]}, nil
 }
 
 func (a *Adapter) OpenInternalService(ctx context.Context, runtimeID string, containerPort, hostPort int) (io.ReadWriteCloser, error) {
@@ -754,14 +755,25 @@ func (a *Adapter) OpenInternalService(ctx context.Context, runtimeID string, con
 }
 
 type terminal struct {
-	stream  io.ReadWriteCloser
-	adapter *Adapter
-	execID  string
+	stream       io.ReadWriteCloser
+	adapter      *Adapter
+	runtimeID    string
+	execID       string
+	cleanupShell string
+	closeOnce    sync.Once
+	closeErr     error
 }
 
 func (t *terminal) Read(value []byte) (int, error)  { return t.stream.Read(value) }
 func (t *terminal) Write(value []byte) (int, error) { return t.stream.Write(value) }
-func (t *terminal) Close() error                    { return t.stream.Close() }
+func (t *terminal) Close() error {
+	t.closeOnce.Do(func() {
+		streamErr := t.stream.Close()
+		cleanupErr := t.adapter.terminateExec(context.Background(), t.runtimeID, t.execID, t.cleanupShell)
+		t.closeErr = errors.Join(streamErr, cleanupErr)
+	})
+	return t.closeErr
+}
 
 func (t *terminal) Resize(ctx context.Context, cols, rows int) error {
 	if cols < 1 || cols > 500 || rows < 1 || rows > 500 {
@@ -769,6 +781,74 @@ func (t *terminal) Resize(ctx context.Context, cols, rows int) error {
 	}
 	path := "/exec/" + url.PathEscape(t.execID) + "/resize?h=" + strconv.Itoa(rows) + "&w=" + strconv.Itoa(cols)
 	return t.adapter.mutation(ctx, http.MethodPost, path, nil, nil)
+}
+
+type execInspection struct {
+	Running bool `json:"Running"`
+	PID     int  `json:"Pid"`
+}
+
+func (a *Adapter) terminateExec(ctx context.Context, runtimeID, execID, shell string) error {
+	if !validRuntimeID(runtimeID) || !validRuntimeID(execID) || shell == "" {
+		return runtime.ErrConflict
+	}
+	cleanupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	var inspection execInspection
+	if err := a.get(cleanupCtx, "/exec/"+url.PathEscape(execID)+"/json", &inspection); err != nil {
+		if errors.Is(err, runtime.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	if !inspection.Running || inspection.PID <= 0 {
+		return nil
+	}
+	pid, err := namespacePID(inspection.PID)
+	if err != nil {
+		return err
+	}
+	command := "kill -TERM -" + strconv.Itoa(pid) + " 2>/dev/null || kill -TERM " + strconv.Itoa(pid) + "; sleep 1; kill -KILL -" + strconv.Itoa(pid) + " 2>/dev/null || kill -KILL " + strconv.Itoa(pid) + " 2>/dev/null || true"
+	var created struct {
+		ID string `json:"Id"`
+	}
+	body := struct {
+		AttachStdin  bool     `json:"AttachStdin"`
+		AttachStdout bool     `json:"AttachStdout"`
+		AttachStderr bool     `json:"AttachStderr"`
+		Tty          bool     `json:"Tty"`
+		Cmd          []string `json:"Cmd"`
+		User         string   `json:"User,omitempty"`
+	}{Cmd: []string{shell, "-c", command}, User: "0"}
+	if err := a.mutation(cleanupCtx, http.MethodPost, "/containers/"+url.PathEscape(runtimeID)+"/exec", &body, &created); err != nil {
+		return err
+	}
+	if !validRuntimeID(created.ID) {
+		return fmt.Errorf("%w: Podman returned invalid terminal cleanup exec ID", runtime.ErrInvalidObservation)
+	}
+	return a.mutation(cleanupCtx, http.MethodPost, "/exec/"+url.PathEscape(created.ID)+"/start", map[string]bool{"Detach": false, "Tty": false}, nil)
+}
+
+func namespacePID(hostPID int) (int, error) {
+	if hostPID <= 0 {
+		return 0, fmt.Errorf("%w: invalid Podman exec PID", runtime.ErrInvalidObservation)
+	}
+	status, err := os.ReadFile("/proc/" + strconv.Itoa(hostPID) + "/status")
+	if err != nil {
+		return 0, fmt.Errorf("%w: read Podman exec PID mapping: %v", runtime.ErrUnavailable, err)
+	}
+	for _, line := range strings.Split(string(status), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != "NSpid:" {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[len(fields)-1])
+		if err != nil || pid <= 0 {
+			return 0, fmt.Errorf("%w: invalid container PID mapping", runtime.ErrInvalidObservation)
+		}
+		return pid, nil
+	}
+	return 0, fmt.Errorf("%w: Podman did not return a container PID mapping", runtime.ErrInvalidObservation)
 }
 
 type containerSummary struct {
