@@ -29,6 +29,20 @@ export COWS_BOOTSTRAP_ADMIN_PASSWORD='replace-this-with-a-long-password'
 ./bin/cows
 ```
 
+For local rootless-Podman testing, keep the live database and mapped mount
+directories in the ignored `.cows-test/` directory. This prevents `go test
+./...` from traversing runtime-owned directories:
+
+```sh
+COWS_DATABASE_PATH=./.cows-test/cows.db \
+COWS_MOUNT_ROOT=./.cows-test/cows-mounts \
+COWS_MOUNT_ARCHIVE_ROOT=./.cows-test/cows-mounts-archive \
+./bin/cows
+```
+
+Use a separate test database when resetting the test environment. Do not use
+these paths for a production installation.
+
 Open `http://127.0.0.1:8080`. The default listener is local-only. For a
 development-only test from another machine, use an explicit listener such as
 `COWS_LISTEN_ADDR=0.0.0.0:8081`; this is plain HTTP and must not be used for
