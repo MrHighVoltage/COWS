@@ -64,6 +64,21 @@ func TestTemplateConfigurationAcceptsSeparatorMountSuffix(t *testing.T) {
 	}
 }
 
+func TestTemplateConfigurationOnlyAcceptsDesktopService(t *testing.T) {
+	valid := domain.TemplateService{Name: "desktop", Protocol: "tcp", ContainerPort: 5901, PortPool: "vnc", HostPortStart: 10000, HostPortEnd: 10099}
+	if err := validateTemplateConfiguration(domain.TemplateConfiguration{Services: []domain.TemplateService{valid}}); err != nil {
+		t.Fatalf("desktop service error = %v", err)
+	}
+	for _, service := range []domain.TemplateService{
+		{Name: "web", Protocol: "tcp", ContainerPort: 8080, PortPool: "web", HostPortStart: 10000, HostPortEnd: 10099},
+		{Name: "desktop", Protocol: "udp", ContainerPort: 5901, PortPool: "vnc", HostPortStart: 10000, HostPortEnd: 10099},
+	} {
+		if err := validateTemplateConfiguration(domain.TemplateConfiguration{Services: []domain.TemplateService{service}}); err != ErrInvalidTemplate {
+			t.Fatalf("service %+v error = %v, want %v", service, err, ErrInvalidTemplate)
+		}
+	}
+}
+
 func TestResolveConfigurationWithoutContainerUserLeavesRuntimeUserUnset(t *testing.T) {
 	resolved, err := resolveConfiguration(domain.TemplateConfiguration{}, domain.User{Username: "alice"}, "workspace-1", "Desktop", nil, nil)
 	if err != nil {

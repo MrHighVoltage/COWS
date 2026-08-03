@@ -118,7 +118,7 @@ func validateTemplateConfiguration(configuration domain.TemplateConfiguration) e
 	}
 	serviceNames := make(map[string]struct{}, len(configuration.Services))
 	for _, value := range configuration.Services {
-		if !configurationNamePattern.MatchString(value.Name) || (value.Protocol != "tcp" && value.Protocol != "udp") || value.ContainerPort < 1 || value.ContainerPort > 65535 || value.HostPortStart < 1024 || value.HostPortEnd > 65535 || value.HostPortStart > value.HostPortEnd || !configurationNamePattern.MatchString(value.PortPool) {
+		if value.Name != "desktop" || value.Protocol != "tcp" || value.ContainerPort < 1 || value.ContainerPort > 65535 || value.HostPortStart < 1024 || value.HostPortEnd > 65535 || value.HostPortStart > value.HostPortEnd || !configurationNamePattern.MatchString(value.PortPool) {
 			return ErrInvalidTemplate
 		}
 		if value.PasswordSecret != "" {

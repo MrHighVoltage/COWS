@@ -41,7 +41,7 @@ targets; those values remain service-side data.
 - Podman SDK dependencies.
 - Container creation, start/stop, or deletion.
 - Runtime-specific resource-limit translation.
-- Terminal, generic graphical desktop, proxy, and log-stream interfaces.
+- Generic application proxying, arbitrary service exposure, and log streaming.
 - Multi-host agents and remote transport.
 
 The interface-only inspection coordinator now exercises the read-only portion

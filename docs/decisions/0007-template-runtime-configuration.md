@@ -14,7 +14,8 @@ The supported configuration vocabulary initially contains:
 - an administrator-selected command;
 - environment variables with literal values or approved COWS placeholders;
 - managed named-volume mounts with container-only paths;
-- TCP or UDP services with administrator-defined host-port ranges.
+- the dedicated TCP `desktop` service with an administrator-defined loopback
+  host-port range for the VNC gateway.
 - an optional typed container-user block with administrator-selected numeric
   UID/GID, shell, home, and display-name overrides.
 - an optional `terminal_uids` list that permits selected container UIDs for
@@ -25,7 +26,7 @@ The resolver accepts only these placeholders:
 ```text
 {{cows.workspace_id}}
 {{cows.workspace_name}}
-{{cows.service.<name>.port}}
+{{cows.service.desktop.port}}
 {{cows.mount.<name>.path}}
 {{cows.user.username}}
 {{cows.user.display_name}}
@@ -35,12 +36,11 @@ There is no general Go-template execution, shell expansion, host environment
 lookup, or user-provided runtime argument map. The resolver validates every
 field before producing a COWS runtime specification.
 
-Port allocations are persisted in SQLite and protected by a unique protocol /
-host-port constraint. Allocations are stable while a workspace exists and are
+The desktop port allocation is persisted in SQLite and protected by a unique
+protocol / host-port constraint. It is stable while a workspace exists and is
 released when timeout cleanup deletes its container or when the workspace is
-explicitly deleted. Service bindings are loopback-only host bindings for the
-initial Podman adapter. A later access gateway may use those
-bindings without making them public container ports.
+explicitly deleted. The binding is loopback-only in the initial Podman adapter;
+there is no generic application gateway or public container-port mapping.
 
 ## Consequences
 
