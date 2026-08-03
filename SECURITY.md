@@ -21,7 +21,7 @@ partial operations, and compromised or misconfigured images.
 - The runtime adapter is the only boundary to the local rootless Podman service.
 - Managed containers are untrusted workloads. Templates without internal
   services use `none` networking; desktop-enabled templates use loopback-only
-  host mappings. Optional isolation gives new service-enabled workspaces
+  host mappings. Optional isolation gives new desktop-enabled workspaces
   separate internal Podman networks and fails closed if creation fails. It is
   not a complete host-level egress policy and does not migrate existing
   containers.

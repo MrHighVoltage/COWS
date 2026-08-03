@@ -40,7 +40,7 @@ The runtime adapter is the only application boundary allowed to communicate
 with rootless Podman. The user service socket should be available only to the COWS
 process, or later to a narrowly privileged host agent. Templates without
 the desktop service use `none` networking. Desktop-enabled templates use
-loopback-only host mappings. Optional isolation gives new service-enabled
+loopback-only host mappings. Optional isolation gives new desktop-enabled
 workspaces server-generated internal Podman networks; existing workspaces are
 not migrated and host-level egress policy remains future work.
 The optional image-management capability can inspect the local image store and
