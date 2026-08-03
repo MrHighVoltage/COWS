@@ -753,8 +753,8 @@ func retainedWorkspaceVolumes(value domain.Workspace, mounts []domain.TemplateMo
 	return volumes
 }
 
-// RecordWorkspaceConnection is the hook used by future terminal, desktop, and
-// application gateways to cancel the no-connection timeout.
+// RecordWorkspaceConnection is the hook used by terminal, desktop, and
+// file-manager access to cancel the no-connection timeout.
 func (s *Service) RecordWorkspaceConnection(ctx context.Context, actorID, workspaceID string) error {
 	value, err := s.GetWorkspace(ctx, actorID, workspaceID)
 	if err != nil {

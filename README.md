@@ -41,11 +41,10 @@ Implemented today:
   and optional per-workspace internal Podman network isolation.
 
 The implementation is not production-ready. Remaining high-impact gaps include
-robust recovery of partial lifecycle operations, a constrained web-application
-proxy, historical metrics, volume restore, and deployment hardening. Local
-password reset, richer audit/metrics views, named-volume recovery, and optional
-network isolation are implemented. See [ROADMAP.md](ROADMAP.md) for the
-complete status.
+robust recovery of partial lifecycle operations, historical metrics, volume
+restore, and deployment hardening. Generic web-application proxying and other
+public service exposure are intentionally out of scope. See
+[ROADMAP.md](ROADMAP.md) for the complete status.
 
 ## Goals
 

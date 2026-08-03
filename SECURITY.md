@@ -8,7 +8,7 @@ known limitations; it is not a security certification.
 Assume that an authenticated user may be malicious, may tamper with every
 browser request, and may know identifiers belonging to another user. Assume
 that a workspace may run untrusted software. Protect other users, the host,
-the runtime socket, secrets, and approved internal services from that user.
+the runtime socket, and secrets from that user.
 Also account for administrators, reverse-proxy mistakes, runtime restarts,
 partial operations, and compromised or misconfigured images.
 
@@ -114,10 +114,10 @@ transport and terminate the server-created Podman exec process group through a
 server-selected cleanup command; failure to clean up must not grant any new
 access and remains a runtime diagnostic condition.
 
-The web-application proxy must be allowlisted by template and internal port.
-It is not a generic URL proxy. SSRF, redirects, cookies, host headers, origins,
-WebSocket upgrades, path rewriting, response sizes, and upstream timeouts all
-need explicit policy and tests before that milestone ships.
+Generic web-application proxying and public service exposure are intentionally
+not implemented. The only template service is the server-selected desktop VNC
+service, which is bound to loopback and reachable through the authenticated
+COWS desktop gateway only.
 
 ## Runtime and host risks
 

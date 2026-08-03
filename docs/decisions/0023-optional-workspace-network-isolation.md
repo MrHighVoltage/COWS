@@ -5,9 +5,9 @@
 Accepted
 
 Network isolation is disabled by default for compatibility. When enabled, each
-newly created service-enabled workspace receives a server-generated internal
+newly created desktop-enabled workspace receives a server-generated internal
 Podman network derived from its opaque workspace ID. No public container port is
-created. Workspaces without approved internal services continue to use Podman
+created. Workspaces without the approved desktop service continue to use Podman
 `none` networking.
 
 Network creation fails closed when Podman cannot create the private network.

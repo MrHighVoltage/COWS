@@ -116,9 +116,9 @@ ordinary user with no explicit or inherited quota remains unassigned.
 - The SQLite database is on local supported storage, not an unsupported shared
   network filesystem.
 
-COWS uses `none` networking for templates without internal services. A
-template with approved services normally uses loopback-only host mapping. When
-`COWS_NETWORK_ISOLATION_ENABLED=true`, each newly created service-enabled
+COWS uses `none` networking for templates without the desktop service. A
+desktop-enabled template uses loopback-only host mapping. When
+`COWS_NETWORK_ISOLATION_ENABLED=true`, each newly created desktop-enabled
 workspace gets a server-generated internal Podman network. COWS fails closed if
 it cannot create that network. Existing workspaces must be recreated; this is
 not complete host-level egress policy. See

@@ -24,7 +24,8 @@ quota, start and stop them, inspect state and resource use, and access an
 approved terminal, graphical desktop, or file manager through COWS. The initial
 desktop path is noVNC. Administrators can manage users, groups, templates,
 quotas, runtime capacity, lifecycle policies, image pulls, and the runtime
-overview. A constrained web-application gateway remains future work.
+overview. Workspace access is limited to the terminal, desktop, and file
+manager gateways.
 
 ## Goals
 
@@ -50,6 +51,7 @@ overview. A constrained web-application gateway remains future work.
 - Kubernetes, microservices, clustering, or a distributed scheduler.
 - Arbitrary container creation or arbitrary runtime arguments.
 - Public per-workspace VNC, SSH, terminal, or application ports.
+- Generic web-application proxying or arbitrary service exposure.
 - Archive extraction, file previews, bulk file operations, and historical
   metrics.
 - A complete permissions framework before the basic user/administrator roles
@@ -118,7 +120,7 @@ does not automatically repair every partial operation.
 - Frontend assets are embedded or served locally; no CDN is required.
 - No Node.js, npm, Kubernetes, or shared network filesystem is required.
 - Docker is not a supported runtime; deployments use rootless Podman.
-- Templates without internal services use `none` networking. Desktop-enabled
+- Templates without the desktop service use `none` networking. Desktop-enabled
   templates use loopback-only host mapping; optional per-workspace internal
   network isolation can be enabled for new service-enabled workspaces.
 
@@ -133,7 +135,7 @@ does not automatically repair every partial operation.
 - **Allocated resources**: Resources reserved for workspaces under the policy.
 - **Consumed resources**: Resources currently reported as in use by the runtime.
 - **Access gateway**: Authenticated COWS routing for terminal, desktop, or file
-  manager sessions; web application proxying is not implemented yet.
+  manager sessions.
 - **Managed container**: A runtime object identified by COWS labels or their
   Podman equivalent.
 - **Initial connection timeout**: The maximum time a newly started workspace

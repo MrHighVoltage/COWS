@@ -39,7 +39,7 @@ so a future handler cannot accidentally create a bypass.
 The runtime adapter is the only application boundary allowed to communicate
 with rootless Podman. The user service socket should be available only to the COWS
 process, or later to a narrowly privileged host agent. Templates without
-internal services use `none` networking. Desktop-enabled templates use
+the desktop service use `none` networking. Desktop-enabled templates use
 loopback-only host mappings. Optional isolation gives new service-enabled
 workspaces server-generated internal Podman networks; existing workspaces are
 not migrated and host-level egress policy remains future work.
@@ -56,14 +56,14 @@ TLS proxy.
 ## Template runtime configuration
 
 Templates contain a validated, administrator-controlled configuration document
-for command, environment, managed mounts, and internal services. The backend
+for command, environment, managed mounts, and the dedicated desktop service.
+The backend
 snapshots this document into each workspace and resolves a small allowlist of
 COWS placeholders only after authorizing the request and allocating resources.
-Users submit neither runtime arguments nor rendered values. Service host ports
-are reserved in SQLite with uniqueness constraints from administrator-defined
-ranges and are bound to loopback by the Podman adapter. This is used by the
-implemented desktop gateway and leaves a controlled boundary for a future
-application gateway without exposing container ports directly.
+Users submit neither runtime arguments nor rendered values. The desktop service
+host port is reserved in SQLite with uniqueness constraints from an
+administrator-defined range and is bound to loopback by the Podman adapter. No
+other template service is accepted and no container service is made public.
 
 The configuration is intentionally not a generic runtime argument map. The
 resolver rejects unknown placeholders, duplicate names, invalid paths, unsafe
@@ -94,9 +94,9 @@ identities into subordinate IDs. Writable bind mounts ask Podman to prepare
 ownership for the selected container identity. The Podman adapter owns that
 runtime-specific operation.
 
-Terminal, desktop, and proxy sessions are authenticated COWS sessions whose
+Terminal, desktop, and file-manager sessions are authenticated COWS sessions whose
 targets are selected from server-side workspace records and template policy.
-They are not generic reverse proxies.
+They are not generic reverse-proxy sessions.
 
 The terminal gateway is the first implemented access gateway. After checking
 the session, workspace ownership or administrator permission, observed running

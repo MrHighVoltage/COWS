@@ -71,12 +71,11 @@ type AccessMethod string
 const (
 	AccessTerminal AccessMethod = "terminal"
 	AccessDesktop  AccessMethod = "desktop"
-	AccessWeb      AccessMethod = "web"
 	AccessFiles    AccessMethod = "files"
 )
 
 func (m AccessMethod) Valid() bool {
-	return m == AccessTerminal || m == AccessDesktop || m == AccessWeb || m == AccessFiles
+	return m == AccessTerminal || m == AccessDesktop || m == AccessFiles
 }
 
 type WorkspaceTemplate struct {

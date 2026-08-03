@@ -154,7 +154,6 @@ type templateFormData struct {
 	TerminalRootAllowed    bool
 	TerminalAccess         bool
 	DesktopAccess          bool
-	WebAccess              bool
 	FilesAccess            bool
 	UserRole               bool
 	AdministratorRole      bool
@@ -2586,8 +2585,6 @@ func (s *Server) parseTemplateForm(r *http.Request) (templateFormData, workspace
 			form.TerminalAccess = true
 		case domain.AccessDesktop:
 			form.DesktopAccess = true
-		case domain.AccessWeb:
-			form.WebAccess = true
 		case domain.AccessFiles:
 			form.FilesAccess = true
 		}
@@ -2637,9 +2634,6 @@ func (s *Server) parseTemplateForm(r *http.Request) (templateFormData, workspace
 	}
 	if form.DesktopAccess {
 		methods = append(methods, domain.AccessDesktop)
-	}
-	if form.WebAccess {
-		methods = append(methods, domain.AccessWeb)
 	}
 	if form.FilesAccess {
 		methods = append(methods, domain.AccessFiles)
@@ -2928,8 +2922,6 @@ func templateFormFromDomain(template domain.WorkspaceTemplate) templateFormData 
 			form.TerminalAccess = true
 		case domain.AccessDesktop:
 			form.DesktopAccess = true
-		case domain.AccessWeb:
-			form.WebAccess = true
 		case domain.AccessFiles:
 			form.FilesAccess = true
 		}

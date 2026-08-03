@@ -669,6 +669,16 @@ func scanTemplate(row scanner) (domain.WorkspaceTemplate, error) {
 	if err := json.Unmarshal([]byte(accessMethods), &template.AccessMethods); err != nil {
 		return domain.WorkspaceTemplate{}, fmt.Errorf("decode template access methods: %w", err)
 	}
+	// Drop the removed legacy web-app access flag when reading older databases.
+	// Existing templates remain usable, but the obsolete capability cannot leak
+	// back into the administrator UI or authorize a route.
+	filteredMethods := template.AccessMethods[:0]
+	for _, method := range template.AccessMethods {
+		if method.Valid() {
+			filteredMethods = append(filteredMethods, method)
+		}
+	}
+	template.AccessMethods = filteredMethods
 	if err := json.Unmarshal([]byte(roles), &template.AllowedRoles); err != nil {
 		return domain.WorkspaceTemplate{}, fmt.Errorf("decode template roles: %w", err)
 	}

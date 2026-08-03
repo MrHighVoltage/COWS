@@ -29,7 +29,7 @@ Not implemented or incomplete:
 - stronger host-level network egress policy between workspaces;
 - robust persistent recovery for every partial or interrupted lifecycle
   operation;
-- the constrained web-application proxy and any other service exposure;
+- arbitrary application/service exposure; this is intentionally out of scope;
 - email verification, OpenID Connect, and institutional identity provisioning;
 - metrics history and operational alerting beyond the live administrator view;
 - named-volume restore/reattachment beyond administrator recovery/download;
@@ -132,14 +132,7 @@ Remaining hardening: rootless-Podman integration against representative VNC
 images, browser accessibility review, and stronger network isolation for
 desktop-enabled workspaces.
 
-## Milestone 6: Workspace web applications — not started
-
-Implement only a constrained, template-defined authenticated gateway for
-approved internal HTTP services. It must address authorization, SSRF, allowed
-ports/protocols, redirects, cookies, origins, path rewriting, WebSockets,
-request/response limits, and timeouts. Do not build a generic proxy.
-
-## Milestone 7: Resource monitoring and email — initial implementation
+## Milestone 6: Resource monitoring and email — initial implementation
 
 Implemented: live Podman CPU, memory, and PID observations, host overbooking
 settings, user-visible allocation bars, timeout warning events, optional SMTP
@@ -150,7 +143,7 @@ Remaining work: richer capacity views, historical metrics only if justified,
 operational alerting, and additional warning policies. Email must remain
 advisory and must never decide or block lifecycle actions.
 
-## Milestone 8: Restricted file manager — initial implementation
+## Milestone 7: Restricted file manager — initial implementation
 
 Implemented: approved directory and named-volume mounts, read-only/read-write
 policy, rooted server-side paths, stopped-workspace access, listing, folder
@@ -163,16 +156,16 @@ Remaining work: stronger symlink-race integration tests, total temporary-storage
 policy, file previews,
 bulk operations, and archive extraction only after a dedicated security design.
 
-## Milestone 9: Local account recovery and operations visibility — implemented
+## Milestone 8: Local account recovery and operations visibility — implemented
 
 Local password-reset email with hashed single-use tokens, a retryable email
 outbox, a bounded administrator audit view, live runtime metrics, and
 administrator retained-volume recovery/download/removal. Institutional
 authentication is deliberately excluded from the current plan.
 
-## Milestone 10: Optional network isolation — implemented
+## Milestone 9: Optional network isolation — implemented
 
-New service-enabled workspaces can use server-generated internal per-workspace
+New desktop-enabled workspaces can use server-generated internal per-workspace
 Podman networks. Creation fails closed when isolation is enabled but the
 runtime cannot provide it. Stronger host-level egress policy and migration of
 existing workspaces remain future work.
