@@ -122,7 +122,7 @@ does not automatically repair every partial operation.
 - Docker is not a supported runtime; deployments use rootless Podman.
 - Templates without the desktop service use `none` networking. Desktop-enabled
   templates use loopback-only host mapping; optional per-workspace internal
-  network isolation can be enabled for new service-enabled workspaces.
+  network isolation can be enabled for new desktop-enabled workspaces.
 
 ## Terminology
 

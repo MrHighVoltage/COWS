@@ -74,7 +74,7 @@ Podman service if it must run without an interactive login.
 | `COWS_SESSION_LIFETIME` | `8h` | Maximum authenticated session lifetime. |
 | `COWS_COOKIE_SECURE` | `false` | Set `true` when the external URL is HTTPS. |
 | `COWS_EXTERNAL_BASE_URL` | empty | Trusted absolute HTTP(S) base URL used for local password-reset links. Configure the HTTPS proxy URL before enabling reset email. |
-| `COWS_NETWORK_ISOLATION_ENABLED` | `false` | Give new service-enabled workspaces separate internal Podman networks. Existing workspaces are not migrated. |
+| `COWS_NETWORK_ISOLATION_ENABLED` | `false` | Give new desktop-enabled workspaces separate internal Podman networks. Existing workspaces are not migrated. |
 | `COWS_BOOTSTRAP_ADMIN_USERNAME` | empty | Initial administrator username. Must be paired with the password. |
 | `COWS_BOOTSTRAP_ADMIN_PASSWORD` | empty | Initial administrator password. |
 | `COWS_REGISTRATION_ENABLED` | `false` | Enable local self-registration. |
