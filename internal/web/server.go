@@ -12,6 +12,7 @@ import (
 	"html/template"
 	"io"
 	"io/fs"
+	"log/slog"
 	"math"
 	"net"
 	"net/http"
@@ -46,6 +47,7 @@ const (
 type Options struct {
 	CookieSecure         bool
 	SessionLifetime      time.Duration
+	Logger               *slog.Logger
 	LoginLimiter         *auth.LoginLimiter
 	RegistrationEnabled  bool
 	RegistrationLimiter  *auth.LoginLimiter
@@ -57,6 +59,7 @@ type Options struct {
 
 type Server struct {
 	db          *sql.DB
+	logger      *slog.Logger
 	auth        *auth.Service
 	workspace   *workspace.Service
 	quota       *quota.Service
@@ -272,6 +275,9 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 	if options.SessionLifetime <= 0 {
 		options.SessionLifetime = 8 * time.Hour
 	}
+	if options.Logger == nil {
+		options.Logger = slog.Default()
+	}
 	if options.LoginLimiter == nil {
 		options.LoginLimiter, _ = auth.NewLoginLimiter(auth.DefaultLoginFailureLimit, auth.DefaultLoginFailureWindow)
 	}
@@ -347,7 +353,7 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 		return nil, fmt.Errorf("open static assets: %w", err)
 	}
 	fileAccessRuntime, _ := runtimeAdapter.(runtime.FileAccessRuntime)
-	return &Server{db: db, auth: authService, workspace: templateService, quota: quotaService, runtime: runtimeAdapter, files: files.New(templateService, fileAccessRuntime), options: options, templates: templates, static: static, userImports: newUserImportStore(), imagePulls: make(map[string]*imagePullOperation)}, nil
+	return &Server{db: db, logger: options.Logger, auth: authService, workspace: templateService, quota: quotaService, runtime: runtimeAdapter, files: files.New(templateService, fileAccessRuntime), options: options, templates: templates, static: static, userImports: newUserImportStore(), imagePulls: make(map[string]*imagePullOperation)}, nil
 }
 
 func quotaProgressClass(current, limit int64) string {
@@ -1052,7 +1058,7 @@ func (s *Server) workspaceTerminalWebSocket(w http.ResponseWriter, r *http.Reque
 	}
 	conn, err := websocket.Accept(w, r, nil)
 	if err != nil {
-		_ = terminal.Close()
+		s.closeTerminalSession(terminal, user.ID, r.PathValue("id"))
 		s.workspace.RecordTerminalDisconnect(context.Background(), user.ID, r.PathValue("id"))
 		return
 	}
@@ -1060,7 +1066,7 @@ func (s *Server) workspaceTerminalWebSocket(w http.ResponseWriter, r *http.Reque
 		conn.CloseNow()
 		// Close the runtime terminal before recording the audit event. The
 		// cleanup is authoritative; the audit write must not delay it.
-		_ = terminal.Close()
+		s.closeTerminalSession(terminal, user.ID, r.PathValue("id"))
 		s.workspace.RecordTerminalDisconnect(context.Background(), user.ID, r.PathValue("id"))
 	}()
 	conn.SetReadLimit(64 * 1024)
@@ -1125,6 +1131,12 @@ func (s *Server) workspaceTerminalWebSocket(w http.ResponseWriter, r *http.Reque
 				return
 			}
 		}
+	}
+}
+
+func (s *Server) closeTerminalSession(terminal runtime.Terminal, userID, workspaceID string) {
+	if err := terminal.Close(); err != nil {
+		s.logger.Error("terminal cleanup failed", "user_id", userID, "workspace_id", workspaceID, "error", err)
 	}
 }
 
