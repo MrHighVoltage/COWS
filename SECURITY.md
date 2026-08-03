@@ -109,10 +109,11 @@ secrets are resolved separately for each workspace; static template secrets
 are an administrator responsibility. Secrets are not rendered in ordinary
 pages, URLs, logs, or audit events. The current
 control-plane database stores this runtime secret and therefore requires the
-existing restrictive database-file permissions. Terminal disconnects close the
-transport and terminate the server-created Podman exec process group through a
-server-selected cleanup command; failure to clean up must not grant any new
-access and remains a runtime diagnostic condition.
+existing restrictive database-file permissions. Terminal disconnects first
+terminate the server-created Podman exec process group while its upgraded
+stream is attached, then close the transport and record the audit event;
+failure to clean up must not grant any new access and remains a runtime
+diagnostic condition.
 
 Generic web-application proxying and public service exposure are intentionally
 not implemented. The only template service is the server-selected desktop VNC

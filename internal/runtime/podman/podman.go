@@ -688,13 +688,17 @@ func (a *Adapter) openShell(ctx context.Context, runtimeID, user string, command
 	if !validRuntimeID(created.ID) {
 		return nil, fmt.Errorf("%w: Podman returned invalid exec ID", runtime.ErrInvalidObservation)
 	}
+	cleanupOpenError := func(openErr error) (runtime.Terminal, error) {
+		cleanupErr := a.terminateExec(context.Background(), runtimeID, created.ID, command[0])
+		return nil, errors.Join(openErr, cleanupErr)
+	}
 	version, err := a.version(ctx)
 	if err != nil {
-		return nil, err
+		return cleanupOpenError(err)
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://podman/v"+version+"/exec/"+url.PathEscape(created.ID)+"/start", strings.NewReader(`{"Detach":false,"Tty":true}`))
 	if err != nil {
-		return nil, fmt.Errorf("create Podman exec request: %w", err)
+		return cleanupOpenError(fmt.Errorf("create Podman exec request: %w", err))
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Connection", "Upgrade")
@@ -705,23 +709,23 @@ func (a *Adapter) openShell(ctx context.Context, runtimeID, user string, command
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("%w: Podman exec stream: %v", runtime.ErrUnavailable, err)
+		return cleanupOpenError(fmt.Errorf("%w: Podman exec stream: %v", runtime.ErrUnavailable, err))
 	}
 	if response.StatusCode != http.StatusSwitchingProtocols {
-		defer response.Body.Close()
 		body, _ := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes))
+		response.Body.Close()
 		base := runtime.ErrUnavailable
 		if response.StatusCode == http.StatusNotFound {
 			base = runtime.ErrNotFound
 		} else if response.StatusCode == http.StatusConflict {
 			base = runtime.ErrConflict
 		}
-		return nil, fmt.Errorf("%w: Podman exec returned %s: %s", base, response.Status, strings.TrimSpace(string(body)))
+		return cleanupOpenError(fmt.Errorf("%w: Podman exec returned %s: %s", base, response.Status, strings.TrimSpace(string(body))))
 	}
 	stream, ok := response.Body.(io.ReadWriteCloser)
 	if !ok {
 		response.Body.Close()
-		return nil, fmt.Errorf("%w: Podman did not return a writable exec stream", runtime.ErrUnavailable)
+		return cleanupOpenError(fmt.Errorf("%w: Podman did not return a writable exec stream", runtime.ErrUnavailable))
 	}
 	return &terminal{stream: stream, adapter: a, runtimeID: runtimeID, execID: created.ID, cleanupShell: command[0]}, nil
 }
@@ -768,8 +772,11 @@ func (t *terminal) Read(value []byte) (int, error)  { return t.stream.Read(value
 func (t *terminal) Write(value []byte) (int, error) { return t.stream.Write(value) }
 func (t *terminal) Close() error {
 	t.closeOnce.Do(func() {
-		streamErr := t.stream.Close()
+		// Inspect and terminate the exec while its upgraded stream is still
+		// attached. Closing the stream first can detach conmon without stopping
+		// the shell, leaving a process that cannot be reconnected to.
 		cleanupErr := t.adapter.terminateExec(context.Background(), t.runtimeID, t.execID, t.cleanupShell)
+		streamErr := t.stream.Close()
 		t.closeErr = errors.Join(streamErr, cleanupErr)
 	})
 	return t.closeErr
@@ -826,7 +833,37 @@ func (a *Adapter) terminateExec(ctx context.Context, runtimeID, execID, shell st
 	if !validRuntimeID(created.ID) {
 		return fmt.Errorf("%w: Podman returned invalid terminal cleanup exec ID", runtime.ErrInvalidObservation)
 	}
-	return a.mutation(cleanupCtx, http.MethodPost, "/exec/"+url.PathEscape(created.ID)+"/start", map[string]bool{"Detach": false, "Tty": false}, nil)
+	if err := a.mutation(cleanupCtx, http.MethodPost, "/exec/"+url.PathEscape(created.ID)+"/start", map[string]bool{"Detach": true, "Tty": false}, nil); err != nil {
+		return err
+	}
+	return a.waitForExec(cleanupCtx, created.ID)
+}
+
+func (a *Adapter) waitForExec(ctx context.Context, execID string) error {
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	seen := false
+	for {
+		var inspection execInspection
+		if err := a.get(ctx, "/exec/"+url.PathEscape(execID)+"/json", &inspection); err != nil {
+			if errors.Is(err, runtime.ErrNotFound) {
+				if seen {
+					return nil
+				}
+			} else {
+				return err
+			}
+		} else if !inspection.Running {
+			return nil
+		} else {
+			seen = true
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func namespacePID(hostPID int) (int, error) {

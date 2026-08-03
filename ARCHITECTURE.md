@@ -113,10 +113,11 @@ command.
 Terminal sessions have a 15-minute idle timeout, a one-hour maximum lifetime,
 resize forwarding, and start/end audit events. The Podman adapter
 uses the runtime exec API's upgraded stream and keeps the runtime-specific
-transport details inside the adapter. Closing a terminal stream also inspects
-the COWS-owned exec and terminates its process group through a short-lived
-server-created cleanup exec, so a disconnected browser does not leave the
-interactive shell running. The browser uses the locally vendored
+transport details inside the adapter. Closing a terminal first inspects the
+COWS-owned exec and terminates its process group through a short-lived
+server-created cleanup exec while the upgraded stream is still attached; only
+then is the transport closed. This ordering prevents a disconnected browser
+from leaving an interactive shell running. The browser uses the locally vendored
 xterm.js fit addon to adapt rows and columns to the available panel or full
 screen size, then forwards each resize through the authenticated WebSocket.
 

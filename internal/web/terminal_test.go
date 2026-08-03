@@ -119,6 +119,14 @@ func TestTerminalWebSocketAuthorizesAndBridgesShell(t *testing.T) {
 	if !fake.waitForResize(120, 40) {
 		t.Fatal("terminal resize was not forwarded to runtime")
 	}
+	if err := connection.Close(websocket.StatusNormalClosure, "disconnect"); err != nil {
+		t.Fatalf("close terminal websocket: %v", err)
+	}
+	select {
+	case <-fake.terminal.closed:
+	case <-time.After(time.Second):
+		t.Fatal("runtime terminal was not closed after websocket disconnect")
+	}
 }
 
 type terminalRuntime struct {

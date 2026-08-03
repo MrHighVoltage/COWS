@@ -275,7 +275,8 @@ func TestTerminalCloseTerminatesExec(t *testing.T) {
 	cleanupStarted := false
 	cleanupUser := ""
 	var cleanupCommand []string
-	stream := &testStream{Reader: strings.NewReader("shell> ")}
+	var events []string
+	stream := &testStream{Reader: strings.NewReader("shell> "), onClose: func() { events = append(events, "stream-close") }}
 	adapter := &Adapter{client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		switch request.URL.Path {
 		case "/version":
@@ -289,6 +290,7 @@ func TestTerminalCloseTerminatesExec(t *testing.T) {
 				return nil, err
 			}
 			if body.User == "0" {
+				events = append(events, "cleanup-create")
 				cleanupUser = body.User
 				cleanupCommand = body.Cmd
 				return podmanResponse(http.StatusCreated, `{"Id":"c1ea12345678"}`), nil
@@ -297,10 +299,23 @@ func TestTerminalCloseTerminatesExec(t *testing.T) {
 		case "/v1.45/exec/abc123/start":
 			return &http.Response{StatusCode: http.StatusSwitchingProtocols, Status: "101 Switching Protocols", Body: stream, Header: http.Header{"Connection": {"Upgrade"}, "Upgrade": {"tcp"}}}, nil
 		case "/v1.45/exec/abc123/json":
+			events = append(events, "inspect")
 			return podmanResponse(http.StatusOK, `{"Running":true,"Pid":`+strconv.Itoa(os.Getpid())+`}`), nil
 		case "/v1.45/exec/c1ea12345678/start":
+			events = append(events, "cleanup-start")
+			var body struct {
+				Detach bool `json:"Detach"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				return nil, err
+			}
+			if !body.Detach {
+				t.Fatal("terminal cleanup exec must be detached")
+			}
 			cleanupStarted = true
 			return podmanResponse(http.StatusOK, ``), nil
+		case "/v1.45/exec/c1ea12345678/json":
+			return podmanResponse(http.StatusOK, `{"Running":false}`), nil
 		default:
 			return podmanResponse(http.StatusNotFound, `not found`), nil
 		}
@@ -314,6 +329,9 @@ func TestTerminalCloseTerminatesExec(t *testing.T) {
 	}
 	if !cleanupStarted || cleanupUser != "0" || len(cleanupCommand) != 3 || cleanupCommand[0] != "/bin/sh" || cleanupCommand[1] != "-c" || !strings.Contains(cleanupCommand[2], "kill -TERM -") {
 		t.Fatalf("unexpected terminal cleanup: started=%v user=%q command=%q", cleanupStarted, cleanupUser, cleanupCommand)
+	}
+	if got, want := strings.Join(events, ","), "inspect,cleanup-create,cleanup-start,stream-close"; got != want {
+		t.Fatalf("terminal close order = %q, want %q", got, want)
 	}
 }
 
@@ -530,10 +548,16 @@ func podmanResponse(status int, body string) *http.Response {
 type testStream struct {
 	*strings.Reader
 	Written bytes.Buffer
+	onClose func()
 }
 
 func (s *testStream) Write(value []byte) (int, error) { return s.Written.Write(value) }
-func (s *testStream) Close() error                    { return nil }
+func (s *testStream) Close() error {
+	if s.onClose != nil {
+		s.onClose()
+	}
+	return nil
+}
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
