@@ -1050,14 +1050,19 @@ func (s *Server) workspaceTerminalWebSocket(w http.ResponseWriter, r *http.Reque
 		http.Error(w, terminalErrorText(err), status)
 		return
 	}
-	defer terminal.Close()
-	defer s.workspace.RecordTerminalDisconnect(context.Background(), user.ID, r.PathValue("id"))
-
 	conn, err := websocket.Accept(w, r, nil)
 	if err != nil {
+		_ = terminal.Close()
+		s.workspace.RecordTerminalDisconnect(context.Background(), user.ID, r.PathValue("id"))
 		return
 	}
-	defer conn.CloseNow()
+	defer func() {
+		conn.CloseNow()
+		// Close the runtime terminal before recording the audit event. The
+		// cleanup is authoritative; the audit write must not delay it.
+		_ = terminal.Close()
+		s.workspace.RecordTerminalDisconnect(context.Background(), user.ID, r.PathValue("id"))
+	}()
 	conn.SetReadLimit(64 * 1024)
 
 	ctx, cancel := context.WithTimeout(r.Context(), terminalMaxLifetime)
