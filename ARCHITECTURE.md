@@ -120,6 +120,8 @@ then is the transport closed. This ordering prevents a disconnected browser
 from leaving an interactive shell running. The browser uses the locally vendored
 xterm.js fit addon to adapt rows and columns to the available panel or full
 screen size, then forwards each resize through the authenticated WebSocket.
+Cleanup failures are logged with workspace context but never with terminal
+contents, commands, or secrets.
 
 The desktop gateway uses the same access boundary but only for a service named
 `desktop` in the workspace's snapshotted template configuration. The service's

@@ -112,8 +112,8 @@ control-plane database stores this runtime secret and therefore requires the
 existing restrictive database-file permissions. Terminal disconnects first
 terminate the server-created Podman exec process group while its upgraded
 stream is attached, then close the transport and record the audit event;
-failure to clean up must not grant any new access and remains a runtime
-diagnostic condition.
+failure to clean up does not grant any new access and is emitted as a
+structured runtime diagnostic without terminal contents or secrets.
 
 Generic web-application proxying and public service exposure are intentionally
 not implemented. The only template service is the server-selected desktop VNC
