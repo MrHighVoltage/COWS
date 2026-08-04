@@ -50,7 +50,10 @@ untrusted users or real credentials.
 
 Bootstrap credentials are used only when the database has no users. Keep the
 database, mount roots, and any environment file containing credentials readable
-only by the COWS service account.
+only by the COWS service account. There is currently no offline administrator
+recovery command; changing bootstrap environment variables does not affect an
+existing database. Configure and test local password-reset email or keep a
+separate operational recovery plan.
 
 COWS does not install a systemd unit yet. For a long-running installation, run
 the binary under a process supervisor with the same working directory and
@@ -96,13 +99,22 @@ Podman service if it must run without an interactive login.
 
 Startup host settings seed the persistent Settings row only when it does not
 exist. Administrators can change host storage, reserved storage, and CPU and
-memory overbooking in the web UI without restarting COWS. Overbooking above
-`1.0` can exhaust the host, especially for memory.
+memory overbooking in the web UI without restarting COWS. Host storage and
+reserved storage are informational and do not block workspace creation.
+Overbooking above `1.0` can exhaust the host, especially for memory.
 
 User and group storage quotas use measured workspace storage. CPU and memory
 allocation quotas count running workspaces; total and running workspace-count
 limits are separate. Zero means unlimited for a configured quota, while an
 ordinary user with no explicit or inherited quota remains unassigned.
+
+`GET /healthz` is a liveness and SQLite-connectivity check. It does not verify
+the Podman socket, so it is not a readiness signal for admitting workspaces.
+A bounded runtime-aware readiness endpoint is planned.
+
+COWS does not create backups automatically. See
+[deployment backup and restore](deployment.md#backup-and-restore) for the
+current single-server procedure and its named-volume limitations.
 
 ## Rootless Podman requirements
 

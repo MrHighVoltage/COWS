@@ -31,6 +31,61 @@ Use a process supervisor for a long-running installation. COWS does not ship a
 systemd unit yet, so the supervisor must set the working directory, the COWS
 environment, the rootless Podman socket, and restrictive file permissions.
 
+## Backup and restore
+
+COWS does not create backups automatically. A usable single-server backup must
+cover the SQLite control-plane database, the managed directory root, and the
+archive root. Retained named volumes live in Podman storage and are not covered
+by those files; use the administrator recovery view to download them separately
+until a supported volume export workflow exists.
+
+For a full consistent snapshot:
+
+1. Stop new workspace operations, stop running workspaces, and stop COWS
+   gracefully. Keep the database and both data roots on local supported
+   storage.
+2. Create a permission-restricted backup directory outside the COWS data roots.
+3. Create a SQLite backup with the SQLite backup API, which handles WAL mode:
+
+   ```sh
+   install -d -m 700 /srv/backups/cows
+   sqlite3 "$COWS_DATABASE_PATH" \
+     ".backup '/srv/backups/cows/cows.db'"
+   ```
+
+4. Archive both managed data roots while preserving numeric ownership. Replace
+   the example paths with the configured absolute paths:
+
+   ```sh
+   tar --numeric-owner -czf /srv/backups/cows/mounts.tar.gz \
+     -C /srv/cows cows-mounts
+   tar --numeric-owner -czf /srv/backups/cows/archive.tar.gz \
+     -C /srv cows-mounts-archive
+   ```
+
+5. Verify the backup before considering it usable:
+
+   ```sh
+   sqlite3 /srv/backups/cows/cows.db 'PRAGMA integrity_check;'
+   tar -tzf /srv/backups/cows/mounts.tar.gz >/dev/null
+   tar -tzf /srv/backups/cows/archive.tar.gz >/dev/null
+   ```
+
+An online SQLite `.backup` is acceptable for a database-only snapshot, but it
+does not make simultaneous filesystem changes in workspace mounts consistent.
+For a complete recovery point, quiesce workspaces as above. Keep environment
+files and SMTP credentials in a separate encrypted operator backup; never put
+them in logs or an unprotected archive.
+
+To restore, stop COWS and all affected workspaces, move the current database and
+data roots aside, restore the verified database and archives with the COWS
+service account's restrictive permissions, and start COWS. Check
+`/healthz`, run reconciliation, inspect the Runtime view, and verify a test
+workspace before returning the service to users. Do not restore only the SQLite
+file while leaving its managed data roots from another point in time. Do not
+manually edit account password hashes or workspace rows as a credential-recovery
+procedure; offline administrator recovery is not implemented yet.
+
 ## Reverse-proxy rules
 
 1. Bind COWS to `127.0.0.1:8080`.

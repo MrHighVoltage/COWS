@@ -32,6 +32,9 @@ partial operations, and compromised or misconfigured images.
 
 - HTTPS is the only public access path.
 - No direct public VNC, SSH, terminal, or workspace application ports.
+- Production operation requires a tested backup and restore procedure for the
+  SQLite control plane and managed data roots. Retained named volumes need a
+  separate runtime-aware recovery or export procedure.
 - Every backend operation checks authentication and authorization independently.
 - Browser requests never choose runtime targets, internal URLs, arbitrary ports,
   images, mounts, capabilities, or runtime arguments.
@@ -54,6 +57,10 @@ partial operations, and compromised or misconfigured images.
   must not be rendered to workspace owners.
 - Login failures are rate-limited per source by the single COWS process. A
   multi-instance deployment must move this control to shared infrastructure.
+- `/healthz` is a liveness and database-connectivity check only. It does not
+  establish rootless-Podman readiness; a future readiness endpoint must check
+  both dependencies before a supervisor or reverse proxy uses it for traffic
+  admission.
 - Administrator-created users must change their initial password before
   administrator operations are available. Self-registered users choose their
   password during registration. Optional local password reset uses a hashed,
@@ -127,6 +134,17 @@ process therefore owns that boundary. Deployments must protect the runtime
 socket and COWS data directory, use a dedicated service account where
 practical, and avoid exposing the service directly without HTTPS and a trusted
 reverse-proxy configuration.
+
+The current deployment has no offline administrator credential-recovery
+command. Bootstrap credentials are only applied to an empty database, and
+password-reset email depends on a correctly configured external HTTPS URL and
+SMTP path. Treat loss of the last administrator credential as an operational
+failure until the dedicated local recovery path is implemented and tested.
+
+SQLite backup must account for WAL mode and must be paired with snapshots of the
+managed directory and archive roots. A database-only backup cannot restore
+workspace files. Named volumes live in runtime storage and are not included in
+that filesystem backup procedure unless the operator separately exports them.
 
 Resource limits must be enforced by rootless Podman wherever possible. COWS
 quotas alone are not a containment mechanism. Capacity calculations must fail
@@ -240,7 +258,9 @@ configured. Both require runtime support for the selected container. Podman life
 operations are limited to approved images, labels, and runtime-enforced
 resource limits. Historical metrics, retained-volume restore, stronger
 host-level egress policy, and deeper runtime integration still need review. Do
-not deploy it as a service for untrusted users.
+not deploy it as a service for untrusted users. Offline administrator recovery,
+runtime-aware readiness, tested backup/restore, and restart-safe lifecycle
+recovery are not yet complete.
 
 ## Reporting vulnerabilities
 

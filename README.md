@@ -41,10 +41,14 @@ Implemented today:
   and optional per-workspace internal Podman network isolation.
 
 The implementation is not production-ready. Remaining high-impact gaps include
-robust recovery of partial lifecycle operations, historical metrics, volume
-restore, and deployment hardening. Generic web-application proxying and other
-public service exposure are intentionally out of scope. See
-[ROADMAP.md](ROADMAP.md) for the complete status.
+administrator credential recovery, documented SQLite and data-root backup and
+restore, runtime-aware readiness reporting, restart-safe recovery of partial
+lifecycle operations, rootless-Podman integration coverage, historical metrics,
+volume restore, and deployment hardening. Generic web-application proxying and
+other public service exposure are intentionally out of scope. See
+[ROADMAP.md](ROADMAP.md) for the complete status and
+[docs/implementation/audit-findings.md](docs/implementation/audit-findings.md)
+for the latest implementation audit.
 
 ## Goals
 
@@ -52,6 +56,8 @@ public service exposure are intentionally out of scope. See
 - Keep container runtime access behind a small internal adapter boundary.
 - Enforce ownership, quotas, and approved templates in the backend.
 - Reconcile database state with the actual rootless Podman runtime.
+- Make single-server operations recoverable through documented credential,
+  backup, readiness, and lifecycle procedures before production deployment.
 - Keep installation small: one Go service, SQLite, and locally served assets.
 
 Generic proxied applications and broader file operations remain planned work. See
@@ -64,7 +70,10 @@ design decisions.
 The first deployment target is one Linux server with one active COWS process,
 one SQLite database, and one local rootless Podman runtime. A reverse proxy may
 terminate HTTPS. COWS must not expose workspace VNC, SSH, terminal, or
-application ports directly to users. See [docs/configuration.md](docs/configuration.md)
+application ports directly to users. The single-process assumption is
+intentional: admission coordination and authentication throttles are currently
+process-local, so multiple active COWS instances are unsupported. See
+[docs/configuration.md](docs/configuration.md)
 and [docs/deployment.md](docs/deployment.md) for commands, configuration, and
 prepared Caddy, nginx, and Apache proxy examples.
 

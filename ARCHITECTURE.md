@@ -228,7 +228,7 @@ sequenceDiagram
     C->>DB: Load workspace, owner, policy, desired state
     C->>C: Authorize and check quota/capacity
     C->>DB: Persist desired state and operation metadata
-    C->>D: Idempotent runtime operation
+    C->>D: Server-selected runtime operation
     D-->>C: Runtime result and observed state
     C->>DB: Persist observed state
     C-->>U: Rendered HTML fragment or access session
@@ -238,9 +238,11 @@ Desired and observed state are separate fields. A runtime restart, manual
 deletion, partial failure, or COWS restart must not be hidden by treating the
 database as proof that a container exists. Reconciliation periodically lists
 managed runtime objects, matches them using COWS labels, updates observed
-state, records anomalies, and applies a documented policy to orphaned or
-missing objects. Lifecycle operations should be idempotent where the runtime
-allows it.
+state, and records anomalies. It currently does not repair missing containers,
+remove orphaned containers, or resume every interrupted operation. A
+non-destructive, administrator-gated repair policy and restart recovery
+procedure must be defined before automatic repair is added. Lifecycle
+operations should be idempotent where the runtime allows it.
 
 ## Workspace timeout model
 
@@ -312,8 +314,11 @@ metadata after explicit workspace deletion without making the volume available
 through user-facing routes.
 
 Repository methods should represent domain operations rather than expose SQL
-details. PostgreSQL is a future option when multiple active control-plane
-instances or higher availability requirements justify it.
+details. The initial SQLite deployment supports one active control-plane
+process. Admission coordination and login/registration throttles are
+process-local; multiple active instances require a deliberate shared-lock,
+shared-database, and shared-rate-limit design. PostgreSQL is a future option
+when that deployment model or higher availability requirements justify it.
 
 Workspace templates are administrator-controlled records. Their current policy
 surface contains an image reference and optional immutable digest, CPU and
@@ -433,6 +438,15 @@ not block workspace creation.
 ## Operational direction
 
 Use structured `log/slog` logging with request correlation IDs and safe context.
-Expose a health endpoint in Milestone 0. Later readiness should include database
-and runtime connectivity, and metrics should be sampled in memory or delegated
-to a monitoring system rather than written on every sample to SQLite.
+`GET /healthz` currently provides liveness plus a SQLite connectivity check; it
+does not probe rootless Podman and must not be treated as a ready-to-admit
+signal. Add a separate bounded readiness check for SQLite and runtime
+connectivity before production deployment. Metrics should be sampled in memory
+or delegated to a monitoring system rather than written on every sample to
+SQLite.
+
+The deployment must also maintain a tested backup and restore procedure for the
+SQLite database and managed directory/archive roots. Retained named volumes
+are runtime data and are not covered by the control-plane database backup;
+their current administrator recovery path is separate download/remove only.
+There is no built-in offline administrator credential-recovery command yet.

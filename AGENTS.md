@@ -31,6 +31,9 @@ Named-volume recovery changes must follow
 `docs/decisions/0022-named-volume-recovery.md`.
 Optional network isolation changes must follow
 `docs/decisions/0023-optional-workspace-network-isolation.md`.
+Implementation status and the prioritized fix queue are tracked in
+`docs/implementation/audit-findings.md`; read it before selecting the next
+hardening task.
 
 ## Technology constraints
 
@@ -118,7 +121,7 @@ contribution terms.
 
 ```sh
 tools/web-assets.sh verify
-gofmt -w .
+gofmt -w $(rg --files -g '*.go')
 go test ./...
 go vet ./...
 go build -o bin/cows ./cmd/cows
@@ -128,6 +131,8 @@ If an optional analyzer is installed, run it too. Podman must not be
 required for the ordinary unit-test suite. Keep live rootless-Podman test data
 in the ignored `.cows-test/` directory or outside the repository; do not place
 mapped runtime directories under `data/` while running `go test ./...`.
+Any live Podman integration tests must be opt-in behind a build tag and must
+not run as part of the ordinary suite.
 
 ## Working practices
 
@@ -138,3 +143,6 @@ data flow change. Keep future work in `ROADMAP.md` rather than adding
 speculative packages. Add tests for timeout boundaries, restart/reconcile
 behavior, authorization, terminal isolation, and irreversible operations.
 Preserve unrelated user changes in a dirty worktree.
+When closing an audit finding, update `ROADMAP.md` and the relevant architecture
+or security documentation in the same change. Create a decision record before
+changing an accepted security or operational boundary.

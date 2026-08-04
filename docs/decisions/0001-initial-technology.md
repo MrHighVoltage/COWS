@@ -15,7 +15,7 @@ Status: accepted for Milestone 0
 | Migrations | Embedded ordered SQL with `schema_migrations` | Explicit, reviewable, and sufficient for one control-plane instance. No migration framework is needed yet. |
 | Queries | `database/sql` and explicit SQL | Keeps schema and transaction behavior visible. `sqlc` remains an evaluation option if repetition grows. |
 | Templates | `html/template` with layouts, pages, components, fragments | Escaping is correct by default and fits server-driven HTMX interactions. |
-| Authentication | Local users in the current scope | Local bootstrap and recovery are useful for the initial deployment. Passwords use bcrypt through `golang.org/x/crypto`, and new users must change their initial password. No custom token format. External identity providers are out of scope for the current project. |
+| Authentication | Local users in the current scope | Local bootstrap and password reset are useful for the initial deployment. An offline administrator recovery command is still required before production use. Passwords use bcrypt through `golang.org/x/crypto`, and new users must change their initial password. No custom token format. External identity providers are out of scope for the current project. |
 | Sessions | Server-side opaque sessions in SQLite | Cookies carry only an opaque identifier and can be revoked. Session records store token hashes, not browser tokens. |
 | Authorization | Explicit service and handler checks, roles first | Makes administrator and fail-closed behavior visible before a larger permission model. |
 | CSRF | Per-browser token cookie plus hidden form token | State-changing form requests require a constant-time token match. SameSite cookies are defense in depth, not the sole control. |
