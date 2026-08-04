@@ -43,6 +43,8 @@ manager gateways.
   server-assigned default quotas and groups.
 - Provide advisory email warnings for upcoming lifecycle actions without making
   email delivery part of the lifecycle safety path.
+- Provide a documented local administrator recovery path, control-plane backup
+  and restore procedure, and a readiness signal before production use.
 - Keep deployment simple enough for one Linux host, while documenting the
   reverse-proxy boundary needed for HTTPS.
 
@@ -59,6 +61,8 @@ manager gateways.
 - Institutional identity and email verification. Local password-reset email is
   supported when explicitly configured and uses its own security design.
 - PostgreSQL or high availability during the SQLite deployment phase.
+- Multiple active COWS processes; admission locks and account throttles are
+  process-local until a future shared coordination design exists.
 - An application-specific frontend development server.
 
 ## Functional requirements
@@ -109,7 +113,18 @@ request a non-enumerating password reset by email when it is configured.
 The database is control-plane state, not a high-frequency metrics store. Runtime
 observations remain authoritative for container existence and running state.
 The current reconciliation worker records missing and orphaned objects but
-does not automatically repair every partial operation.
+does not automatically repair missing, orphaned, or interrupted operations.
+The repair policy and restart recovery procedure remain incomplete.
+
+`/healthz` currently provides liveness plus a SQLite connectivity check; it does
+not prove that rootless Podman is reachable. A separate runtime-aware readiness
+signal is required before a reverse proxy or service supervisor can safely use
+it for admission readiness.
+
+The initial deployment has no built-in backup or offline administrator
+credential-recovery command. Operators must follow the documented backup
+procedure and configure local password-reset email, or wait for the dedicated
+recovery implementation, before treating the installation as recoverable.
 
 ## Deployment assumptions
 

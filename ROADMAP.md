@@ -6,7 +6,7 @@ and security review are complete.
 
 ## Current status
 
-Milestone 0 is complete. Milestones 1 through 5 and 7 through 8 have useful
+Milestone 0 is complete. Milestones 1 through 5 and 7 through 9 have useful
 initial implementations, but several remain in hardening status. COWS is a
 single-server, rootless-Podman system and is not production-ready.
 
@@ -26,9 +26,19 @@ Implemented now:
 
 Not implemented or incomplete:
 
+- offline administrator credential recovery and a documented lost-credential
+  procedure;
+- SQLite, managed-directory, archive, and retained-volume backup/restore
+  procedures and verification;
+- a runtime-aware readiness endpoint; `/healthz` currently checks liveness and
+  database connectivity only;
 - stronger host-level network egress policy between workspaces;
 - robust persistent recovery for every partial or interrupted lifecycle
   operation;
+- a defined, administrator-gated repair policy for missing records, orphaned
+  containers, and interrupted operations;
+- build-tagged rootless-Podman integration coverage and broader abuse,
+  session-invalidation, import-failure, and filesystem race tests;
 - arbitrary application/service exposure; this is intentionally out of scope;
 - email verification, OpenID Connect, and institutional identity provisioning;
 - metrics history and operational alerting beyond the live administrator view;
@@ -37,8 +47,27 @@ Not implemented or incomplete:
   filesystem race/integration coverage;
 - multi-host agents, host pools, PostgreSQL, high availability, GPUs, and
   shared storage;
-- packaged service units, upgrade/backup tooling, and production deployment
-  hardening.
+- packaged service units, upgrade tooling, and production deployment hardening.
+
+## Current priority queue
+
+These are the next pre-production tasks, ordered by operational risk:
+
+1. Add an operator-invoked local administrator recovery command that targets a
+   named administrator, invalidates sessions, generates a temporary password,
+   and requires a first-login password change. Refuse unknown, disabled, and
+   non-administrator targets. Document local-process and database-file access
+   requirements.
+2. Publish and test the SQLite, managed-directory, archive, and retained-volume
+   backup/restore procedure. Keep named-volume backup separate from the
+   control-plane backup until a supported export path exists.
+3. Separate liveness from readiness and make readiness check both SQLite and
+   rootless-Podman connectivity with a bounded timeout.
+4. Define restart recovery and non-destructive repair policy for every lifecycle
+   partial failure before adding automatic repair actions.
+5. Add opt-in rootless-Podman integration tests for labels, lifecycle state,
+   terminal cleanup, desktop loopback mapping, private-network setup, and
+   rooted file access. Keep them out of the ordinary unit-test suite.
 
 ## Milestone 0: Project foundation — complete
 
@@ -62,7 +91,8 @@ Remaining exit criteria:
 
 - review every state-changing route and access session for independent
   authorization coverage;
-- define recovery procedures for the first administrator and lost credentials;
+- implement and document local recovery for the first administrator and lost
+  credentials;
 - add broader abuse, session invalidation, and import failure tests;
 - replace process-local rate limits before supporting multiple active instances;
 - add email verification only after a separate identity design.
@@ -79,7 +109,7 @@ Remaining exit criteria:
 - complete runtime connectivity and readiness reporting;
 - define and test restart/reconcile behavior for missing, duplicate, orphaned,
   and partially-created objects;
-- expand fake-runtime contract tests and optional rootless-Podman integration
+- expand fake-runtime contract tests and add optional rootless-Podman integration
   tests;
 - add a focused administrator audit view.
 
@@ -100,8 +130,9 @@ Remaining exit criteria:
 
 - make lifecycle operations durable and restart-safe across every partial
   failure;
-- define repair behavior for a database record without a container and an
-  orphaned managed container;
+- define administrator-gated, non-destructive repair behavior for a database
+  record without a container, an orphaned managed container, and a partially
+  completed operation;
 - close admission races beyond the current single-process coordination;
 - add irreversible-operation failure-path and archive recovery tests;
 - improve administrator capacity and reconciliation diagnostics.
@@ -117,9 +148,9 @@ template shells, login-shell execution, optional template-selected terminal
 UIDs, resize forwarding, idle/max lifetime limits, cleanup, audit events, and
 Podman exec streaming.
 
-Remaining hardening: rootless-Podman integration coverage, accessibility review,
-session observability, and a more explicit policy for templates that allow UID
-0.
+Remaining hardening: tagged rootless-Podman integration coverage, accessibility
+review, session observability, and a more explicit policy for templates that
+allow UID 0.
 
 ## Milestone 5: Graphical desktop access — initial implementation
 
@@ -128,8 +159,8 @@ template-controlled desktop service, loopback mapping verification, automatic
 template-selected VNC credentials, session cleanup, fullscreen/resize behavior,
 and no public VNC port.
 
-Remaining hardening: rootless-Podman integration against representative VNC
-images, browser accessibility review, and stronger network isolation for
+Remaining hardening: tagged rootless-Podman integration against representative
+VNC images, browser accessibility review, and stronger network isolation for
 desktop-enabled workspaces.
 
 ## Milestone 6: Resource monitoring and email — initial implementation
@@ -156,12 +187,13 @@ Remaining work: stronger symlink-race integration tests, total temporary-storage
 policy, file previews,
 bulk operations, and archive extraction only after a dedicated security design.
 
-## Milestone 8: Local account recovery and operations visibility — implemented
+## Milestone 8: Local password reset and operations visibility — initial implementation
 
 Local password-reset email with hashed single-use tokens, a retryable email
 outbox, a bounded administrator audit view, live runtime metrics, and
 administrator retained-volume recovery/download/removal. Institutional
-authentication is deliberately excluded from the current plan.
+authentication is deliberately excluded from the current plan. This does not
+provide offline administrator credential recovery; that remains in Milestone 1.
 
 ## Milestone 9: Optional network isolation — implemented
 
@@ -174,5 +206,6 @@ existing workspaces remain future work.
 
 Evaluate a privileged multi-host COWS agent, host pools, PostgreSQL, high
 availability, external metrics, GPUs, shared storage, packaged service units,
-backup/restore tooling, and production upgrade procedures only when real
-deployment requirements justify them.
+and production upgrade procedures only when real deployment requirements
+justify them. Backup and restore are no longer a later-only feature: the
+single-server deployment needs a documented procedure before production use.
