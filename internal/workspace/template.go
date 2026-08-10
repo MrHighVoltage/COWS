@@ -60,7 +60,7 @@ type Service struct {
 	resourceUsage    runtime.ResourceUsageRuntime
 	networkIsolation bool
 	fileAccessLocks  sync.Map
-	// ponytail: one process-wide admission lock; database reservations belong to
+	// One process-wide admission lock; database reservations belong to
 	// the future multi-instance deployment.
 	admissionMu sync.Mutex
 	now         func() time.Time
