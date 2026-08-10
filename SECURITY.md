@@ -192,7 +192,10 @@ races, or host misconfiguration. The helper may access `running`, `stopped`, or
 the container. File operations are serialized with lifecycle changes.
 Directory downloads are streamed as ZIP archives with a 4 GiB uncompressed
 and 100,000-entry bound. Symlinks and non-regular special files are not
-included, and no temporary archive is created. Archive extraction, bulk
+included, and no temporary archive is created. Both the in-process file
+manager and the rootless file-helper subprocess stream archives through the
+same `internal/archive` package, so the byte, entry, and symlink policy
+cannot drift between the two paths. Archive extraction, bulk
 operations, and stronger quota accounting are not implemented. Before those
 features are added, include explicit ZIP-slip, ZIP-bomb, symlink replacement,
 file-count, temporary-storage, and generated-download-size tests.
