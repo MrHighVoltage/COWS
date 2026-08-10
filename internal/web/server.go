@@ -3029,7 +3029,7 @@ func (s *Server) ensureCSRF(w http.ResponseWriter, r *http.Request) string {
 		return ""
 	}
 	token := base64.RawURLEncoding.EncodeToString(tokenBytes)
-	http.SetCookie(w, &http.Cookie{Name: csrfCookieName, Value: token, Path: "/", MaxAge: 3600, Secure: s.options.CookieSecure, SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: csrfCookieName, Value: token, Path: "/", MaxAge: int(s.options.SessionLifetime.Seconds()), Secure: s.options.CookieSecure, SameSite: http.SameSiteLaxMode})
 	return token
 }
 
