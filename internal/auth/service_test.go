@@ -281,3 +281,53 @@ func TestSelfRegistrationFailsClosedWhenDefaultGroupIsMissing(t *testing.T) {
 		t.Fatalf("users after failed registration = %d err=%v", count, err)
 	}
 }
+
+func TestRevokeOtherSessionsKeepsCallerAndRevokesStolenSession(t *testing.T) {
+	service := testService(t)
+	ctx := context.Background()
+	if _, err := service.BootstrapAdministrator(ctx, CreateUserInput{Username: "admin", Password: "correct horse battery staple"}); err != nil {
+		t.Fatalf("bootstrap administrator: %v", err)
+	}
+	admin, callerToken, err := service.Authenticate(ctx, "admin", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate caller: %v", err)
+	}
+	_, stolenToken, err := service.Authenticate(ctx, "admin", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate stolen session: %v", err)
+	}
+	if err := service.RevokeOtherSessions(ctx, admin.ID, callerToken); err != nil {
+		t.Fatalf("revoke other sessions: %v", err)
+	}
+	if _, err := service.UserForSession(ctx, callerToken); err != nil {
+		t.Fatalf("caller session should remain valid: %v", err)
+	}
+	if _, err := service.UserForSession(ctx, stolenToken); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("stolen session should be revoked, got user=%v err=%v", admin, err)
+	}
+}
+
+func TestRevokeOtherSessionsWithBlankTokenRevokesAll(t *testing.T) {
+	service := testService(t)
+	ctx := context.Background()
+	if _, err := service.BootstrapAdministrator(ctx, CreateUserInput{Username: "admin", Password: "correct horse battery staple"}); err != nil {
+		t.Fatalf("bootstrap administrator: %v", err)
+	}
+	admin, firstToken, err := service.Authenticate(ctx, "admin", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate first: %v", err)
+	}
+	_, secondToken, err := service.Authenticate(ctx, "admin", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate second: %v", err)
+	}
+	if err := service.RevokeOtherSessions(ctx, admin.ID, ""); err != nil {
+		t.Fatalf("revoke all sessions: %v", err)
+	}
+	if _, err := service.UserForSession(ctx, firstToken); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("first session should be revoked, got err=%v", err)
+	}
+	if _, err := service.UserForSession(ctx, secondToken); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("second session should be revoked, got err=%v", err)
+	}
+}

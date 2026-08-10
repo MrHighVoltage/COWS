@@ -560,6 +560,60 @@ func TestObservedErrorTextDoesNotExposeRuntimeDetails(t *testing.T) {
 	}
 }
 
+func TestPasswordChangeKeepsCallerAndRevokesOtherSessions(t *testing.T) {
+	server, authService := testServer(t)
+	ctx := context.Background()
+	if _, err := authService.BootstrapAdministrator(ctx, auth.CreateUserInput{Username: "admin", Password: "correct horse battery staple"}); err != nil {
+		t.Fatalf("bootstrap administrator: %v", err)
+	}
+	_, callerToken, err := authService.Authenticate(ctx, "admin", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate caller: %v", err)
+	}
+	_, stolenToken, err := authService.Authenticate(ctx, "admin", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate stolen session: %v", err)
+	}
+	sessionCookie := &http.Cookie{Name: "cows_session", Value: callerToken}
+	pageRecorder := httptest.NewRecorder()
+	pageRequest := httptest.NewRequest(http.MethodGet, "/account/password", nil)
+	pageRequest.AddCookie(sessionCookie)
+	server.Handler().ServeHTTP(pageRecorder, pageRequest)
+	csrfCookie := cookieByName(pageRecorder.Result().Cookies(), "cows_csrf")
+	if pageRecorder.Code != http.StatusOK || csrfCookie == nil {
+		t.Fatalf("password page: status=%d csrf=%#v", pageRecorder.Code, csrfCookie)
+	}
+	form := url.Values{
+		"csrf_token":       {csrfCookie.Value},
+		"current_password": {"correct horse battery staple"},
+		"new_password":     {"changed correct horse battery staple"},
+		"confirm_password": {"changed correct horse battery staple"},
+	}
+	changeRecorder := httptest.NewRecorder()
+	changeRequest := httptest.NewRequest(http.MethodPost, "/account/password", strings.NewReader(form.Encode()))
+	changeRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	changeRequest.AddCookie(sessionCookie)
+	changeRequest.AddCookie(csrfCookie)
+	server.Handler().ServeHTTP(changeRecorder, changeRequest)
+	if changeRecorder.Code != http.StatusSeeOther || changeRecorder.Header().Get("Location") != "/" {
+		t.Fatalf("change password: status=%d location=%q", changeRecorder.Code, changeRecorder.Header().Get("Location"))
+	}
+	callerRecorder := httptest.NewRecorder()
+	callerRequest := httptest.NewRequest(http.MethodGet, "/admin/users", nil)
+	callerRequest.AddCookie(sessionCookie)
+	server.Handler().ServeHTTP(callerRecorder, callerRequest)
+	if callerRecorder.Code != http.StatusOK {
+		t.Fatalf("caller session after password change = %d, want 200", callerRecorder.Code)
+	}
+	stolenRecorder := httptest.NewRecorder()
+	stolenRequest := httptest.NewRequest(http.MethodGet, "/admin/users", nil)
+	stolenRequest.AddCookie(&http.Cookie{Name: "cows_session", Value: stolenToken})
+	server.Handler().ServeHTTP(stolenRecorder, stolenRequest)
+	if stolenRecorder.Code != http.StatusSeeOther || stolenRecorder.Header().Get("Location") != "/login" {
+		t.Fatalf("stolen session after password change = %d location=%q, want redirect to /login", stolenRecorder.Code, stolenRecorder.Header().Get("Location"))
+	}
+}
+
 func cookieByName(cookies []*http.Cookie, name string) *http.Cookie {
 	for _, cookie := range cookies {
 		if cookie.Name == name {
