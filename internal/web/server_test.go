@@ -614,6 +614,32 @@ func TestPasswordChangeKeepsCallerAndRevokesOtherSessions(t *testing.T) {
 	}
 }
 
+func TestCSRFCookieLifetimeMatchesSessionLifetime(t *testing.T) {
+	db, err := database.Open(context.Background(), filepath.Join(t.TempDir(), "cows.db"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	store := sqlite.New(db)
+	authService, err := auth.New(store, 8*time.Hour)
+	if err != nil {
+		t.Fatalf("create auth service: %v", err)
+	}
+	server, err := New(db, authService, workspace.New(store), quota.New(store), nil, Options{SessionLifetime: 8 * time.Hour})
+	if err != nil {
+		t.Fatalf("create web server: %v", err)
+	}
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/login", nil))
+	csrfCookie := cookieByName(recorder.Result().Cookies(), "cows_csrf")
+	if csrfCookie == nil {
+		t.Fatal("login page did not set a CSRF cookie")
+	}
+	if want := int((8 * time.Hour).Seconds()); csrfCookie.MaxAge != want {
+		t.Fatalf("CSRF cookie MaxAge = %d, want %d (session lifetime)", csrfCookie.MaxAge, want)
+	}
+}
+
 func cookieByName(cookies []*http.Cookie, name string) *http.Cookie {
 	for _, cookie := range cookies {
 		if cookie.Name == name {
