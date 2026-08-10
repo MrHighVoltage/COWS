@@ -59,6 +59,7 @@ type SessionRepository interface {
 	FindSessionUser(ctx context.Context, tokenHash string, nowUnix int64) (domain.User, error)
 	DeleteSession(ctx context.Context, tokenHash string) error
 	DeleteSessionsForUser(ctx context.Context, userID string) error
+	DeleteSessionsForUserExcept(ctx context.Context, userID, keepTokenHash string) error
 	DeleteExpiredSessions(ctx context.Context, nowUnix int64) error
 }
 

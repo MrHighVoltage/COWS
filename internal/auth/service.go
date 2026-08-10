@@ -184,6 +184,15 @@ func (s *Service) ChangePassword(ctx context.Context, userID, currentPassword, n
 	return nil
 }
 
+// RevokeOtherSessions deletes every session for userID except the one backing
+// keepRawToken. It is called after a successful password change so that a
+// stolen session cannot outlive the password change; the caller's own session
+// is preserved so the first-login password-change flow stays logged in. A blank
+// keepRawToken revokes all sessions for the user.
+func (s *Service) RevokeOtherSessions(ctx context.Context, userID, keepRawToken string) error {
+	return s.store.DeleteSessionsForUserExcept(ctx, userID, hashToken(keepRawToken))
+}
+
 // RequestPasswordReset deliberately returns no error for an unknown or
 // disabled account. The caller can therefore show the same response for every
 // identifier without allowing account enumeration.

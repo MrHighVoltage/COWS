@@ -421,6 +421,17 @@ func (s *Store) DeleteSessionsForUser(ctx context.Context, userID string) error 
 	return nil
 }
 
+// DeleteSessionsForUserExcept revokes every session for userID except the one
+// matching keepTokenHash. It is used after a password change to invalidate
+// other sessions (including stolen ones) while keeping the caller logged in.
+// A blank keepTokenHash revokes all sessions for the user.
+func (s *Store) DeleteSessionsForUserExcept(ctx context.Context, userID, keepTokenHash string) error {
+	if _, err := s.db.ExecContext(ctx, "DELETE FROM sessions WHERE user_id = ? AND token_hash != ?", userID, keepTokenHash); err != nil {
+		return fmt.Errorf("revoke user sessions: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) DeleteExpiredSessions(ctx context.Context, nowUnix int64) error {
 	if _, err := s.db.ExecContext(ctx, "DELETE FROM sessions WHERE expires_at <= ?", nowUnix); err != nil {
 		return fmt.Errorf("delete expired sessions: %w", err)

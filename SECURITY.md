@@ -66,6 +66,11 @@ partial operations, and compromised or misconfigured images.
   password during registration. Optional local password reset uses a hashed,
   single-use token and an HTTPS external URL; email is not an identity proof
   or authorization factor.
+- Changing a password (whether voluntarily or during the mandatory first-login
+  change) revokes every other session for that account while preserving the
+  session performing the change, so a stolen session cannot outlive a password
+  change. Disabling a user makes existing sessions unusable through the session
+  lookup, which excludes disabled accounts.
 - Runtime capabilities are least privilege. Privileged mode, host networking,
   unrestricted host mounts, arbitrary capabilities, and direct devices are not
   user-selectable.

@@ -738,6 +738,9 @@ func (s *Server) passwordPost(w http.ResponseWriter, r *http.Request) {
 		s.render(w, http.StatusBadRequest, "password-page", pageData{Title: "Change password | COWS", User: user, CSRFToken: s.ensureCSRF(w, r), Password: passwordFormData{Error: message}})
 		return
 	}
+	if cookie, cerr := r.Cookie(sessionCookieName); cerr == nil {
+		_ = s.auth.RevokeOtherSessions(r.Context(), user.ID, cookie.Value)
+	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
