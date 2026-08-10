@@ -1,7 +1,6 @@
 package fileagent
 
 import (
-	"archive/zip"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -16,15 +15,15 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/cows-project/cows/internal/archive"
 )
 
 const (
-	MaxUploadBytes    int64 = 128 << 20
-	MaxDownloadBytes  int64 = 4 << 30
-	MaxArchiveBytes   int64 = 4 << 30
-	MaxListEntries          = 10000
-	MaxArchiveEntries       = 100000
-	MaxUsageEntries         = 1000000
+	MaxUploadBytes   int64 = 128 << 20
+	MaxDownloadBytes int64 = 4 << 30
+	MaxListEntries         = 10000
+	MaxUsageEntries        = 1000000
 )
 
 type options struct {
@@ -82,7 +81,7 @@ func Run(args []string, input io.Reader, output, errorOutput io.Writer) error {
 	case "download":
 		return download(root, relativePath, output)
 	case "zip":
-		return zipDirectory(context.Background(), root, relativePath, output)
+		return archive.ZipDirectory(context.Background(), root, relativePath, output)
 	case "mkdir":
 		if parsed.ReadOnly {
 			return errors.New("read-only mount")
@@ -341,119 +340,6 @@ func upload(root *os.Root, relativePath, name string, input io.Reader) error {
 		return err
 	}
 	return nil
-}
-
-func zipDirectory(ctx context.Context, root *os.Root, relativePath string, output io.Writer) error {
-	info, err := root.Lstat(relativePath)
-	if err != nil {
-		return err
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return errors.New("not a directory")
-	}
-	archive := zip.NewWriter(output)
-	state := zipState{}
-	walkErr := fs.WalkDir(root.FS(), relativePath, func(currentPath string, item fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		if state.entries >= MaxArchiveEntries {
-			return errors.New("archive contains too many entries")
-		}
-		if item.Type()&os.ModeSymlink != 0 {
-			return errors.New("symbolic links are not supported")
-		}
-		if currentPath == "." {
-			return nil
-		}
-		info, err := item.Info()
-		if err != nil {
-			return err
-		}
-		name := path.Clean(currentPath)
-		if item.IsDir() {
-			header, err := zip.FileInfoHeader(info)
-			if err != nil {
-				return err
-			}
-			header.Name = name + "/"
-			header.Method = zip.Store
-			if _, err := archive.CreateHeader(header); err != nil {
-				return err
-			}
-			state.entries++
-			return nil
-		}
-		if !info.Mode().IsRegular() {
-			return nil
-		}
-		header, err := zip.FileInfoHeader(info)
-		if err != nil {
-			return err
-		}
-		header.Name = name
-		header.Method = zip.Deflate
-		destination, err := archive.CreateHeader(header)
-		if err != nil {
-			return err
-		}
-		file, err := root.Open(currentPath)
-		if err != nil {
-			return err
-		}
-		_, copyErr := io.Copy(destination, &zipReader{ctx: ctx, source: file, state: &state})
-		closeErr := file.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		if closeErr != nil {
-			return closeErr
-		}
-		state.entries++
-		return nil
-	})
-	closeErr := archive.Close()
-	if walkErr != nil {
-		return walkErr
-	}
-	return closeErr
-}
-
-type zipState struct {
-	bytes   int64
-	entries int
-}
-
-type zipReader struct {
-	ctx    context.Context
-	source io.Reader
-	state  *zipState
-}
-
-func (r *zipReader) Read(value []byte) (int, error) {
-	select {
-	case <-r.ctx.Done():
-		return 0, r.ctx.Err()
-	default:
-	}
-	if r.state.bytes >= MaxArchiveBytes {
-		return 0, errors.New("archive is too large")
-	}
-	remaining := MaxArchiveBytes - r.state.bytes
-	if int64(len(value)) > remaining {
-		value = value[:int(remaining)]
-	}
-	count, err := r.source.Read(value)
-	r.state.bytes += int64(count)
-	if r.state.bytes >= MaxArchiveBytes && err == nil {
-		return count, errors.New("archive is too large")
-	}
-	return count, err
 }
 
 func randomName() string {
