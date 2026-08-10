@@ -119,6 +119,21 @@ func TestTerminalWebSocketAuthorizesAndBridgesShell(t *testing.T) {
 	if !fake.waitForResize(120, 40) {
 		t.Fatal("terminal resize was not forwarded to runtime")
 	}
+	// An out-of-range resize must not tear down the terminal session: the
+	// adapter rejects it with ErrConflict and the bridge ignores the error.
+	if err := connection.Write(ctx, websocket.MessageText, []byte(`{"type":"resize","cols":0,"rows":0}`)); err != nil {
+		t.Fatalf("write out-of-range resize: %v", err)
+	}
+	if err := connection.Write(ctx, websocket.MessageText, []byte("still alive\n")); err != nil {
+		t.Fatalf("write after rejected resize: %v", err)
+	}
+	_, data, err = connection.Read(ctx)
+	if err != nil || string(data) != "still alive\r\n" {
+		t.Fatalf("terminal echo after rejected resize: data=%q err=%v", data, err)
+	}
+	if got := fake.terminal.cols; got != 120 {
+		t.Fatalf("terminal cols after rejected resize = %d, want 120", got)
+	}
 	if err := connection.Close(websocket.StatusNormalClosure, "disconnect"); err != nil {
 		t.Fatalf("close terminal websocket: %v", err)
 	}
@@ -220,6 +235,9 @@ func (t *fakeTerminal) Close() error {
 	return nil
 }
 func (t *fakeTerminal) Resize(_ context.Context, cols, rows int) error {
+	if cols < 1 || cols > 500 || rows < 1 || rows > 500 {
+		return runtime.ErrConflict
+	}
 	t.mu.Lock()
 	t.cols, t.rows = cols, rows
 	t.mu.Unlock()

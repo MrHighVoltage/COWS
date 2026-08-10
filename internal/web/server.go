@@ -1114,7 +1114,10 @@ func (s *Server) workspaceTerminalWebSocket(w http.ResponseWriter, r *http.Reque
 			}
 			var resize terminalResizeMessage
 			if message.Type == websocket.MessageText && json.Unmarshal(message.Data, &resize) == nil && resize.Type == "resize" {
-				if err := terminal.Resize(ctx, resize.Cols, resize.Rows); err != nil {
+				// Resize is best-effort: the adapter rejects out-of-range cols/rows
+				// with ErrConflict. Ignore validation failures instead of dropping
+				// the terminal session, but keep returning on genuine runtime errors.
+				if err := terminal.Resize(ctx, resize.Cols, resize.Rows); err != nil && !errors.Is(err, runtime.ErrConflict) {
 					return
 				}
 				resetIdle()
