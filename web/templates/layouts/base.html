@@ -12,21 +12,28 @@
 </head>
 <body>
   <header class="site-header">
-    <a class="wordmark" href="/">COWS</a>
+    <a class="wordmark" href="/">COWS<span class="wordmark-dot">_</span></a>
     <span class="header-context">Containerized On-Demand Workspace System</span>
     <nav class="site-nav" aria-label="Primary navigation">
       {{ if .User }}
         <a class="nav-tab" href="/">Dashboard</a>
         {{ if not .User.MustChangePassword }}<a class="nav-tab" href="/workspaces">Workspaces</a>{{ end }}
         {{ if not .User.MustChangePassword }}<a class="nav-tab" href="/account/password">Account</a>{{ end }}
-        {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a class="nav-tab" href="/admin/users">Users</a>{{ end }}
-        {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a class="nav-tab" href="/admin/groups">Groups</a>{{ end }}
-        {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a class="nav-tab" href="/admin/settings">Settings</a>{{ end }}
-        {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a class="nav-tab" href="/admin/templates">Templates</a>{{ end }}
-        {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a class="nav-tab" href="/admin/runtime">Runtime</a>{{ end }}
-        {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a class="nav-tab" href="/admin/metrics">Metrics</a>{{ end }}
-        {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a class="nav-tab" href="/admin/audit">Audit</a>{{ end }}
-        {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}<a class="nav-tab" href="/admin/volumes">Volumes</a>{{ end }}
+        {{ if and .User.IsAdministrator (not .User.MustChangePassword) }}
+        <div class="nav-menu" x-data="{ open: false }" x-on:keydown.escape.window="open = false" x-on:click.outside="open = false">
+          <button type="button" class="nav-tab nav-menu-trigger" x-on:click="open = !open" x-bind:aria-expanded="open.toString()" aria-haspopup="true">Admin<span class="nav-menu-caret" aria-hidden="true">&#9662;</span></button>
+          <div class="nav-menu-panel" x-show="open" x-cloak>
+            <a class="nav-menu-item" href="/admin/users">Users</a>
+            <a class="nav-menu-item" href="/admin/groups">Groups</a>
+            <a class="nav-menu-item" href="/admin/templates">Templates</a>
+            <a class="nav-menu-item" href="/admin/runtime">Runtime</a>
+            <a class="nav-menu-item" href="/admin/metrics">Metrics</a>
+            <a class="nav-menu-item" href="/admin/audit">Audit</a>
+            <a class="nav-menu-item" href="/admin/volumes">Volumes</a>
+            <a class="nav-menu-item" href="/admin/settings">Settings</a>
+          </div>
+        </div>
+        {{ end }}
         <form class="sign-out-form" method="post" action="/logout">
           <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
           <button class="link-button sign-out-button" type="submit">Sign out</button>
