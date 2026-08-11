@@ -58,9 +58,10 @@ partial operations, and compromised or misconfigured images.
 - Login failures are rate-limited per source by the single COWS process. A
   multi-instance deployment must move this control to shared infrastructure.
 - `/healthz` is a liveness and database-connectivity check only. It does not
-  establish rootless-Podman readiness; a future readiness endpoint must check
-  both dependencies before a supervisor or reverse proxy uses it for traffic
-  admission.
+  establish rootless-Podman readiness. `/readyz` checks both dependencies
+  under a bounded timeout and is unauthenticated like `/healthz`, revealing
+  only constant status words, never runtime or filesystem detail; use it, not
+  `/healthz`, for supervisor or reverse-proxy traffic admission.
 - Administrator-created users must change their initial password before
   administrator operations are available. Self-registered users choose their
   password during registration. Optional local password reset uses a hashed,

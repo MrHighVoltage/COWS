@@ -30,6 +30,9 @@ messages. Institutional authentication is not part of this deployment.
 Use a process supervisor for a long-running installation. COWS does not ship a
 systemd unit yet, so the supervisor must set the working directory, the COWS
 environment, the rootless Podman socket, and restrictive file permissions.
+Point the supervisor's and reverse proxy's readiness probe at `GET /readyz`,
+which checks both SQLite and rootless-Podman connectivity; use `GET /healthz`
+only for liveness, since it does not verify the Podman socket.
 
 ## Backup and restore
 
@@ -80,7 +83,7 @@ them in logs or an unprotected archive.
 To restore, stop COWS and all affected workspaces, move the current database and
 data roots aside, restore the verified database and archives with the COWS
 service account's restrictive permissions, and start COWS. Check
-`/healthz`, run reconciliation, inspect the Runtime view, and verify a test
+`/readyz`, run reconciliation, inspect the Runtime view, and verify a test
 workspace before returning the service to users. Do not restore only the SQLite
 file while leaving its managed data roots from another point in time. Do not
 manually edit account password hashes or workspace rows as a credential-recovery

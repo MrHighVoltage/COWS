@@ -79,22 +79,24 @@ to them.
   hand) and record the drill result. See `internal/database/` for the
   connection settings (WAL, busy timeout) the procedure must respect.
 
-### A3. Readiness endpoint does not check the runtime
+### A3. Readiness endpoint does not check the runtime — RESOLVED
 
-- `ARCHITECTURE.md` "Operational direction" states readiness should include
-  database **and runtime connectivity**, but this requirement never made it
-  into ROADMAP milestone criteria and is not implemented.
-- Evidence: `internal/web/server.go:3317-3328` (`health`) and
-  `internal/web/server.go:3331-3339` (`snapshot`) only `PingContext` the
-  database; Podman is never probed. Routes at
-  `internal/web/server.go:392-393`.
-- Guidance: extend the health snapshot with a runtime connectivity check
-  through the runtime interface (the adapter already exposes a version/host
-  info call — do not leak Podman types into `internal/web`). Keep the check
-  cheap and bounded in time; keep returning 200 for liveness-style probes if
-  that distinction matters, or add a separate readiness route — record the
-  choice. Match the existing `healthSnapshot` pattern and the admin health
-  fragment at `internal/web/server.go:3310`.
+- **Update (2026-08-11):** added `GET /readyz` (`internal/web/server.go`:
+  `ready`/`readiness`), a separate route from `GET /healthz`. It checks
+  SQLite via the existing `PingContext` and rootless-Podman connectivity via
+  `s.runtime.Name(ctx)` (the adapter's existing version/host-info call — no
+  Podman types leak into `internal/web`), both under a five-second
+  `context.WithTimeout` bound so a stalled socket cannot hang the probe past
+  the adapter's own ten-second client timeout. Returns HTTP 503 with
+  `{"status":"degraded", ...}` when either dependency is unavailable, 200
+  otherwise. `GET /healthz` is unchanged (liveness plus SQLite only). See
+  decision 0024. Tests: `TestReadyEndpointReportsOKWhenDatabaseAndRuntimeAreHealthy`,
+  `TestReadyEndpointReportsDegradedWhenRuntimeIsUnset`,
+  `TestReadyEndpointReportsDegradedWhenRuntimeNameFails` in
+  `internal/web/server_test.go`.
+- `ARCHITECTURE.md`, `PROJECT.md`, `SECURITY.md`, `docs/configuration.md`, and
+  `ROADMAP.md` were updated in the same change to point supervisor/reverse-proxy
+  readiness probes at `/readyz` instead of `/healthz`.
 
 ## B. Safety-net findings (harden existing behavior)
 

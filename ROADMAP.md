@@ -22,7 +22,9 @@ Implemented now:
   archival;
 - authenticated terminal, noVNC desktop, restricted file manager, bounded
   uploads, and streamed directory ZIP downloads;
-- optional persisted lifecycle-warning email delivery.
+- optional persisted lifecycle-warning email delivery;
+- a bounded, runtime-aware readiness endpoint (`GET /readyz`) separate from
+  the liveness-only `GET /healthz`.
 
 Not implemented or incomplete:
 
@@ -33,8 +35,6 @@ Not implemented or incomplete:
   has not been exercised as a restore drill and has no scripted tooling.
   Retained named volumes are excluded and remain download-only through
   administrator recovery;
-- a runtime-aware readiness endpoint; `/healthz` currently checks liveness and
-  database connectivity only;
 - stronger host-level network egress policy between workspaces;
 - robust persistent recovery for every partial or interrupted lifecycle
   operation;
@@ -65,11 +65,9 @@ These are the next pre-production tasks, ordered by operational risk:
    backup/restore procedure (`docs/deployment.md`) as a tested restore drill.
    Keep named-volume backup separate from the control-plane backup until a
    supported export path exists.
-3. Separate liveness from readiness and make readiness check both SQLite and
-   rootless-Podman connectivity with a bounded timeout.
-4. Define restart recovery and non-destructive repair policy for every lifecycle
+3. Define restart recovery and non-destructive repair policy for every lifecycle
    partial failure before adding automatic repair actions.
-5. Add opt-in rootless-Podman integration tests for labels, lifecycle state,
+4. Add opt-in rootless-Podman integration tests for labels, lifecycle state,
    terminal cleanup, desktop loopback mapping, private-network setup, and
    rooted file access. Keep them out of the ordinary unit-test suite.
 

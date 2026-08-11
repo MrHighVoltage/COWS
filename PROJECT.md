@@ -116,10 +116,10 @@ The current reconciliation worker records missing and orphaned objects but
 does not automatically repair missing, orphaned, or interrupted operations.
 The repair policy and restart recovery procedure remain incomplete.
 
-`/healthz` currently provides liveness plus a SQLite connectivity check; it does
-not prove that rootless Podman is reachable. A separate runtime-aware readiness
-signal is required before a reverse proxy or service supervisor can safely use
-it for admission readiness.
+`/healthz` provides liveness plus a SQLite connectivity check; it does not
+prove that rootless Podman is reachable. `/readyz` is the separate,
+runtime-aware readiness signal a reverse proxy or service supervisor should
+use for admission readiness.
 
 The initial deployment has no built-in backup or offline administrator
 credential-recovery command. Operators must follow the documented backup
