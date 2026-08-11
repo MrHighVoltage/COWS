@@ -13,7 +13,7 @@
 </section>
 {{ else if .Inspection }}
 <section class="panel" aria-labelledby="runtime-summary-title">
-  <div class="panel-heading"><div><p class="eyebrow">Connection</p><h2 id="runtime-summary-title">{{ .Inspection.RuntimeName }}</h2></div><span class="status-value status-ok">Connected</span></div>
+  <div class="panel-heading"><div><p class="eyebrow">Connection</p><h2 id="runtime-summary-title">{{ .Inspection.RuntimeName }}</h2></div><span class="status-stamp status-ok">Connected</span></div>
   <div class="runtime-facts">
     <div><span class="status-label">CPU limits</span><strong>{{ if .Inspection.Capabilities.SupportsCPUResourceLimits }}Supported{{ else }}Unavailable{{ end }}</strong></div>
     <div><span class="status-label">Memory limits</span><strong>{{ if .Inspection.Capabilities.SupportsMemoryResourceLimits }}Supported{{ else }}Unavailable{{ end }}</strong></div>
@@ -28,10 +28,10 @@
   <h2 id="managed-title">Managed containers</h2>
   <div class="table-scroll"><table class="runtime-table"><thead><tr><th>Workspace</th><th>Owner</th><th>Template</th><th>State</th><th>Observed</th><th class="actions-column">Access and controls</th></tr></thead><tbody>
   {{ range .RuntimeWorkspaces }}<tr>
-    <td><strong>{{ .WorkspaceID }}</strong>{{ if not .Managed }}<span class="badge">Orphan</span>{{ else if not .RuntimePresent }}<span class="badge">Runtime missing</span>{{ end }}</td>
+    <td><strong>{{ .WorkspaceID }}</strong>{{ if not .Managed }}<span class="status-stamp status-warning">Orphan</span>{{ else if not .RuntimePresent }}<span class="status-stamp status-warning">Runtime missing</span>{{ end }}</td>
     <td>{{ if .Owner }}{{ .Owner }}{{ else }}<span class="muted">Unknown</span>{{ end }}</td>
     <td>{{ if .Template }}{{ .Template }}{{ else }}<span class="muted">Unknown</span>{{ end }}</td>
-    <td>{{ .Observed.State }}</td><td>{{ observedTime .Observed.ObservedAt }}</td>
+    <td>{{ template "state-stamp" .Observed.State }}</td><td>{{ observedTime .Observed.ObservedAt }}</td>
     <td class="actions-column">
       {{ if .Managed }}
       <div class="table-actions">
