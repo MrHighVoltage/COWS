@@ -62,19 +62,22 @@ to them.
 - Tests: recovery resets only the named account, invalidates its sessions,
   and refuses unknown/non-admin targets.
 
-### A2. No SQLite backup/restore story
+### A2. SQLite backup/restore procedure is documented but untested — RESOLVED (partially)
 
-- The entire control plane is one SQLite file plus the mount/archive roots,
-  but no backup or restore procedure exists anywhere. It appears only in the
-  ROADMAP "Later" list; for a first real deployment this is the largest
-  documented-risk gap. Nothing in `internal/`, `tools/`, or `deploy/`
-  references backup (no `VACUUM INTO`, `.backup`, or script).
-- Guidance: this may be decided to be documentation-only at first — a
-  `docs/deployment.md` section covering a safe online backup of
-  `data/cows.db` (e.g. `sqlite3 cows.db '.backup ...'` against WAL mode), the
-  mount and archive roots, and restore verification. Decide with the human
-  before adding a tooling script. See `internal/database/` for the connection
-  settings (WAL, busy timeout) the procedure must respect.
+- **Update (2026-08-11):** `docs/deployment.md` gained a "Backup and restore"
+  section (`.backup` against WAL mode, tarring the mount/archive roots,
+  `PRAGMA integrity_check`/`tar -t` verification, and a restore sequence) in
+  the same commit (`8c9d4ba`) that originally recorded this finding as "no
+  backup or restore procedure exists anywhere" — that claim was stale the
+  moment it was committed. Nothing in `internal/`, `tools/`, or `deploy/`
+  automates it; the procedure is manual, copy-pasted-from-docs only.
+- Remaining gap: no scripted backup tool, and the procedure has never been
+  exercised as an actual restore drill. Retained named volumes are explicitly
+  excluded from the file-based backup and remain download-only through
+  administrator recovery (decision 0022).
+- Guidance: script the documented steps (or verify them work end-to-end by
+  hand) and record the drill result. See `internal/database/` for the
+  connection settings (WAL, busy timeout) the procedure must respect.
 
 ### A3. Readiness endpoint does not check the runtime
 
@@ -176,13 +179,22 @@ to them.
   tests. Do not weaken the rooted-path or per-workspace file-lock design
   (`internal/workspace/file_access.go`) while adding tests.
 
-### C3. Abuse, session-invalidation, and import-failure tests
+### C3. Abuse, session-invalidation, and import-failure tests — password-change half RESOLVED
 
-- ROADMAP M1. Session invalidation on password change/disable exists as
-  behavior (`ARCHITECTURE.md` accounts section); verify and extend coverage
-  in `internal/auth` and `internal/web/server_test.go` for: concurrent
-  session use after disable, CSV import partial failures and duplicate
-  handling, and registration throttling.
+- **Update (2026-08-11):** commit `3ed253a` closed the password-change half.
+  `ChangePassword` previously left every other session valid; `auth.Service`
+  now has `RevokeOtherSessions` (backed by
+  `DeleteSessionsForUserExcept`), called from the password POST handler after
+  a successful change, keeping the caller's own session (including the
+  mandatory first-login change) and revoking every other session for the
+  account. Covered by `internal/auth/service_test.go` (keep-caller,
+  revoke-stolen, revoke-all) and `internal/web/server_test.go`
+  (`TestPasswordChangeKeepsCallerAndRevokesOtherSessions`). `SECURITY.md` now
+  documents this alongside disable-based invalidation.
+- Still open: concurrent session use after **disable** (behavior exists via
+  the session lookup excluding disabled accounts, per `SECURITY.md`, but
+  lacks a dedicated test), CSV import partial failures and duplicate
+  handling, and registration throttling. ROADMAP M1.
 
 ## D. Documented gaps the plans deliberately defer
 
@@ -225,5 +237,22 @@ decision record first:
   including terminal-cleanup hardening). For PR-based review tooling, push
   first; there was no open PR. There is no CI configuration in the
   repository — all verification is local.
-- Fixed alongside this document: the stray comment token `ponytail:` at
-  `internal/workspace/template.go:63` was removed (comment-only change).
+- This document originally claimed the stray comment token `ponytail:` at
+  `internal/workspace/template.go:63` was "removed alongside this document";
+  that edit was never actually staged in `8c9d4ba`. It was committed
+  separately six days later in `a6549c5` once the mismatch was noticed —
+  a reminder that this file's claims need re-verifying against the working
+  tree, not just trusted.
+
+## Since the audit (updates, not a re-audit)
+
+Findings A2 and C3 above were updated 2026-08-11 to reflect commits made
+after the 2026-08-04 audit (`a6549c5`, `3ed253a`, `95ecb05`, `5876ec8`,
+`b7b3056`). Two of those five are unrelated bug fixes with no open finding to
+close: `95ecb05` stopped an out-of-range terminal resize from dropping the
+whole session, and `5876ec8` fixed the CSRF cookie's `MaxAge` being hardcoded
+to one hour while sessions default to eight, which broke every POST on a
+long-lived session. `b7b3056` deduplicated the file-manager and file-agent ZIP
+streaming into `internal/archive` (see `ARCHITECTURE.md`); no behavior
+changed. Sections A1, A3, and B remain as audited — verify against the code
+before relying on them, per the note above.

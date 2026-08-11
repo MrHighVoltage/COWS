@@ -289,8 +289,14 @@ internal/web/          handlers, templates, and static asset serving
 internal/domain/       stable COWS concepts and error categories
 internal/auth/         password authentication and session use cases
 internal/repository/   focused persistence interfaces and SQLite implementation
-    internal/runtime/      Rootless Podman domain adapter boundary
+internal/runtime/      Rootless Podman domain adapter boundary
 internal/runtime/podman/ Podman compatibility API adapter
+internal/workspace/    workspace lifecycle, reconciliation, and template/resource policy
+internal/quota/        user/group quota resolution and host-capacity admission
+internal/files/        restricted in-process file manager over approved mounts
+internal/fileagent/    rootless namespace-helper subprocess for rooted file access
+internal/archive/      bounded, streamed ZIP writer shared by files and fileagent
+internal/notifications/ persisted email outbox for password reset and lifecycle warnings
 migrations/            ordered SQL migrations
 web/                   templates and local browser assets
 docs/decisions/        short architecture decisions

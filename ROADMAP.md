@@ -28,8 +28,11 @@ Not implemented or incomplete:
 
 - offline administrator credential recovery and a documented lost-credential
   procedure;
-- SQLite, managed-directory, archive, and retained-volume backup/restore
-  procedures and verification;
+- a tested SQLite, managed-directory, and archive backup/restore procedure;
+  `docs/deployment.md` documents a manual backup and restore procedure, but it
+  has not been exercised as a restore drill and has no scripted tooling.
+  Retained named volumes are excluded and remain download-only through
+  administrator recovery;
 - a runtime-aware readiness endpoint; `/healthz` currently checks liveness and
   database connectivity only;
 - stronger host-level network egress policy between workspaces;
@@ -58,9 +61,10 @@ These are the next pre-production tasks, ordered by operational risk:
    and requires a first-login password change. Refuse unknown, disabled, and
    non-administrator targets. Document local-process and database-file access
    requirements.
-2. Publish and test the SQLite, managed-directory, archive, and retained-volume
-   backup/restore procedure. Keep named-volume backup separate from the
-   control-plane backup until a supported export path exists.
+2. Exercise and script the documented SQLite, managed-directory, and archive
+   backup/restore procedure (`docs/deployment.md`) as a tested restore drill.
+   Keep named-volume backup separate from the control-plane backup until a
+   supported export path exists.
 3. Separate liveness from readiness and make readiness check both SQLite and
    rootless-Podman connectivity with a bounded timeout.
 4. Define restart recovery and non-destructive repair policy for every lifecycle
