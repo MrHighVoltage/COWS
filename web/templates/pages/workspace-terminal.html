@@ -9,7 +9,7 @@
 {{ define "workspace-terminal-controls" }}
 <div id="terminal-controls" class="access-control-bar access-tab-controls" data-access-controls="terminal" role="group" aria-label="Terminal controls">
   {{ if .ActiveWorkspace.TemplateConfiguration.TerminalUIDs }}<label class="terminal-identity">User ID <select data-terminal-uid aria-label="Terminal user ID">{{ range .ActiveWorkspace.TemplateConfiguration.TerminalUIDs }}<option value="{{ . }}">{{ . }}{{ if eq . 0 }} (root){{ end }}</option>{{ end }}</select></label>{{ end }}
-  <span id="terminal-status" class="badge connection-status">Not connected</span><button class="secondary-button connection-toggle" type="button" data-terminal-connect>Connect</button><button class="secondary-button" type="button" data-terminal-fit>Fit</button><button class="secondary-button" type="button" data-terminal-fullscreen>Full screen</button>
+  <span id="terminal-status" class="connection-status">Not connected</span><button class="secondary-button connection-toggle" type="button" data-terminal-connect>Connect</button><button class="secondary-button" type="button" data-terminal-fit>Fit</button><button class="secondary-button" type="button" data-terminal-fullscreen>Full screen</button>
 </div>
 {{ end }}
 
