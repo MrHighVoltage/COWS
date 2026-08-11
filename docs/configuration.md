@@ -110,7 +110,10 @@ ordinary user with no explicit or inherited quota remains unassigned.
 
 `GET /healthz` is a liveness and SQLite-connectivity check. It does not verify
 the Podman socket, so it is not a readiness signal for admitting workspaces.
-A bounded runtime-aware readiness endpoint is planned.
+`GET /readyz` is the bounded runtime-aware readiness endpoint: it checks
+SQLite and rootless-Podman connectivity and returns HTTP 503 when either is
+unavailable. Point a reverse proxy's or process supervisor's readiness probe
+at `/readyz`, not `/healthz`.
 
 COWS does not create backups automatically. See
 [deployment backup and restore](deployment.md#backup-and-restore) for the

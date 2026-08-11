@@ -444,12 +444,13 @@ not block workspace creation.
 ## Operational direction
 
 Use structured `log/slog` logging with request correlation IDs and safe context.
-`GET /healthz` currently provides liveness plus a SQLite connectivity check; it
-does not probe rootless Podman and must not be treated as a ready-to-admit
-signal. Add a separate bounded readiness check for SQLite and runtime
-connectivity before production deployment. Metrics should be sampled in memory
-or delegated to a monitoring system rather than written on every sample to
-SQLite.
+`GET /healthz` provides liveness plus a SQLite connectivity check only and must
+not be treated as a ready-to-admit signal. `GET /readyz` is the separate,
+bounded readiness check: it adds a rootless-Podman connectivity probe (the
+runtime adapter's `Name` call under a five-second timeout) on top of the same
+SQLite check and returns 503 when either dependency is unavailable. See
+decision 0024. Metrics should be sampled in memory or delegated to a
+monitoring system rather than written on every sample to SQLite.
 
 The deployment must also maintain a tested backup and restore procedure for the
 SQLite database and managed directory/archive roots. Retained named volumes

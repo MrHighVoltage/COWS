@@ -79,6 +79,18 @@ type healthSnapshot struct {
 	CheckedAt string
 }
 
+// readinessCheckTimeout bounds the runtime connectivity probe so a stalled
+// Podman socket cannot make GET /readyz hang past a supervisor's own probe
+// timeout; the adapter's own client timeout is longer (10s).
+const readinessCheckTimeout = 5 * time.Second
+
+type readinessSnapshot struct {
+	Status    string
+	Database  string
+	Runtime   string
+	CheckedAt string
+}
+
 type userFormData struct {
 	Username    string
 	Email       string
@@ -390,6 +402,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(s.static))))
 	mux.HandleFunc("GET /healthz", s.health)
+	mux.HandleFunc("GET /readyz", s.ready)
 	mux.HandleFunc("GET /fragments/health", s.healthFragment)
 	mux.HandleFunc("GET /login", s.loginGet)
 	mux.HandleFunc("POST /login", s.loginPost)
@@ -3339,6 +3352,43 @@ func (s *Server) snapshot(ctx context.Context) healthSnapshot {
 	if err := s.db.PingContext(ctx); err != nil {
 		snapshot.Status = "degraded"
 		snapshot.Database = "unavailable"
+	}
+	return snapshot
+}
+
+// ready reports GET /readyz: a bounded readiness signal that checks both
+// SQLite and rootless-Podman connectivity, unlike the liveness-only /healthz.
+// A reverse proxy or process supervisor should use this endpoint, not
+// /healthz, to decide whether to admit traffic.
+func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
+	snapshot := s.readiness(r.Context())
+	status := http.StatusOK
+	if snapshot.Status != "ok" {
+		status = http.StatusServiceUnavailable
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(struct {
+		Status   string `json:"status"`
+		Database string `json:"database"`
+		Runtime  string `json:"runtime"`
+	}{Status: snapshot.Status, Database: snapshot.Database, Runtime: snapshot.Runtime})
+}
+
+func (s *Server) readiness(ctx context.Context) readinessSnapshot {
+	checkCtx, cancel := context.WithTimeout(ctx, readinessCheckTimeout)
+	defer cancel()
+	snapshot := readinessSnapshot{Status: "ok", Database: "ok", Runtime: "ok", CheckedAt: time.Now().UTC().Format(time.RFC3339)}
+	if err := s.db.PingContext(checkCtx); err != nil {
+		snapshot.Status = "degraded"
+		snapshot.Database = "unavailable"
+	}
+	if s.runtime == nil {
+		snapshot.Status = "degraded"
+		snapshot.Runtime = "unavailable"
+	} else if _, err := s.runtime.Name(checkCtx); err != nil {
+		snapshot.Status = "degraded"
+		snapshot.Runtime = "unavailable"
 	}
 	return snapshot
 }

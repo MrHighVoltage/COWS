@@ -187,6 +187,70 @@ func TestHealthEndpoint(t *testing.T) {
 	}
 }
 
+func TestReadyEndpointReportsOKWhenDatabaseAndRuntimeAreHealthy(t *testing.T) {
+	server, _ := testServer(t)
+	server.runtime = newTerminalRuntime()
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	server.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recorder.Code)
+	}
+	var response map[string]string
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode readiness response: %v", err)
+	}
+	if response["status"] != "ok" || response["database"] != "ok" || response["runtime"] != "ok" {
+		t.Fatalf("unexpected readiness response: %#v", response)
+	}
+}
+
+func TestReadyEndpointReportsDegradedWhenRuntimeIsUnset(t *testing.T) {
+	server, _ := testServer(t)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	server.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", recorder.Code)
+	}
+	var response map[string]string
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode readiness response: %v", err)
+	}
+	if response["status"] != "degraded" || response["runtime"] != "unavailable" || response["database"] != "ok" {
+		t.Fatalf("unexpected readiness response: %#v", response)
+	}
+}
+
+func TestReadyEndpointReportsDegradedWhenRuntimeNameFails(t *testing.T) {
+	server, _ := testServer(t)
+	server.runtime = &failingNameRuntime{terminalRuntime: newTerminalRuntime()}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	server.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", recorder.Code)
+	}
+	var response map[string]string
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode readiness response: %v", err)
+	}
+	if response["status"] != "degraded" || response["runtime"] != "unavailable" {
+		t.Fatalf("unexpected readiness response: %#v", response)
+	}
+}
+
+type failingNameRuntime struct {
+	*terminalRuntime
+}
+
+func (r *failingNameRuntime) Name(context.Context) (string, error) {
+	return "", errors.New("runtime socket unreachable")
+}
+
 func TestHealthFragmentRendersHTML(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/fragments/health", nil)
