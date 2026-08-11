@@ -38,9 +38,7 @@ var (
 const (
 	MaxUploadBytes      int64 = 128 << 20
 	MaxDownloadBytes    int64 = 4 << 30
-	MaxArchiveBytes           = archive.MaxBytes
 	MaxDirectoryEntries       = 10000
-	MaxArchiveEntries         = archive.MaxEntries
 )
 
 type MountResolver interface {
@@ -250,14 +248,14 @@ func (s *Service) OpenZip(ctx context.Context, actorID, workspaceID, mountName, 
 	}
 	if backend.access != nil {
 		access := backend.access
-		archive, err := access.OpenZip(ctx, relativePath)
+		reader, err := access.OpenZip(ctx, relativePath)
 		if err != nil {
 			access.Close()
 			release()
 			return nil, "", mapRuntimeError(err)
 		}
 		s.recordAudit(ctx, actorID, workspaceID, "file.archive_downloaded", mount, relativePath)
-		return &accessFile{reader: archive, access: access, release: release}, name + ".zip", nil
+		return &accessFile{reader: reader, access: access, release: release}, name + ".zip", nil
 	}
 	root := backend.root
 	info, err := root.Lstat(relativePath)
@@ -313,12 +311,12 @@ func (s *Service) OpenRuntimeZip(ctx context.Context, spec runtime.FileAccessSpe
 	if err != nil {
 		return nil, mapRuntimeError(err)
 	}
-	archive, err := access.OpenZip(ctx, ".")
+	reader, err := access.OpenZip(ctx, ".")
 	if err != nil {
 		_ = access.Close()
 		return nil, mapRuntimeError(err)
 	}
-	return &accessFile{reader: archive, access: access}, nil
+	return &accessFile{reader: reader, access: access}, nil
 }
 
 func (s *Service) CreateDirectory(ctx context.Context, actorID, workspaceID, mountName, relativePath, name string) error {
