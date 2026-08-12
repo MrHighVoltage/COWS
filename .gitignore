@@ -226,5 +226,8 @@ __marimo__/
 *.test
 coverage.out
 
+# Personal Claude Code settings (project-shared skills/config are tracked)
+.claude/settings.local.json
+
 # Streamlit
 .streamlit/secrets.toml
