@@ -421,6 +421,19 @@ managed in the group edit view. The quota service remains the authorization and
 validation boundary; this UI arrangement only changes how administrators find
 the settings as the number of users and groups grows.
 
+The visual design lives entirely in `web/static/css/cows.css` as CSS
+custom-property tokens (`--ink`, `--paper`, `--surface`, `--line`, `--accent`,
+and semantic `--good`/`--warn`/`--bad` state colors) plus a small set of
+reusable components; there is no per-page styling. New UI work should reuse
+these tokens and components rather than hardcoding colors or introducing
+parallel ones. The one signature, content-derived component is the
+`.status-stamp` bracketed monospace tag (`[ RUNNING ]`), rendered through the
+shared `state-stamp` template (`web/templates/fragments/state-stamp.html`);
+use it for any new place the app reports workspace, runtime, or connection
+state, rather than printing raw state strings or inventing another status
+treatment. Plain tags (roles, groups) use the undecorated `.badge` class
+instead, so brackets consistently mean "this is a state."
+
 ## Future host-agent boundary
 
 The runtime interface is intentionally internal and domain-oriented. It keeps

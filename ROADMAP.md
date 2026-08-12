@@ -24,7 +24,10 @@ Implemented now:
   uploads, and streamed directory ZIP downloads;
 - optional persisted lifecycle-warning email delivery;
 - a bounded, runtime-aware readiness endpoint (`GET /readyz`) separate from
-  the liveness-only `GET /healthz`.
+  the liveness-only `GET /healthz`;
+- a token-based console design system (`ARCHITECTURE.md` frontend
+  architecture) with a shared status-stamp component for workspace, runtime,
+  and connection state.
 
 Not implemented or incomplete:
 
