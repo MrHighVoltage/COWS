@@ -208,8 +208,11 @@ decision record first:
   (grep confirms zero firewall/nftables/iptables code — M9 future work).
 - Metrics history and operational alerting (no metrics tables exist in
   migrations `0001`–`0023`; live sampling only — M6).
-- Named-volume restore/reattachment (admin recovery is download/remove only,
-  `internal/web/server.go:2459,2495` — M8/later).
+- Administrator-initiated named-volume restore/reattachment on behalf of a
+  user; admin recovery remains download/remove only. **Resolved for the
+  user-self-service case** (2026-08-14): a user can reattach their own
+  retained volumes/directories via `/storage` and workspace creation —
+  decision 0025, `internal/workspace/reattach_test.go`.
 - File previews, bulk file operations, archive extraction (absent from
   `internal/files` and `internal/fileagent`; extraction requires a dedicated
   security design per `AGENTS.md` — M7).

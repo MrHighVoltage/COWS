@@ -28,7 +28,9 @@ Local password reset and email outbox changes must follow
 Audit and live metrics changes must follow
 `docs/decisions/0021-audit-and-live-metrics.md`.
 Named-volume recovery changes must follow
-`docs/decisions/0022-named-volume-recovery.md`.
+`docs/decisions/0022-named-volume-recovery.md`. Self-service storage
+reattachment changes (user-owned retained volumes and archived directories)
+must follow `docs/decisions/0025-self-service-storage-reattachment.md`.
 Optional network isolation changes must follow
 `docs/decisions/0023-optional-workspace-network-isolation.md`.
 Health and readiness endpoint changes must follow
@@ -86,11 +88,17 @@ subordinate UID/GID mappings, not `keep-id`, and keep the COWS-owned
 per-container parent separate from mapped inner mount directories. Explicit
 workspace deletion archives the complete per-container directory in the
 sibling archive root; timeout cleanup must not silently delete or archive user
-data. Explicit deletion retains named volumes and must persist their tombstone
-metadata before removing the workspace record. Retained-volume metadata does
-not authorize user access, restore, or mounting; administrator recovery must
-use the separate authorized download/remove workflow. Directory ZIP downloads are streamed and bounded;
-do not add archive extraction without dedicated security tests.
+data. Explicit deletion retains named volumes and archived directories and
+must persist their tombstone metadata before removing the workspace record.
+A retained-storage lookup must always be scoped to the requesting party in
+the query itself; a missing tombstone and one owned by someone else must be
+indistinguishable to the caller. Self-service reattachment (decision 0025)
+and administrator recovery (decision 0022) are separate route namespaces and
+must not share a code path or gain a bypass into each other. Reattachment
+consumes (deletes) a tombstone atomically with the lookup, is single-use,
+and requires the destination mount to match the tombstone's recorded name
+and type. Directory ZIP downloads are streamed and bounded; do not add
+archive extraction without dedicated security tests.
 
 Workspace timeout policies are backend-enforced and must not depend on browser
 timers. Keep the initial no-connection stop and stopped-container deletion

@@ -271,11 +271,26 @@ Explicit user or administrator deletion is separate from timeout cleanup. Once
 the runtime container is confirmed removed, explicit deletion moves the
 complete per-container directory from `COWS_MOUNT_ROOT` to the sibling
 `COWS_MOUNT_ARCHIVE_ROOT`, preserving the stable COWS container directory name,
-records tombstones for retained named volumes, then removes the COWS workspace
-record and releases its allocated quota. The directory move is atomic and
-therefore requires both roots to be on the same filesystem. Timeout deletion
-keeps the record and leaves data in place so its lifecycle result and
-reconciliation context remain visible.
+records tombstones for retained named volumes and archived directories, then
+removes the COWS workspace record and releases its allocated quota. The
+directory move is atomic and therefore requires both roots to be on the same
+filesystem. Timeout deletion keeps the record and leaves data in place so its
+lifecycle result and reconciliation context remain visible.
+
+A tombstone owner can reattach their own retained volume or archived
+directory onto a new workspace (`/storage`, and a selector on workspace
+creation; decision 0025) instead of starting empty. Reattaching a volume
+passes its exact stored name to the runtime instead of the workspace's usual
+generated name — Podman attaches the existing volume by name, no new runtime
+capability was needed — and unconditionally applies the same ownership
+remap directory mounts already use, since every COWS container on a host
+shares one static rootless ID mapping and only the template's configured
+UID/GID can differ between the old and new workspace. Reattaching a
+directory renames the matching archived subdirectories into the new
+workspace's freshly created mount directories. Both consume the tombstone
+atomically with the ownership-scoped lookup, so reattachment is single-use
+and administrators get no bypass into a user's own retained storage; that
+remains the separate recovery workflow below.
 
 ## Packages and ownership
 
