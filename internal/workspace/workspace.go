@@ -30,6 +30,13 @@ var (
 	ErrFileManagerNotAvailable     = errors.New("workspace file manager is not available")
 	ErrWorkspaceCleanupIncomplete  = errors.New("workspace cleanup incomplete")
 	ErrUserCleanupRequiresDisabled = errors.New("user must be disabled before workspace cleanup")
+	// ErrRetainedStorageIncompatible covers every self-service reattachment
+	// rejection (decision 0025): the referenced tombstone does not exist, is
+	// not owned by the caller, or does not match a same-named mount of the
+	// requested type on the chosen template. These cases are deliberately
+	// not distinguished from each other in the returned error so a probing
+	// request cannot learn which one applied.
+	ErrRetainedStorageIncompatible = errors.New("retained storage is not available for this template")
 )
 
 type WorkspaceCleanupError struct {
@@ -48,6 +55,15 @@ type CreateWorkspaceInput struct {
 	TemplateID  string
 	CPUMillis   int64
 	MemoryBytes int64
+	// ReattachVolumesFrom maps a template volume-mount name to the workspace
+	// ID of a retained-volume tombstone the caller owns, to attach instead of
+	// a fresh empty volume (self-service storage reattachment, decision
+	// 0025). Nil/empty means every volume mount starts fresh, as before.
+	ReattachVolumesFrom map[string]string
+	// ReattachDirectoriesFrom is the workspace ID of a retained-directory
+	// tombstone the caller owns, restored into this workspace's matching
+	// directory mounts. Empty means every directory mount starts empty.
+	ReattachDirectoriesFrom string
 }
 
 // Scheduler is optional for persistence-only tests and is enabled by the
@@ -103,6 +119,15 @@ func (s *Service) CreateWorkspace(ctx context.Context, actorID string, input Cre
 	if err != nil {
 		return domain.Workspace{}, err
 	}
+	reattachingStorage := len(input.ReattachVolumesFrom) > 0 || input.ReattachDirectoriesFrom != ""
+	if reattachingStorage {
+		if s.runtime == nil {
+			return domain.Workspace{}, ErrRuntimeUnavailable
+		}
+		if err := validateReattachCompatibility(template.Configuration.Mounts, input); err != nil {
+			return domain.Workspace{}, err
+		}
+	}
 	releaseAdmission := s.acquireAdmission()
 	defer releaseAdmission()
 	if s.scheduler != nil {
@@ -119,8 +144,30 @@ func (s *Service) CreateWorkspace(ctx context.Context, actorID string, input Cre
 	if err != nil {
 		return domain.Workspace{}, fmt.Errorf("create workspace ID: %w", err)
 	}
+	// Claim (consume) every referenced tombstone before touching the
+	// filesystem or the runtime. A tombstone consumed here is gone even if a
+	// later step in this function fails; see decision 0025 for why this
+	// ordering was chosen over a stricter but more complex rollback.
+	volumeOverrides, err := s.consumeReattachedVolumes(ctx, user.ID, input.ReattachVolumesFrom)
+	if err != nil {
+		return domain.Workspace{}, err
+	}
 	if err := ensureMountDirectories(s.mountRoot, id, template.Configuration.Mounts); err != nil {
 		return domain.Workspace{}, err
+	}
+	if input.ReattachDirectoriesFrom != "" {
+		directory, err := s.store.ConsumeRetainedWorkspaceDirectory(ctx, input.ReattachDirectoriesFrom, user.ID)
+		if err != nil {
+			_ = removeMountDirectories(s.mountRoot, id, template.Configuration.Mounts)
+			if errors.Is(err, repository.ErrNotFound) {
+				return domain.Workspace{}, ErrRetainedStorageIncompatible
+			}
+			return domain.Workspace{}, err
+		}
+		if err := restoreDirectoryMounts(s.mountRoot, directory.ArchivePath, id, template.Configuration.Mounts, directory.Mounts); err != nil {
+			_ = removeMountDirectories(s.mountRoot, id, template.Configuration.Mounts)
+			return domain.Workspace{}, err
+		}
 	}
 	now := s.now().UTC()
 	workspace := domain.Workspace{
@@ -152,8 +199,83 @@ func (s *Service) CreateWorkspace(ctx context.Context, actorID string, input Cre
 		_ = removeMountDirectories(s.mountRoot, id, template.Configuration.Mounts)
 		return domain.Workspace{}, err
 	}
-	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: user.ID, EventType: "workspace.created", TargetType: "workspace", TargetID: id, Metadata: map[string]string{"template_id": template.ID}})
+	if len(volumeOverrides) > 0 {
+		if err := s.startWorkspace(ctx, user.ID, id, volumeOverrides); err != nil {
+			_ = s.store.DeleteWorkspace(ctx, id)
+			_ = s.store.ReleaseWorkspacePorts(ctx, id)
+			_ = removeMountDirectories(s.mountRoot, id, template.Configuration.Mounts)
+			return domain.Workspace{}, err
+		}
+	}
+	auditMetadata := map[string]string{"template_id": template.ID}
+	if reattachingStorage {
+		auditMetadata["reattached_volume_mounts"] = fmt.Sprintf("%d", len(volumeOverrides))
+		auditMetadata["reattached_directories"] = fmt.Sprintf("%t", input.ReattachDirectoriesFrom != "")
+	}
+	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: user.ID, EventType: "workspace.created", TargetType: "workspace", TargetID: id, Metadata: auditMetadata})
 	return workspace, nil
+}
+
+// validateReattachCompatibility rejects a reattachment request before any
+// tombstone is consumed: every referenced mount must exist on the chosen
+// template with the expected type (self-service storage reattachment,
+// decision 0025). It does not check ownership or existence of the
+// tombstones themselves — that happens when they are consumed, where a
+// missing/foreign tombstone and an incompatible one return the same error.
+func validateReattachCompatibility(mounts []domain.TemplateMount, input CreateWorkspaceInput) error {
+	byName := make(map[string]domain.TemplateMount, len(mounts))
+	for _, mount := range mounts {
+		byName[mount.Name] = mount
+	}
+	for mountName := range input.ReattachVolumesFrom {
+		mount, ok := byName[mountName]
+		if !ok || normalizedMountType(mount.Type) != domain.TemplateMountVolume {
+			return ErrRetainedStorageIncompatible
+		}
+	}
+	if input.ReattachDirectoriesFrom != "" {
+		hasDirectoryMount := false
+		for _, mount := range mounts {
+			if normalizedMountType(mount.Type) == domain.TemplateMountDirectory {
+				hasDirectoryMount = true
+				break
+			}
+		}
+		if !hasDirectoryMount {
+			return ErrRetainedStorageIncompatible
+		}
+	}
+	return nil
+}
+
+// consumeReattachedVolumes claims each requested volume tombstone (verifying
+// ownership) and, when the runtime supports it, confirms the underlying
+// volume still exists before accepting it — a stale tombstone is consumed
+// (deleted) either way, since by definition it no longer points at anything
+// worth keeping discoverable.
+func (s *Service) consumeReattachedVolumes(ctx context.Context, ownerUserID string, reattachFrom map[string]string) (map[string]string, error) {
+	if len(reattachFrom) == 0 {
+		return nil, nil
+	}
+	volumeRuntime, checkExistence := s.runtime.(runtime.VolumeRuntime)
+	overrides := make(map[string]string, len(reattachFrom))
+	for mountName, oldWorkspaceID := range reattachFrom {
+		volume, err := s.store.ConsumeRetainedWorkspaceVolume(ctx, oldWorkspaceID, mountName, ownerUserID)
+		if err != nil {
+			if errors.Is(err, repository.ErrNotFound) || errors.Is(err, repository.ErrConflict) {
+				return nil, ErrRetainedStorageIncompatible
+			}
+			return nil, err
+		}
+		if checkExistence {
+			exists, err := volumeRuntime.VolumeExists(ctx, volume.VolumeName)
+			if err != nil || !exists {
+				return nil, ErrRetainedStorageIncompatible
+			}
+		}
+		overrides[mountName] = volume.VolumeName
+	}
+	return overrides, nil
 }
 
 func selectedResources(template domain.WorkspaceTemplate, input CreateWorkspaceInput) (int64, int64, error) {
@@ -465,6 +587,21 @@ func (s *Service) SetDesiredState(ctx context.Context, actorID, workspaceID stri
 }
 
 func (s *Service) StartWorkspace(ctx context.Context, actorID, workspaceID string) error {
+	releaseAdmission := s.acquireAdmission()
+	defer releaseAdmission()
+	return s.startWorkspace(ctx, actorID, workspaceID, nil)
+}
+
+// startWorkspace is StartWorkspace's implementation, called either by
+// StartWorkspace (which acquires admission itself, below) or directly by
+// CreateWorkspace as part of self-service storage reattachment (decision
+// 0025), on a workspace that was just created and so is always taking the
+// RuntimeID == "" branch below. It deliberately does not acquire admission
+// itself: CreateWorkspace already holds it for the whole call when
+// reattaching, and admission's sync.Mutex is not reentrant, so acquiring it
+// twice on the same goroutine would deadlock. volumeOverrides is threaded
+// straight through to runtimeSpec.
+func (s *Service) startWorkspace(ctx context.Context, actorID, workspaceID string, volumeOverrides map[string]string) error {
 	if s.runtime == nil {
 		return ErrRuntimeUnavailable
 	}
@@ -477,8 +614,6 @@ func (s *Service) StartWorkspace(ctx context.Context, actorID, workspaceID strin
 		return err
 	}
 	defer release()
-	releaseAdmission := s.acquireAdmission()
-	defer releaseAdmission()
 	if value.ObservedState != string(runtime.StateRunning) && s.scheduler != nil {
 		if err := s.scheduler.CheckStart(ctx, value.OwnerUserID, domain.ResourceRequest{CPUMillis: value.AllocatedCPUMillis, MemoryBytes: value.AllocatedMemoryBytes}); err != nil {
 			return err
@@ -507,7 +642,7 @@ func (s *Service) StartWorkspace(ctx context.Context, actorID, workspaceID strin
 			return err
 		}
 		_ = s.updateOperationPhase(ctx, value.ID, "start:creating")
-		spec, err := s.runtimeSpec(ctx, value)
+		spec, err := s.runtimeSpec(ctx, value, volumeOverrides)
 		if err != nil {
 			return err
 		}
@@ -631,6 +766,12 @@ func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID stri
 	if err != nil {
 		return err
 	}
+	// Best-effort: a missing template must not block deletion. The tombstone
+	// just carries an empty name in that rare case.
+	templateName := ""
+	if template, templateErr := s.store.FindTemplateByID(ctx, value.TemplateID); templateErr == nil {
+		templateName = template.Name
+	}
 	archiveAction := archiveMountActivityAction(configuration.Mounts)
 	networkName := ""
 	if s.networkIsolation && len(configuration.Services) > 0 {
@@ -659,10 +800,15 @@ func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID stri
 		if err := s.store.CancelEmailNotificationsForWorkspace(ctx, value.ID); err != nil {
 			return err
 		}
-		if err := s.store.DeleteWorkspace(ctx, value.ID); err != nil {
+		_, archivePath := archiveActivityPaths(s.mountRoot, s.mountArchiveRoot, value.ID)
+		retainedDirectory := retainedWorkspaceDirectory(value, configuration.Mounts, templateName, archivePath, s.now().UTC())
+		if retainedDirectory != nil {
+			if err := s.store.DeleteWorkspaceRetainingStorage(ctx, value.ID, nil, retainedDirectory); err != nil {
+				return err
+			}
+		} else if err := s.store.DeleteWorkspace(ctx, value.ID); err != nil {
 			return err
 		}
-		_, archivePath := archiveActivityPaths(s.mountRoot, s.mountArchiveRoot, value.ID)
 		s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "workspace.deleted", TargetType: "workspace", TargetID: value.ID, Metadata: map[string]string{"runtime_id": value.RuntimeID, "archive_path": archivePath}})
 		return nil
 	}
@@ -713,8 +859,11 @@ func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID stri
 	}
 	// Keep the record when this database delete fails so an administrator can
 	// retry without losing the audit and reconciliation context.
-	retainedVolumes := retainedWorkspaceVolumes(value, configuration.Mounts, s.now().UTC())
-	if len(retainedVolumes) > 0 {
+	_, archivePath := archiveActivityPaths(s.mountRoot, s.mountArchiveRoot, value.ID)
+	retainedAt := s.now().UTC()
+	retainedVolumes := retainedWorkspaceVolumes(value, configuration.Mounts, templateName, retainedAt)
+	retainedDirectory := retainedWorkspaceDirectory(value, configuration.Mounts, templateName, archivePath, retainedAt)
+	if len(retainedVolumes) > 0 || retainedDirectory != nil {
 		if err := s.logArchiveActivity(value, "named_volumes_retained", "succeeded", nil); err != nil {
 			_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
 			return err
@@ -724,16 +873,15 @@ func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID stri
 		_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
 		return err
 	}
-	if err := s.store.DeleteWorkspaceRetainingVolumes(ctx, value.ID, retainedVolumes); err != nil {
+	if err := s.store.DeleteWorkspaceRetainingStorage(ctx, value.ID, retainedVolumes, retainedDirectory); err != nil {
 		_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
 		return err
 	}
-	_, archivePath := archiveActivityPaths(s.mountRoot, s.mountArchiveRoot, value.ID)
 	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "workspace.deleted", TargetType: "workspace", TargetID: value.ID, Metadata: map[string]string{"retained_volume_count": fmt.Sprintf("%d", len(retainedVolumes)), "runtime_id": value.RuntimeID, "archive_path": archivePath}})
 	return nil
 }
 
-func retainedWorkspaceVolumes(value domain.Workspace, mounts []domain.TemplateMount, retainedAt time.Time) []domain.RetainedWorkspaceVolume {
+func retainedWorkspaceVolumes(value domain.Workspace, mounts []domain.TemplateMount, templateName string, retainedAt time.Time) []domain.RetainedWorkspaceVolume {
 	volumes := make([]domain.RetainedWorkspaceVolume, 0)
 	for _, mount := range mounts {
 		if normalizedMountType(mount.Type) != domain.TemplateMountVolume {
@@ -744,6 +892,8 @@ func retainedWorkspaceVolumes(value domain.Workspace, mounts []domain.TemplateMo
 			WorkspaceID:   value.ID,
 			OwnerUserID:   value.OwnerUserID,
 			TemplateID:    value.TemplateID,
+			TemplateName:  templateName,
+			WorkspaceName: value.Name,
 			MountName:     mount.Name,
 			ContainerPath: mount.ContainerPath,
 			ReadOnly:      mount.ReadOnly,
@@ -751,6 +901,40 @@ func retainedWorkspaceVolumes(value domain.Workspace, mounts []domain.TemplateMo
 		})
 	}
 	return volumes
+}
+
+// retainedWorkspaceDirectory snapshots the workspace's directory-type mounts
+// into a tombstone record, mirroring retainedWorkspaceVolumes. It returns nil
+// when the workspace has no directory-type mounts, matching
+// archiveMountDirectories's own no-op condition, so callers never insert an
+// empty, pointless tombstone.
+func retainedWorkspaceDirectory(value domain.Workspace, mounts []domain.TemplateMount, templateName, archivePath string, retainedAt time.Time) *domain.RetainedWorkspaceDirectory {
+	directoryMounts := make([]domain.RetainedDirectoryMount, 0)
+	for _, mount := range mounts {
+		if normalizedMountType(mount.Type) != domain.TemplateMountDirectory {
+			continue
+		}
+		directoryMounts = append(directoryMounts, domain.RetainedDirectoryMount{
+			Name:          mount.Name,
+			NamePrefix:    mount.NamePrefix,
+			NameSuffix:    mount.NameSuffix,
+			ContainerPath: mount.ContainerPath,
+			ReadOnly:      mount.ReadOnly,
+		})
+	}
+	if len(directoryMounts) == 0 {
+		return nil
+	}
+	return &domain.RetainedWorkspaceDirectory{
+		WorkspaceID:   value.ID,
+		OwnerUserID:   value.OwnerUserID,
+		TemplateID:    value.TemplateID,
+		TemplateName:  templateName,
+		WorkspaceName: value.Name,
+		ArchivePath:   archivePath,
+		Mounts:        directoryMounts,
+		RetainedAt:    retainedAt,
+	}
 }
 
 // RecordWorkspaceConnection is the hook used by terminal, desktop, and
@@ -1166,7 +1350,12 @@ func normalizeObservedState(state runtime.State) string {
 	}
 }
 
-func (s *Service) runtimeSpec(ctx context.Context, value domain.Workspace) (runtime.WorkspaceSpec, error) {
+// runtimeSpec builds the runtime.WorkspaceSpec used to create value's
+// container. volumeOverrides, when non-nil, maps a mount name to an existing
+// volume name that mount should attach to instead of the workspace's own
+// deterministic name — the self-service reattachment mechanism (decision
+// 0025); it is nil for every ordinary start.
+func (s *Service) runtimeSpec(ctx context.Context, value domain.Workspace, volumeOverrides map[string]string) (runtime.WorkspaceSpec, error) {
 	configuration, err := s.effectiveConfiguration(ctx, value)
 	if err != nil {
 		return runtime.WorkspaceSpec{}, err
@@ -1196,7 +1385,7 @@ func (s *Service) runtimeSpec(ctx context.Context, value domain.Workspace) (runt
 	}
 	mounts := make([]runtime.Mount, 0, len(configuration.Mounts))
 	for _, definition := range configuration.Mounts {
-		mount, err := materializeMount(s.mountRoot, value.ID, definition)
+		mount, err := materializeMount(s.mountRoot, value.ID, definition, volumeOverrides[definition.Name])
 		if err != nil {
 			return runtime.WorkspaceSpec{}, err
 		}

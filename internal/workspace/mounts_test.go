@@ -12,16 +12,24 @@ import (
 
 func TestMaterializeMountUsesManagedVolumeAndDirectoryNames(t *testing.T) {
 	mount := domain.TemplateMount{Name: "designs", Type: domain.TemplateMountVolume, ContainerPath: "/foss/designs", NamePrefix: "workspace-", NameSuffix: "-data"}
-	value, err := materializeMount(t.TempDir(), "workspace-123", mount)
+	value, err := materializeMount(t.TempDir(), "workspace-123", mount, "")
 	if err != nil {
 		t.Fatalf("materialize volume: %v", err)
 	}
-	if value.Type != domain.TemplateMountVolume || value.Source != "cows-workspace-123-workspace-designs-data" {
+	if value.Type != domain.TemplateMountVolume || value.Source != "cows-workspace-123-workspace-designs-data" || !value.RemapOwnership {
 		t.Fatalf("unexpected volume mount: %+v", value)
 	}
 
+	value, err = materializeMount(t.TempDir(), "workspace-123", mount, "cows-old-workspace-designs-data")
+	if err != nil {
+		t.Fatalf("materialize volume with override: %v", err)
+	}
+	if value.Source != "cows-old-workspace-designs-data" {
+		t.Fatalf("volume override was not applied: %+v", value)
+	}
+
 	mount.Type = domain.TemplateMountDirectory
-	value, err = materializeMount("/srv/cows-mounts", "workspace-123", mount)
+	value, err = materializeMount("/srv/cows-mounts", "workspace-123", mount, "")
 	if err != nil {
 		t.Fatalf("materialize directory: %v", err)
 	}
