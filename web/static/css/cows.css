@@ -374,16 +374,20 @@ code { color: var(--text-mute); font-family: var(--font-mono); font-size: .82rem
 @media (prefers-reduced-motion: reduce) {
   .image-pull-spinner { animation-duration: 2.4s; }
 }
+.access-header { display: flex; flex-wrap: wrap; align-items: baseline; gap: .75rem; margin-bottom: 1rem; }
+.access-header-title { font-size: 1.3rem; }
+.access-back { color: var(--accent-strong); font-family: var(--font-mono); font-size: .85rem; font-weight: 700; text-decoration: none; white-space: nowrap; }
+.access-back:hover, .access-back:focus-visible { text-decoration: underline; }
 .terminal-panel { padding-bottom: 1rem; }
-.terminal { height: min(65vh, 42rem); min-height: 28rem; padding: .75rem; overflow: hidden; border: 1px solid var(--ink-line); border-radius: .3rem; color: #eef1f4; background: var(--ink-deep); font-family: 'COWS Terminal', 'JetBrainsMono Nerd Font', 'FiraCode Nerd Font', 'MesloLGS NF', 'JetBrains Mono', 'Fira Code', 'Symbols Nerd Font Mono', 'Cascadia Mono', 'DejaVu Sans Mono', monospace; }
+.terminal { height: min(80vh, 58rem); min-height: 24rem; padding: .75rem; overflow: hidden; border: 1px solid var(--ink-line); border-radius: .3rem; color: #eef1f4; background: var(--ink-deep); font-family: 'COWS Terminal', 'JetBrainsMono Nerd Font', 'FiraCode Nerd Font', 'MesloLGS NF', 'JetBrains Mono', 'Fira Code', 'Symbols Nerd Font Mono', 'Cascadia Mono', 'DejaVu Sans Mono', monospace; }
 .terminal .xterm { height: 100%; }
 .terminal-panel .alert { margin-bottom: 0; }
 .desktop-panel { padding-bottom: 1rem; }
-.desktop-display { display: flex; width: 100%; max-width: 100%; height: min(72vh, 50rem); min-width: 0; min-height: 32rem; overflow: hidden; border: 1px solid var(--ink-line); border-radius: .3rem; background: var(--ink-deep); }
+.desktop-display { display: flex; width: 100%; max-width: 100%; height: min(84vh, 62rem); min-width: 0; min-height: 26rem; overflow: hidden; border: 1px solid var(--ink-line); border-radius: .3rem; background: var(--ink-deep); }
 .desktop-display canvas { display: block; width: 100%; max-width: 100%; height: 100%; min-width: 0; margin: 0 auto; object-fit: contain; }
 .desktop-panel .alert { margin-bottom: 0; }
 .workspace-access-shell, .access-tabs, .access-panels, .access-panel, .access-service-panel { min-width: 0; max-width: 100%; }
-.access-tabs { display: flex; flex-wrap: wrap; align-items: stretch; gap: .35rem; margin-bottom: 1rem; border-bottom: 1px solid var(--line-strong); }
+.access-tabs { display: flex; flex-wrap: wrap; align-items: stretch; gap: .35rem; margin-bottom: .75rem; border-bottom: 1px solid var(--line-strong); }
 .access-tab-list { display: flex; flex: 0 1 auto; flex-wrap: wrap; gap: .35rem; align-items: flex-end; min-width: 0; }
 .access-tab { min-height: 2.25rem; margin-bottom: -1px; padding: .45rem .85rem; border: 1px solid transparent; border-bottom: 2px solid transparent; color: var(--text-mute); background: transparent; font-family: var(--font-mono); font: inherit; font-weight: 700; cursor: pointer; }
 .access-tab:hover, .access-tab.active { border-bottom-color: var(--accent); color: var(--accent-strong); background: transparent; }
@@ -419,13 +423,31 @@ code { color: var(--text-mute); font-family: var(--font-mono); font-size: .82rem
 .connection-status-connecting { color: var(--warn); background: var(--warn-bg); }
 .connection-status-disconnected, .connection-status-unavailable { color: var(--bad); background: var(--bad-bg); }
 .connection-toggle { min-width: 5.8rem; }
-.access-session-note { margin: .2rem 0 .65rem; color: var(--text-mute); font-size: .78rem; }
 .access-placeholder { margin: 0; }
-.workspace-access-shell:fullscreen { display: flex; flex-direction: column; width: 100vw; height: 100vh; padding: 0; overflow: hidden; background: var(--paper); }
-.workspace-access-shell:fullscreen .access-tabs { flex: 0 0 auto; margin-bottom: .5rem; }
-.workspace-access-shell:fullscreen .access-tabs { gap: .15rem; margin-bottom: .25rem; }
+.workspace-access-shell:fullscreen { position: relative; display: flex; flex-direction: column; width: 100vw; height: 100vh; padding: 0; overflow: hidden; background: var(--ink-deep); }
+/*
+ * The bar overlays the content instead of reserving a row, so it can slide
+ * off the top edge with nothing else reflowing underneath it. JS toggles
+ * .bar-hidden on the shell after a few seconds of no mouse movement;
+ * :focus-within always wins so keyboard users can still reach the controls.
+ */
+.workspace-access-shell:fullscreen .access-tabs {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  margin: 0;
+  padding: .35rem .6rem;
+  background: rgb(16 22 29 / 94%);
+  border-bottom: 1px solid var(--ink-line);
+  transition: transform .2s ease;
+}
+.workspace-access-shell.bar-hidden:fullscreen .access-tabs { transform: translateY(-100%); }
+.workspace-access-shell.bar-hidden:fullscreen .access-tabs:focus-within { transform: translateY(0); }
+.workspace-access-shell:fullscreen .access-tabs { gap: .15rem; }
 .workspace-access-shell:fullscreen .access-tab { min-height: 1.8rem; padding: .25rem .55rem; font-size: .82rem; }
-.workspace-access-shell:fullscreen .access-tab-controls { padding: .1rem .25rem; }
+.workspace-access-shell:fullscreen .access-tab-controls { padding: .1rem .25rem; background: transparent; }
 .workspace-access-shell:fullscreen .access-panels { display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; }
 .workspace-access-shell:fullscreen .access-panel:not([hidden]) { display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; }
 .workspace-access-shell:fullscreen .access-service-panel { display: flex; flex: 1 1 auto; flex-direction: column; width: 100%; height: auto; min-height: 0; padding: 0; border: 0; border-radius: 0; background: transparent; }
@@ -433,7 +455,6 @@ code { color: var(--text-mute); font-family: var(--font-mono); font-size: .82rem
 .workspace-access-shell:fullscreen .access-control-bar h2 { font-size: .85rem; }
 .workspace-access-shell:fullscreen .access-control-bar button { min-height: 1.7rem; padding: .2rem .4rem; font-size: .75rem; }
 .workspace-access-shell:fullscreen .terminal-identity select { min-height: 1.7rem; padding: .15rem .3rem; }
-.workspace-access-shell:fullscreen .access-session-note { display: none; }
 .workspace-access-shell:fullscreen .terminal, .workspace-access-shell:fullscreen .desktop-display { flex: 1 1 auto; width: 100%; max-width: 100%; height: auto; min-width: 0; min-height: 0; border: 0; border-radius: 0; }
 .workspace-access-shell:fullscreen [data-access-files] { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; }
 .workspace-access-shell:fullscreen .file-panel { display: flex; flex: 1 1 auto; flex-direction: column; width: 100%; max-width: 100%; min-width: 0; min-height: 0; margin: 0; padding: .5rem; border: 0; border-radius: 0; overflow: hidden; }

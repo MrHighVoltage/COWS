@@ -1,6 +1,5 @@
 {{ define "workspace-desktop-panel" }}
 <section class="desktop-panel access-service-panel" data-desktop data-desktop-url="/workspaces/{{ .ActiveWorkspace.ID }}/desktop/ws" data-credentials-url="/workspaces/{{ .ActiveWorkspace.ID }}/desktop/credentials" data-fullscreen-target="workspace-access-shell" data-controls-target="#desktop-controls" aria-labelledby="desktop-panel-title">
-  <p class="access-session-note">The session expires after inactivity or one hour.</p>
   <div id="desktop-display" class="desktop-display" role="application" aria-label="Workspace graphical desktop"></div>
   <p id="desktop-error" class="alert alert-error" role="alert" hidden></p>
 </section>
@@ -8,19 +7,16 @@
 
 {{ define "workspace-desktop-controls" }}
 <div id="desktop-controls" class="access-control-bar access-tab-controls" data-access-controls="desktop" role="group" aria-label="Desktop controls">
-  <span id="desktop-status" class="connection-status">Not connected</span><button class="secondary-button connection-toggle" type="button" data-desktop-connect>Connect</button><button class="secondary-button" type="button" data-desktop-fit>Fit</button><button class="secondary-button" type="button" data-desktop-fullscreen>Full screen</button>
+  <span id="desktop-status" class="connection-status" title="The session expires after inactivity or one hour.">Not connected</span><button class="secondary-button connection-toggle" type="button" data-desktop-connect>Connect</button><button class="secondary-button" type="button" data-desktop-fit>Fit</button><button class="secondary-button" type="button" data-desktop-fullscreen>Full screen</button>
 </div>
 {{ end }}
 
 {{ define "workspace-desktop-page" }}
 {{ template "base-start" . }}
-<section class="intro" aria-labelledby="desktop-title">
-  <p class="eyebrow">Workspace desktop</p>
-  <div class="title-row">
-    <div><h1 id="desktop-title">{{ .ActiveWorkspace.Name }}</h1><p class="lede">Authenticated graphical desktop session through COWS.</p></div>
-    <a class="secondary-button button-link" href="/workspaces">Back to workspaces</a>
-  </div>
-</section>
+<div class="access-header">
+  <a class="access-back" href="/workspaces">&larr; Workspaces</a>
+  <h1 class="access-header-title" id="desktop-title">{{ .ActiveWorkspace.Name }}</h1>
+</div>
 {{ template "workspace-desktop-controls" . }}
 {{ template "workspace-desktop-panel" . }}
 <script type="module" src="/static/js/desktop.js"></script>

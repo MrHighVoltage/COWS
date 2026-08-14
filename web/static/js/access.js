@@ -84,4 +84,30 @@ if (shell) {
   });
 
   activate(shell.dataset.initialTab || (tabs[0] && tabs[0].dataset.accessTab));
+
+  // In fullscreen, the tab/control bar overlays the content and hides itself
+  // after a few seconds of no mouse movement, dropping back down on the next
+  // move. :focus-within in CSS keeps it shown for keyboard users regardless.
+  let hideBarTimer = null;
+  function scheduleBarHide() {
+    if (hideBarTimer) clearTimeout(hideBarTimer);
+    hideBarTimer = setTimeout(() => {
+      if (document.fullscreenElement === shell) shell.classList.add("bar-hidden");
+    }, 2500);
+  }
+  shell.addEventListener("mousemove", () => {
+    if (document.fullscreenElement !== shell) return;
+    shell.classList.remove("bar-hidden");
+    scheduleBarHide();
+  });
+  document.addEventListener("fullscreenchange", () => {
+    if (document.fullscreenElement === shell) {
+      shell.classList.remove("bar-hidden");
+      scheduleBarHide();
+    } else {
+      shell.classList.remove("bar-hidden");
+      if (hideBarTimer) clearTimeout(hideBarTimer);
+      hideBarTimer = null;
+    }
+  });
 }
