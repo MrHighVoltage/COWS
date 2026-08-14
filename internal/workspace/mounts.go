@@ -1,14 +1,17 @@
 package workspace
 
 import (
+	"archive/zip"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/cows-project/cows/internal/archive"
 	"github.com/cows-project/cows/internal/domain"
 	"github.com/cows-project/cows/internal/runtime"
 )
@@ -116,13 +119,26 @@ func mountRootName(workspaceID string, mount domain.TemplateMount) string {
 	return filepath.Join(managedContainerName(workspaceID), managedMountName(workspaceID, mount))
 }
 
-func materializeMount(root, workspaceID string, mount domain.TemplateMount) (runtime.Mount, error) {
+// materializeMount resolves one template mount definition into a runtime
+// mount spec. volumeSourceOverride, when non-empty, is used as the volume
+// Source instead of the deterministic managedVolumeName — this is how
+// self-service reattachment (see decision 0025) attaches a retained volume
+// by its exact stored name instead of the fresh name this workspace would
+// otherwise compute. RemapOwnership is unconditional for volumes, matching
+// directory mounts: a freshly created empty volume has nothing to chown, so
+// the cost is negligible, and a reattached volume's content is always
+// corrected to the new container's identity on first start.
+func materializeMount(root, workspaceID string, mount domain.TemplateMount, volumeSourceOverride string) (runtime.Mount, error) {
 	if mount.Name == "" {
 		return runtime.Mount{}, ErrMountUnavailable
 	}
 	switch normalizedMountType(mount.Type) {
 	case domain.TemplateMountVolume:
-		return runtime.Mount{Name: mount.Name, Type: domain.TemplateMountVolume, Source: managedVolumeName(workspaceID, mount), ContainerPath: mount.ContainerPath, ReadOnly: mount.ReadOnly}, nil
+		source := managedVolumeName(workspaceID, mount)
+		if volumeSourceOverride != "" {
+			source = volumeSourceOverride
+		}
+		return runtime.Mount{Name: mount.Name, Type: domain.TemplateMountVolume, Source: source, ContainerPath: mount.ContainerPath, ReadOnly: mount.ReadOnly, RemapOwnership: true}, nil
 	case domain.TemplateMountDirectory:
 		if root == "" {
 			return runtime.Mount{}, ErrMountUnavailable
@@ -237,6 +253,67 @@ func archiveMountDirectories(root, archiveRoot, workspaceID string, mounts []dom
 	return nil
 }
 
+// restoreDirectoryMounts renames each archived directory-type mount from a
+// retained-directory tombstone into a newly created workspace's
+// corresponding mount directory (self-service reattachment, decision 0025).
+// It is all-or-nothing: every mount recorded in archivedMounts must have a
+// same-named directory-type mount in newMounts, or nothing is renamed and an
+// error is returned, so a tombstone is never left half-consumed. The
+// destination directories are the empty ones ensureMountDirectories already
+// created for the new workspace; each is removed immediately before its
+// Rename since not every filesystem honors POSIX's allowance to rename a
+// directory onto an existing empty one.
+func restoreDirectoryMounts(root, archivedContainerPath, newWorkspaceID string, newMounts []domain.TemplateMount, archivedMounts []domain.RetainedDirectoryMount) error {
+	if len(archivedMounts) == 0 {
+		return nil
+	}
+	if root == "" || archivedContainerPath == "" {
+		return ErrMountUnavailable
+	}
+	newByName := make(map[string]domain.TemplateMount, len(newMounts))
+	for _, mount := range newMounts {
+		if normalizedMountType(mount.Type) == domain.TemplateMountDirectory {
+			newByName[mount.Name] = mount
+		}
+	}
+	type move struct{ source, destination string }
+	moves := make([]move, 0, len(archivedMounts))
+	for _, archived := range archivedMounts {
+		newMount, ok := newByName[archived.Name]
+		if !ok {
+			return fmt.Errorf("%w: no matching directory mount %q in the new template", ErrMountUnavailable, archived.Name)
+		}
+		archivedEntryName := archived.NamePrefix + archived.Name + archived.NameSuffix
+		source, err := filepath.Abs(filepath.Join(archivedContainerPath, archivedEntryName))
+		if err != nil {
+			return ErrMountUnavailable
+		}
+		destination, err := filepath.Abs(filepath.Join(root, mountRootName(newWorkspaceID, newMount)))
+		if err != nil {
+			return ErrMountUnavailable
+		}
+		moves = append(moves, move{source: source, destination: destination})
+	}
+	for _, m := range moves {
+		if _, err := os.Lstat(m.source); err != nil {
+			return ErrMountUnavailable
+		}
+	}
+	for _, m := range moves {
+		// The destination is the empty directory ensureMountDirectories just
+		// created. Remove it explicitly rather than relying on Rename to
+		// replace an empty directory in place: that POSIX allowance is not
+		// honored consistently by every filesystem this runs on.
+		if err := os.Remove(m.destination); err != nil {
+			return ErrMountUnavailable
+		}
+		if err := os.Rename(m.source, m.destination); err != nil {
+			return ErrMountUnavailable
+		}
+	}
+	return nil
+}
+
 type archiveActivity struct {
 	Timestamp   string `json:"timestamp"`
 	Action      string `json:"action"`
@@ -335,5 +412,78 @@ func removeMountDirectories(root, workspaceID string, mounts []domain.TemplateMo
 	if err := rootHandle.RemoveAll(managedContainerName(workspaceID)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return ErrMountUnavailable
 	}
+	return nil
+}
+
+// OpenRetainedDirectoryZip streams a bounded ZIP of a retained-directory
+// tombstone's archived content without consuming the tombstone (self-service
+// download, decision 0025). Ownership is verified before any filesystem
+// access; actorID must be the tombstone's own owner, never an administrator
+// bypass, since this is the self-service path, distinct from the
+// administrator recovery routes.
+func (s *Service) OpenRetainedDirectoryZip(ctx context.Context, actorID, workspaceID string) (io.ReadCloser, string, error) {
+	user, err := s.requireActor(ctx, actorID)
+	if err != nil {
+		return nil, "", err
+	}
+	directory, err := s.store.FindRetainedWorkspaceDirectory(ctx, workspaceID, user.ID)
+	if err != nil {
+		return nil, "", err
+	}
+	if s.mountArchiveRoot == "" {
+		return nil, "", ErrMountUnavailable
+	}
+	root, err := os.OpenRoot(s.mountArchiveRoot)
+	if err != nil {
+		return nil, "", ErrMountUnavailable
+	}
+	entryName := managedContainerName(directory.WorkspaceID)
+	if _, err := root.Lstat(entryName); err != nil {
+		root.Close()
+		return nil, "", ErrMountUnavailable
+	}
+	reader, writer := io.Pipe()
+	go func() {
+		defer root.Close()
+		zipWriter := zip.NewWriter(writer)
+		state := archive.State{}
+		walkErr := archive.WriteZip(ctx, root, entryName, zipWriter, &state)
+		closeErr := zipWriter.Close()
+		if walkErr != nil {
+			_ = writer.CloseWithError(walkErr)
+			return
+		}
+		_ = writer.CloseWithError(closeErr)
+	}()
+	name := directory.WorkspaceName
+	if name == "" {
+		name = directory.WorkspaceID
+	}
+	return reader, name, nil
+}
+
+// DeleteRetainedDirectory permanently discards a retained-directory
+// tombstone and its archived content (self-service, decision 0025). The
+// filesystem removal is best-effort, matching the compensating-cleanup
+// pattern used elsewhere in this package (e.g. removeMountDirectories):
+// the tombstone is already gone from the database by the time it runs, so a
+// filesystem error here must not be reported as the operation having failed.
+func (s *Service) DeleteRetainedDirectory(ctx context.Context, actorID, workspaceID string) error {
+	user, err := s.requireActor(ctx, actorID)
+	if err != nil {
+		return err
+	}
+	directory, err := s.store.ConsumeRetainedWorkspaceDirectory(ctx, workspaceID, user.ID)
+	if err != nil {
+		return err
+	}
+	if s.mountArchiveRoot == "" {
+		return nil
+	}
+	path, err := filepath.Abs(filepath.Join(s.mountArchiveRoot, managedContainerName(directory.WorkspaceID)))
+	if err != nil {
+		return nil
+	}
+	_ = os.RemoveAll(path)
 	return nil
 }
