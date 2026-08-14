@@ -27,7 +27,10 @@ Implemented now:
   the liveness-only `GET /healthz`;
 - a token-based console design system (`ARCHITECTURE.md` frontend
   architecture) with a shared status-stamp component for workspace, runtime,
-  and connection state.
+  and connection state;
+- self-service reattachment of a user's own retained named volumes and
+  archived directories onto a new workspace, at `/storage` and from
+  workspace creation (decision 0025).
 
 Not implemented or incomplete:
 
@@ -48,7 +51,10 @@ Not implemented or incomplete:
 - arbitrary application/service exposure; this is intentionally out of scope;
 - email verification, OpenID Connect, and institutional identity provisioning;
 - metrics history and operational alerting beyond the live administrator view;
-- named-volume restore/reattachment beyond administrator recovery/download;
+- administrator-initiated named-volume restore/reattachment on behalf of a
+  user; the administrator recovery view remains download/remove only. (User
+  self-service reattachment of their own retained storage is implemented;
+  see decision 0025.);
 - archive extraction, file previews, bulk file operations, and stronger
   filesystem race/integration coverage;
 - multi-host agents, host pools, PostgreSQL, high availability, GPUs, and

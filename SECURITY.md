@@ -201,10 +201,23 @@ operations, and stronger quota accounting are not implemented. Before those
 features are added, include explicit ZIP-slip, ZIP-bomb, symlink replacement,
 file-count, temporary-storage, and generated-download-size tests.
 
-Explicit deletion retains named volumes and records tombstone metadata before
-the workspace row is removed. A retained-volume record is not authorization to
-mount or restore that volume. Administrators can use the separate recovery view
-to download or remove a validated tombstone, with audit events.
+Explicit deletion retains named volumes and archived directories and records
+tombstone metadata before the workspace row is removed. A retained-storage
+record is not authorization by itself; every lookup is scoped to the
+requesting party in the query, so a missing tombstone and one owned by
+someone else are indistinguishable to the caller. Administrators can use the
+separate recovery view to download or remove any validated volume tombstone,
+with audit events. Independently, a user can browse, download, discard, or
+reattach their own retained volumes and archived directories onto a new
+workspace at `/storage` and from workspace creation — a separate route
+namespace with no administrator bypass (decision 0025). Reattachment
+consumes the tombstone atomically with the lookup (single-use), requires the
+destination mount to match the tombstone's recorded name and type, and
+unconditionally re-chowns a reattached volume's content to the new
+container's identity (Podman's `"U"` mount option, already used for
+directory mounts) since every COWS container on a host shares the same
+static rootless ID mapping and only the template's configured UID/GID can
+differ.
 
 Explicit deletion also writes an append-only, permission-restricted
 `archive-activity.jsonl` record containing workspace and runtime/container
@@ -265,11 +278,11 @@ template allowlist of container UIDs, and desktop access uses a template-approve
 automatically authenticate using the template-selected VNC secret when one is
 configured. Both require runtime support for the selected container. Podman lifecycle
 operations are limited to approved images, labels, and runtime-enforced
-resource limits. Historical metrics, retained-volume restore, stronger
-host-level egress policy, and deeper runtime integration still need review. Do
-not deploy it as a service for untrusted users. Offline administrator recovery,
-runtime-aware readiness, tested backup/restore, and restart-safe lifecycle
-recovery are not yet complete.
+resource limits. Historical metrics, administrator-initiated retained-volume
+restore on behalf of a user, stronger host-level egress policy, and deeper
+runtime integration still need review. Do not deploy it as a service for
+untrusted users. Offline administrator recovery, tested backup/restore, and
+restart-safe lifecycle recovery are not yet complete.
 
 ## Reporting vulnerabilities
 
