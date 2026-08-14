@@ -1,13 +1,10 @@
 {{ define "workspace-access-page" }}
 {{ template "base-start" . }}
 <link rel="stylesheet" href="/static/vendor/xterm/xterm.css">
-<section class="intro" aria-labelledby="workspace-access-title">
-  <p class="eyebrow">Workspace access</p>
-  <div class="title-row">
-    <div><h1 id="workspace-access-title">{{ .ActiveWorkspace.Name }}</h1><p class="lede">Access your workspace through COWS.</p></div>
-    <a class="secondary-button button-link" href="/workspaces">Back to workspaces</a>
-  </div>
-</section>
+<div class="access-header">
+  <a class="access-back" href="/workspaces">&larr; Workspaces</a>
+  <h1 class="access-header-title" id="workspace-access-title">{{ .ActiveWorkspace.Name }}</h1>
+</div>
 
 <section id="workspace-access-shell" class="workspace-access-shell" data-access data-initial-tab="{{ .AccessTab }}" data-files-url="{{ .AccessFilesURL }}" aria-label="Workspace access methods">
   <div class="access-tabs">
