@@ -244,11 +244,35 @@ type pageData struct {
 	AuditEventFilter            string
 	Metrics                     *metricsView
 	RetainedVolumes             []retainedVolumeView
+	MyRetainedVolumes           []retainedVolumeView
+	MyRetainedDirectories       []domain.RetainedWorkspaceDirectory
+	ReattachVolumeOptions       map[string][]reattachChoice
+	ReattachDirectoryOptions    []reattachDirectoryChoice
 }
 
 type retainedVolumeView struct {
 	domain.RetainedWorkspaceVolume
 	RuntimePresent bool
+}
+
+// reattachChoice is one selectable retained-volume tombstone offered for a
+// specific mount name on the workspace-creation form (self-service storage
+// reattachment, decision 0025).
+type reattachChoice struct {
+	WorkspaceID   string
+	WorkspaceName string
+	RetainedAt    time.Time
+}
+
+// reattachDirectoryChoice is the directory equivalent. Unlike volumes, a
+// directory tombstone covers every directory mount it was archived with at
+// once, so it is offered once per tombstone rather than once per mount;
+// MountNames lists what it will restore for display.
+type reattachDirectoryChoice struct {
+	WorkspaceID   string
+	WorkspaceName string
+	RetainedAt    time.Time
+	MountNames    string
 }
 
 type metricsWorkspaceView struct {
@@ -437,6 +461,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /workspaces/{id}/files/delete", s.workspaceFileDelete)
 	mux.HandleFunc("POST /workspaces/{id}/files/rename", s.workspaceFileRename)
 	mux.HandleFunc("POST /workspaces/{id}/files/upload", s.workspaceFileUpload)
+	mux.HandleFunc("GET /storage", s.storagePage)
+	mux.HandleFunc("GET /storage/volumes/{workspace_id}/{mount_name}/download.zip", s.storageVolumeDownload)
+	mux.HandleFunc("POST /storage/volumes/{workspace_id}/{mount_name}/delete", s.storageVolumeDelete)
+	mux.HandleFunc("GET /storage/directories/{workspace_id}/download.zip", s.storageDirectoryDownload)
+	mux.HandleFunc("POST /storage/directories/{workspace_id}/delete", s.storageDirectoryDelete)
 	mux.HandleFunc("GET /admin/users", s.adminUsers)
 	mux.HandleFunc("GET /admin/users/import", s.adminUsersImport)
 	mux.HandleFunc("POST /admin/users/import/preview", s.adminUsersImportPreview)
@@ -839,9 +868,51 @@ func (s *Server) workspacesNew(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to load workspace templates", http.StatusInternalServerError)
 		return
 	}
-	data := pageData{Title: "Create workspace | COWS", User: user, Templates: templates, CSRFToken: s.ensureCSRF(w, r)}
+	volumeOptions, directoryOptions := s.reattachOptionsForUser(r.Context(), user.ID)
+	data := pageData{Title: "Create workspace | COWS", User: user, Templates: templates, CSRFToken: s.ensureCSRF(w, r),
+		ReattachVolumeOptions: volumeOptions, ReattachDirectoryOptions: directoryOptions}
 	s.setWorkspaceAvailability(r.Context(), user.ID, &data)
 	s.render(w, http.StatusOK, "workspace-new-page", data)
+}
+
+// reattachOptionsForUser loads the current user's own retained storage for
+// the workspace-creation form's reattachment selectors (decision 0025).
+// Volume options are keyed by mount name, matching how the backend matches
+// them at submission time; directory options are offered once per tombstone
+// since one tombstone restores every directory mount it was archived with.
+func (s *Server) reattachOptionsForUser(ctx context.Context, userID string) (map[string][]reattachChoice, []reattachDirectoryChoice) {
+	if s.options.Store == nil {
+		return nil, nil
+	}
+	volumes, err := s.options.Store.ListRetainedWorkspaceVolumesForOwner(ctx, userID)
+	if err != nil {
+		return nil, nil
+	}
+	volumeOptions := make(map[string][]reattachChoice, len(volumes))
+	for _, volume := range volumes {
+		name := volume.WorkspaceName
+		if name == "" {
+			name = volume.WorkspaceID
+		}
+		volumeOptions[volume.MountName] = append(volumeOptions[volume.MountName], reattachChoice{WorkspaceID: volume.WorkspaceID, WorkspaceName: name, RetainedAt: volume.RetainedAt})
+	}
+	directories, err := s.options.Store.ListRetainedWorkspaceDirectoriesForOwner(ctx, userID)
+	if err != nil {
+		return volumeOptions, nil
+	}
+	directoryOptions := make([]reattachDirectoryChoice, 0, len(directories))
+	for _, directory := range directories {
+		name := directory.WorkspaceName
+		if name == "" {
+			name = directory.WorkspaceID
+		}
+		mountNames := make([]string, 0, len(directory.Mounts))
+		for _, mount := range directory.Mounts {
+			mountNames = append(mountNames, mount.Name)
+		}
+		directoryOptions = append(directoryOptions, reattachDirectoryChoice{WorkspaceID: directory.WorkspaceID, WorkspaceName: name, RetainedAt: directory.RetainedAt, MountNames: strings.Join(mountNames, ", ")})
+	}
+	return volumeOptions, directoryOptions
 }
 
 func (s *Server) workspacesCreate(w http.ResponseWriter, r *http.Request) {
@@ -859,6 +930,8 @@ func (s *Server) workspacesCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	form := workspaceFormData{Name: r.FormValue("name"), TemplateID: r.FormValue("template_id"), CPUMillis: r.FormValue("cpu_millis"), MemoryMiB: r.FormValue("memory_mib")}
+	reattachVolumesFrom := reattachVolumeSelections(r.PostForm)
+	reattachDirectoriesFrom := strings.TrimSpace(r.FormValue("reattach_directories"))
 	cpuMillis, err := parseOptionalPositiveInt(form.CPUMillis)
 	if err != nil {
 		form.Error = "The selected CPU value is invalid."
@@ -866,7 +939,10 @@ func (s *Server) workspacesCreate(w http.ResponseWriter, r *http.Request) {
 		memoryMiB, memoryErr := parseOptionalPositiveInt(form.MemoryMiB)
 		if memoryErr != nil || memoryMiB > (1<<62)/(1<<20) {
 			form.Error = "The selected memory value is invalid."
-		} else if _, err := s.workspace.CreateWorkspace(r.Context(), user.ID, workspace.CreateWorkspaceInput{Name: form.Name, TemplateID: form.TemplateID, CPUMillis: cpuMillis, MemoryBytes: memoryMiB * (1 << 20)}); err != nil {
+		} else if _, err := s.workspace.CreateWorkspace(r.Context(), user.ID, workspace.CreateWorkspaceInput{
+			Name: form.Name, TemplateID: form.TemplateID, CPUMillis: cpuMillis, MemoryBytes: memoryMiB * (1 << 20),
+			ReattachVolumesFrom: reattachVolumesFrom, ReattachDirectoriesFrom: reattachDirectoriesFrom,
+		}); err != nil {
 			form.Error = workspaceFormError(err)
 		} else {
 			http.Redirect(w, r, "/workspaces", http.StatusSeeOther)
@@ -875,11 +951,35 @@ func (s *Server) workspacesCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	if form.Error != "" {
 		templates, _ := s.workspace.ListAvailableTemplates(r.Context(), user.ID)
-		data := pageData{Title: "Create workspace | COWS", User: user, Templates: templates, CSRFToken: s.ensureCSRF(w, r), Workspace: form}
+		volumeOptions, directoryOptions := s.reattachOptionsForUser(r.Context(), user.ID)
+		data := pageData{Title: "Create workspace | COWS", User: user, Templates: templates, CSRFToken: s.ensureCSRF(w, r), Workspace: form,
+			ReattachVolumeOptions: volumeOptions, ReattachDirectoryOptions: directoryOptions}
 		s.setWorkspaceAvailability(r.Context(), user.ID, &data)
 		s.render(w, http.StatusBadRequest, "workspace-new-page", data)
 		return
 	}
+}
+
+// reattachVolumeSelections extracts the workspace-creation form's per-mount
+// reattachment choices. Fields use the reattach_volume__<mountName> naming
+// convention (mount names are restricted to a validated character set by
+// template validation, so embedding one directly in a field name is safe);
+// a blank selection means "start empty" and is dropped rather than kept as
+// an empty override.
+func reattachVolumeSelections(form url.Values) map[string]string {
+	const prefix = "reattach_volume__"
+	selections := make(map[string]string)
+	for key, values := range form {
+		if !strings.HasPrefix(key, prefix) || len(values) == 0 {
+			continue
+		}
+		value := strings.TrimSpace(values[0])
+		if value == "" {
+			continue
+		}
+		selections[strings.TrimPrefix(key, prefix)] = value
+	}
+	return selections
 }
 
 func (s *Server) setWorkspaceAvailability(ctx context.Context, userID string, data *pageData) {
@@ -1395,6 +1495,151 @@ func (s *Server) workspaceFileUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.redirectFiles(w, r, r.PathValue("id"), r.FormValue("mount"), r.FormValue("path"))
+}
+
+// storagePage lists the current user's own retained volumes and archived
+// directories (self-service storage, decision 0025). This is deliberately a
+// separate route and handler from /admin/volumes: that page lists every
+// user's retained storage for administrators, this one is owner-scoped by
+// query, and the two must never share a code path where a future edit could
+// blur the authorization boundary between them.
+func (s *Server) storagePage(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	data := pageData{Title: "My storage | COWS", User: user, CSRFToken: s.ensureCSRF(w, r)}
+	if s.options.Store != nil {
+		if volumes, err := s.options.Store.ListRetainedWorkspaceVolumesForOwner(r.Context(), user.ID); err == nil {
+			volumeRuntime, _ := s.runtime.(runtime.VolumeRuntime)
+			views := make([]retainedVolumeView, 0, len(volumes))
+			for _, volume := range volumes {
+				view := retainedVolumeView{RetainedWorkspaceVolume: volume}
+				if volumeRuntime != nil {
+					view.RuntimePresent, _ = volumeRuntime.VolumeExists(r.Context(), volume.VolumeName)
+				}
+				views = append(views, view)
+			}
+			data.MyRetainedVolumes = views
+		}
+		if directories, err := s.options.Store.ListRetainedWorkspaceDirectoriesForOwner(r.Context(), user.ID); err == nil {
+			data.MyRetainedDirectories = directories
+		}
+	}
+	s.render(w, http.StatusOK, "storage-page", data)
+}
+
+func (s *Server) recordStorageAudit(ctx context.Context, actorID, eventType, targetType, targetID string, metadata map[string]string) {
+	if s.options.Store != nil {
+		_ = s.options.Store.RecordAuditEvent(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: eventType, TargetType: targetType, TargetID: targetID, Metadata: metadata, CreatedAt: time.Now().UTC()})
+	}
+}
+
+func (s *Server) storageVolumeDownload(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	if s.options.Store == nil {
+		http.Error(w, "volume metadata is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	workspaceID, mountName := r.PathValue("workspace_id"), r.PathValue("mount_name")
+	volume, err := s.options.Store.FindRetainedWorkspaceVolume(r.Context(), workspaceID, mountName, user.ID)
+	if errors.Is(err, repository.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to load retained volume", http.StatusInternalServerError)
+		return
+	}
+	reader, err := s.files.OpenRuntimeZip(r.Context(), runtime.FileAccessSpec{MountType: "volume", Source: volume.VolumeName, ContainerPath: volume.ContainerPath, ContainerUID: 0, ContainerGID: 0, ReadOnly: true}, volume.MountName)
+	if err != nil {
+		http.Error(w, "the retained volume could not be read", http.StatusServiceUnavailable)
+		return
+	}
+	defer reader.Close()
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+volume.MountName+`.zip"`)
+	s.recordStorageAudit(r.Context(), user.ID, "storage.volume_downloaded", "volume", volume.VolumeName, map[string]string{"workspace_id": volume.WorkspaceID, "mount_name": volume.MountName})
+	_, _ = io.Copy(w, reader)
+}
+
+func (s *Server) storageVolumeDelete(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if !s.validCSRF(r) {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return
+	}
+	if s.options.Store == nil {
+		http.Error(w, "volume metadata is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	workspaceID, mountName := r.PathValue("workspace_id"), r.PathValue("mount_name")
+	volume, err := s.options.Store.ConsumeRetainedWorkspaceVolume(r.Context(), workspaceID, mountName, user.ID)
+	if errors.Is(err, repository.ErrNotFound) || errors.Is(err, repository.ErrConflict) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to remove retained volume", http.StatusInternalServerError)
+		return
+	}
+	if volumeRuntime, ok := s.runtime.(runtime.VolumeRuntime); ok {
+		_ = volumeRuntime.RemoveVolume(r.Context(), volume.VolumeName)
+	}
+	s.recordStorageAudit(r.Context(), user.ID, "storage.volume_deleted", "volume", volume.VolumeName, map[string]string{"workspace_id": volume.WorkspaceID, "mount_name": volume.MountName})
+	http.Redirect(w, r, "/storage", http.StatusSeeOther)
+}
+
+func (s *Server) storageDirectoryDownload(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := r.PathValue("workspace_id")
+	reader, name, err := s.workspace.OpenRetainedDirectoryZip(r.Context(), user.ID, workspaceID)
+	if errors.Is(err, repository.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, "the retained directory could not be read", http.StatusServiceUnavailable)
+		return
+	}
+	defer reader.Close()
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`.zip"`)
+	s.recordStorageAudit(r.Context(), user.ID, "storage.directory_downloaded", "directory", workspaceID, map[string]string{"workspace_id": workspaceID})
+	_, _ = io.Copy(w, reader)
+}
+
+func (s *Server) storageDirectoryDelete(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if !s.validCSRF(r) {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return
+	}
+	workspaceID := r.PathValue("workspace_id")
+	if err := s.workspace.DeleteRetainedDirectory(r.Context(), user.ID, workspaceID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) || errors.Is(err, repository.ErrConflict) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "failed to remove retained directory", http.StatusInternalServerError)
+		return
+	}
+	s.recordStorageAudit(r.Context(), user.ID, "storage.directory_deleted", "directory", workspaceID, map[string]string{"workspace_id": workspaceID})
+	http.Redirect(w, r, "/storage", http.StatusSeeOther)
 }
 
 func (s *Server) workspaceFileMutation(w http.ResponseWriter, r *http.Request, action func(*domain.User, string) error) {
