@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -766,76 +767,103 @@ func (s *Store) DeleteWorkspace(ctx context.Context, id string) error {
 	return nil
 }
 
-func (s *Store) DeleteWorkspaceRetainingVolumes(ctx context.Context, id string, volumes []domain.RetainedWorkspaceVolume) error {
+func (s *Store) DeleteWorkspaceRetainingStorage(ctx context.Context, id string, volumes []domain.RetainedWorkspaceVolume, directory *domain.RetainedWorkspaceDirectory) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin retained volume transaction: %w", err)
+		return fmt.Errorf("begin retained storage transaction: %w", err)
 	}
 	defer tx.Rollback()
 	for _, volume := range volumes {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO retained_workspace_volumes
-			(volume_name, workspace_id, owner_user_id, template_id, mount_name, container_path, read_only, retained_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, volume.VolumeName, volume.WorkspaceID, volume.OwnerUserID,
-			volume.TemplateID, volume.MountName, volume.ContainerPath, boolInt(volume.ReadOnly), unixOrZero(volume.RetainedAt)); err != nil {
+			(volume_name, workspace_id, owner_user_id, template_id, mount_name, container_path, read_only, retained_at, workspace_name, template_name)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, volume.VolumeName, volume.WorkspaceID, volume.OwnerUserID,
+			volume.TemplateID, volume.MountName, volume.ContainerPath, boolInt(volume.ReadOnly), unixOrZero(volume.RetainedAt),
+			volume.WorkspaceName, volume.TemplateName); err != nil {
 			return fmt.Errorf("retain workspace volume metadata: %w", err)
+		}
+	}
+	if directory != nil {
+		mountsJSON, err := json.Marshal(directory.Mounts)
+		if err != nil {
+			return fmt.Errorf("encode retained directory mounts: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO retained_workspace_directories
+			(workspace_id, owner_user_id, template_id, template_name, workspace_name, archive_path, mounts_json, retained_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, directory.WorkspaceID, directory.OwnerUserID, directory.TemplateID, directory.TemplateName,
+			directory.WorkspaceName, directory.ArchivePath, string(mountsJSON), unixOrZero(directory.RetainedAt)); err != nil {
+			return fmt.Errorf("retain workspace directory metadata: %w", err)
 		}
 	}
 	result, err := tx.ExecContext(ctx, "DELETE FROM workspaces WHERE id = ?", id)
 	if err != nil {
-		return fmt.Errorf("delete workspace with retained volumes: %w", err)
+		return fmt.Errorf("delete workspace with retained storage: %w", err)
 	}
 	count, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("check workspace deletion with retained volumes: %w", err)
+		return fmt.Errorf("check workspace deletion with retained storage: %w", err)
 	}
 	if count == 0 {
 		return repository.ErrNotFound
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit retained volume transaction: %w", err)
+		return fmt.Errorf("commit retained storage transaction: %w", err)
 	}
 	return nil
 }
 
 func (s *Store) ListRetainedWorkspaceVolumes(ctx context.Context, workspaceID string) ([]domain.RetainedWorkspaceVolume, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT volume_name, workspace_id, owner_user_id, template_id,
-		mount_name, container_path, read_only, retained_at
+		mount_name, container_path, read_only, retained_at, workspace_name, template_name
 		FROM retained_workspace_volumes WHERE workspace_id = ? ORDER BY mount_name`, workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("list retained workspace volumes: %w", err)
 	}
 	defer rows.Close()
-	volumes := make([]domain.RetainedWorkspaceVolume, 0)
-	for rows.Next() {
-		var volume domain.RetainedWorkspaceVolume
-		var readOnly int
-		var retainedUnix int64
-		if err := rows.Scan(&volume.VolumeName, &volume.WorkspaceID, &volume.OwnerUserID, &volume.TemplateID,
-			&volume.MountName, &volume.ContainerPath, &readOnly, &retainedUnix); err != nil {
-			return nil, fmt.Errorf("scan retained workspace volume: %w", err)
-		}
-		volume.ReadOnly = readOnly != 0
-		volume.RetainedAt = time.Unix(retainedUnix, 0).UTC()
-		volumes = append(volumes, volume)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate retained workspace volumes: %w", err)
+	volumes, err := scanRetainedWorkspaceVolumes(rows)
+	if err != nil {
+		return nil, err
 	}
 	return volumes, nil
 }
 
 func (s *Store) ListAllRetainedWorkspaceVolumes(ctx context.Context) ([]domain.RetainedWorkspaceVolume, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT volume_name, workspace_id, owner_user_id, template_id,
-		mount_name, container_path, read_only, retained_at FROM retained_workspace_volumes ORDER BY retained_at DESC, volume_name`)
+		mount_name, container_path, read_only, retained_at, workspace_name, template_name
+		FROM retained_workspace_volumes ORDER BY retained_at DESC, volume_name`)
 	if err != nil {
 		return nil, fmt.Errorf("list all retained workspace volumes: %w", err)
 	}
 	defer rows.Close()
+	volumes, err := scanRetainedWorkspaceVolumes(rows)
+	if err != nil {
+		return nil, err
+	}
+	return volumes, nil
+}
+
+func (s *Store) ListRetainedWorkspaceVolumesForOwner(ctx context.Context, ownerUserID string) ([]domain.RetainedWorkspaceVolume, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT volume_name, workspace_id, owner_user_id, template_id,
+		mount_name, container_path, read_only, retained_at, workspace_name, template_name
+		FROM retained_workspace_volumes WHERE owner_user_id = ? ORDER BY retained_at DESC, volume_name`, ownerUserID)
+	if err != nil {
+		return nil, fmt.Errorf("list retained workspace volumes for owner: %w", err)
+	}
+	defer rows.Close()
+	volumes, err := scanRetainedWorkspaceVolumes(rows)
+	if err != nil {
+		return nil, err
+	}
+	return volumes, nil
+}
+
+func scanRetainedWorkspaceVolumes(rows *sql.Rows) ([]domain.RetainedWorkspaceVolume, error) {
 	volumes := make([]domain.RetainedWorkspaceVolume, 0)
 	for rows.Next() {
 		var volume domain.RetainedWorkspaceVolume
-		var readOnly, retainedUnix int64
-		if err := rows.Scan(&volume.VolumeName, &volume.WorkspaceID, &volume.OwnerUserID, &volume.TemplateID, &volume.MountName, &volume.ContainerPath, &readOnly, &retainedUnix); err != nil {
+		var readOnly int
+		var retainedUnix int64
+		if err := rows.Scan(&volume.VolumeName, &volume.WorkspaceID, &volume.OwnerUserID, &volume.TemplateID,
+			&volume.MountName, &volume.ContainerPath, &readOnly, &retainedUnix, &volume.WorkspaceName, &volume.TemplateName); err != nil {
 			return nil, fmt.Errorf("scan retained workspace volume: %w", err)
 		}
 		volume.ReadOnly = readOnly != 0
@@ -859,6 +887,134 @@ func (s *Store) DeleteRetainedWorkspaceVolume(ctx context.Context, volumeName st
 		return repository.ErrNotFound
 	}
 	return nil
+}
+
+// FindRetainedWorkspaceVolume is the read-only counterpart of
+// ConsumeRetainedWorkspaceVolume, used for self-service download where the
+// tombstone must survive the request.
+func (s *Store) FindRetainedWorkspaceVolume(ctx context.Context, workspaceID, mountName, ownerUserID string) (domain.RetainedWorkspaceVolume, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT volume_name, workspace_id, owner_user_id, template_id,
+		mount_name, container_path, read_only, retained_at, workspace_name, template_name
+		FROM retained_workspace_volumes WHERE workspace_id = ? AND mount_name = ? AND owner_user_id = ?`, workspaceID, mountName, ownerUserID)
+	var volume domain.RetainedWorkspaceVolume
+	var readOnly int
+	var retainedUnix int64
+	if err := row.Scan(&volume.VolumeName, &volume.WorkspaceID, &volume.OwnerUserID, &volume.TemplateID,
+		&volume.MountName, &volume.ContainerPath, &readOnly, &retainedUnix, &volume.WorkspaceName, &volume.TemplateName); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.RetainedWorkspaceVolume{}, repository.ErrNotFound
+		}
+		return domain.RetainedWorkspaceVolume{}, fmt.Errorf("find retained workspace volume: %w", err)
+	}
+	volume.ReadOnly = readOnly != 0
+	volume.RetainedAt = timeFromUnix(retainedUnix)
+	return volume, nil
+}
+
+// ConsumeRetainedWorkspaceVolume looks the row up scoped to ownerUserID
+// (so a mismatched owner is indistinguishable from a missing row) and, only
+// if found, deletes it in the same call. It does not use an explicit
+// transaction: SQLite's single-writer model already serializes the SELECT
+// and DELETE against any concurrent consumer, and the RowsAffected check
+// below detects the case where a second caller won the race between them.
+func (s *Store) ConsumeRetainedWorkspaceVolume(ctx context.Context, workspaceID, mountName, ownerUserID string) (domain.RetainedWorkspaceVolume, error) {
+	volume, err := s.FindRetainedWorkspaceVolume(ctx, workspaceID, mountName, ownerUserID)
+	if err != nil {
+		return domain.RetainedWorkspaceVolume{}, err
+	}
+	result, err := s.db.ExecContext(ctx, "DELETE FROM retained_workspace_volumes WHERE volume_name = ? AND owner_user_id = ?", volume.VolumeName, ownerUserID)
+	if err != nil {
+		return domain.RetainedWorkspaceVolume{}, fmt.Errorf("consume retained workspace volume: %w", err)
+	}
+	if count, err := result.RowsAffected(); err != nil {
+		return domain.RetainedWorkspaceVolume{}, fmt.Errorf("check retained workspace volume consumption: %w", err)
+	} else if count == 0 {
+		return domain.RetainedWorkspaceVolume{}, repository.ErrConflict
+	}
+	return volume, nil
+}
+
+func (s *Store) ListRetainedWorkspaceDirectoriesForOwner(ctx context.Context, ownerUserID string) ([]domain.RetainedWorkspaceDirectory, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT workspace_id, owner_user_id, template_id, template_name, workspace_name,
+		archive_path, mounts_json, retained_at FROM retained_workspace_directories WHERE owner_user_id = ? ORDER BY retained_at DESC`, ownerUserID)
+	if err != nil {
+		return nil, fmt.Errorf("list retained workspace directories for owner: %w", err)
+	}
+	defer rows.Close()
+	directories := make([]domain.RetainedWorkspaceDirectory, 0)
+	for rows.Next() {
+		directory, err := scanRetainedWorkspaceDirectory(rows)
+		if err != nil {
+			return nil, err
+		}
+		directories = append(directories, directory)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate retained workspace directories: %w", err)
+	}
+	return directories, nil
+}
+
+func (s *Store) DeleteRetainedWorkspaceDirectory(ctx context.Context, workspaceID string) error {
+	result, err := s.db.ExecContext(ctx, "DELETE FROM retained_workspace_directories WHERE workspace_id = ?", workspaceID)
+	if err != nil {
+		return fmt.Errorf("delete retained directory metadata: %w", err)
+	}
+	if count, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("check retained directory metadata deletion: %w", err)
+	} else if count == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
+// FindRetainedWorkspaceDirectory is the read-only counterpart of
+// ConsumeRetainedWorkspaceDirectory, used for self-service download.
+func (s *Store) FindRetainedWorkspaceDirectory(ctx context.Context, workspaceID, ownerUserID string) (domain.RetainedWorkspaceDirectory, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT workspace_id, owner_user_id, template_id, template_name, workspace_name,
+		archive_path, mounts_json, retained_at FROM retained_workspace_directories WHERE workspace_id = ? AND owner_user_id = ?`, workspaceID, ownerUserID)
+	directory, err := scanRetainedWorkspaceDirectory(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.RetainedWorkspaceDirectory{}, repository.ErrNotFound
+		}
+		return domain.RetainedWorkspaceDirectory{}, err
+	}
+	return directory, nil
+}
+
+// ConsumeRetainedWorkspaceDirectory is the directory equivalent of
+// ConsumeRetainedWorkspaceVolume; see its comment for the concurrency model.
+func (s *Store) ConsumeRetainedWorkspaceDirectory(ctx context.Context, workspaceID, ownerUserID string) (domain.RetainedWorkspaceDirectory, error) {
+	directory, err := s.FindRetainedWorkspaceDirectory(ctx, workspaceID, ownerUserID)
+	if err != nil {
+		return domain.RetainedWorkspaceDirectory{}, err
+	}
+	result, err := s.db.ExecContext(ctx, "DELETE FROM retained_workspace_directories WHERE workspace_id = ? AND owner_user_id = ?", workspaceID, ownerUserID)
+	if err != nil {
+		return domain.RetainedWorkspaceDirectory{}, fmt.Errorf("consume retained workspace directory: %w", err)
+	}
+	if count, err := result.RowsAffected(); err != nil {
+		return domain.RetainedWorkspaceDirectory{}, fmt.Errorf("check retained workspace directory consumption: %w", err)
+	} else if count == 0 {
+		return domain.RetainedWorkspaceDirectory{}, repository.ErrConflict
+	}
+	return directory, nil
+}
+
+func scanRetainedWorkspaceDirectory(row scanner) (domain.RetainedWorkspaceDirectory, error) {
+	var directory domain.RetainedWorkspaceDirectory
+	var mountsJSON string
+	var retainedUnix int64
+	if err := row.Scan(&directory.WorkspaceID, &directory.OwnerUserID, &directory.TemplateID, &directory.TemplateName, &directory.WorkspaceName,
+		&directory.ArchivePath, &mountsJSON, &retainedUnix); err != nil {
+		return domain.RetainedWorkspaceDirectory{}, fmt.Errorf("scan retained workspace directory: %w", err)
+	}
+	if err := json.Unmarshal([]byte(mountsJSON), &directory.Mounts); err != nil {
+		return domain.RetainedWorkspaceDirectory{}, fmt.Errorf("decode retained directory mounts: %w", err)
+	}
+	directory.RetainedAt = timeFromUnix(retainedUnix)
+	return directory, nil
 }
 
 func (s *Store) CreatePasswordResetToken(ctx context.Context, token domain.PasswordResetToken) error {

@@ -112,10 +112,28 @@ type WorkspaceRepository interface {
 	FindWorkspaceByOwnerAndName(ctx context.Context, ownerUserID, name string) (domain.Workspace, error)
 	CreateWorkspace(ctx context.Context, workspace domain.Workspace) error
 	DeleteWorkspace(ctx context.Context, id string) error
-	DeleteWorkspaceRetainingVolumes(ctx context.Context, id string, volumes []domain.RetainedWorkspaceVolume) error
+	DeleteWorkspaceRetainingStorage(ctx context.Context, id string, volumes []domain.RetainedWorkspaceVolume, directory *domain.RetainedWorkspaceDirectory) error
 	ListRetainedWorkspaceVolumes(ctx context.Context, workspaceID string) ([]domain.RetainedWorkspaceVolume, error)
 	ListAllRetainedWorkspaceVolumes(ctx context.Context) ([]domain.RetainedWorkspaceVolume, error)
+	ListRetainedWorkspaceVolumesForOwner(ctx context.Context, ownerUserID string) ([]domain.RetainedWorkspaceVolume, error)
 	DeleteRetainedWorkspaceVolume(ctx context.Context, volumeName string) error
+	// ConsumeRetainedWorkspaceVolume looks up the tombstone for (workspaceID,
+	// mountName) scoped to ownerUserID and deletes it in the same call,
+	// claiming it for reattachment. Returns repository.ErrNotFound if the row
+	// does not exist or is not owned by ownerUserID (the two cases are
+	// indistinguishable to the caller, deliberately).
+	ConsumeRetainedWorkspaceVolume(ctx context.Context, workspaceID, mountName, ownerUserID string) (domain.RetainedWorkspaceVolume, error)
+	// FindRetainedWorkspaceVolume is the read-only counterpart of
+	// ConsumeRetainedWorkspaceVolume, for self-service download.
+	FindRetainedWorkspaceVolume(ctx context.Context, workspaceID, mountName, ownerUserID string) (domain.RetainedWorkspaceVolume, error)
+	ListRetainedWorkspaceDirectoriesForOwner(ctx context.Context, ownerUserID string) ([]domain.RetainedWorkspaceDirectory, error)
+	DeleteRetainedWorkspaceDirectory(ctx context.Context, workspaceID string) error
+	// ConsumeRetainedWorkspaceDirectory is the directory equivalent of
+	// ConsumeRetainedWorkspaceVolume.
+	ConsumeRetainedWorkspaceDirectory(ctx context.Context, workspaceID, ownerUserID string) (domain.RetainedWorkspaceDirectory, error)
+	// FindRetainedWorkspaceDirectory is the read-only counterpart, for
+	// self-service download.
+	FindRetainedWorkspaceDirectory(ctx context.Context, workspaceID, ownerUserID string) (domain.RetainedWorkspaceDirectory, error)
 	SetWorkspaceDesiredState(ctx context.Context, id string, state domain.DesiredWorkspaceState, updatedAt time.Time) error
 	UpdateWorkspaceObservedState(ctx context.Context, id, observedState, runtimeID, observedErrorCode, observedError string, observedAt, updatedAt time.Time) error
 	UpdateWorkspaceLifecycle(ctx context.Context, id string, startedAt, lastConnectedAt, stoppedAt, containerDeletedAt, dataArchiveEligibleAt, updatedAt time.Time) error
