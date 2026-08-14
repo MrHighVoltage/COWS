@@ -1,0 +1,32 @@
+{{ define "storage-page" }}
+{{ template "base-start" . }}
+<section class="intro" aria-labelledby="storage-title">
+  <p class="eyebrow">Workspace access</p>
+  <h1 id="storage-title">My storage</h1>
+  <p class="lede">Storage retained from workspaces you deleted. Reattach it to a new workspace from the create-workspace page, or download or discard it here.</p>
+</section>
+<section class="panel table-panel">
+  <div class="panel-heading"><div><h2>Retained volumes</h2><p class="muted">Named-volume storage kept after explicit deletion.</p></div></div>
+  <div class="table-scroll"><table><thead><tr><th>From workspace</th><th>Mount</th><th>Retained</th><th>Status</th><th>Actions</th></tr></thead><tbody>
+  {{ range .MyRetainedVolumes }}<tr>
+    <td>{{ if .WorkspaceName }}{{ .WorkspaceName }}{{ else }}<span class="muted">Unknown</span>{{ end }}{{ if .TemplateName }}<br><span class="table-subtext">{{ .TemplateName }}</span>{{ end }}</td>
+    <td>{{ .MountName }}<br><span class="muted">{{ .ContainerPath }}</span></td>
+    <td>{{ .RetainedAt.Format "2006-01-02 15:04 UTC" }}</td>
+    <td>{{ if .RuntimePresent }}<span class="status-stamp status-ok">Available</span>{{ else }}<span class="status-stamp status-disabled">Missing</span>{{ end }}</td>
+    <td><div class="table-actions"><a class="table-action access-action button-link" href="/storage/volumes/{{ .WorkspaceID }}/{{ .MountName }}/download.zip">Download ZIP</a><form method="post" action="/storage/volumes/{{ .WorkspaceID }}/{{ .MountName }}/delete" x-on:submit="if (!confirm('Discard this retained storage permanently? It cannot be reattached afterward.')) $event.preventDefault()"><input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}"><button class="table-action danger-action" type="submit">Discard</button></form></div></td>
+  </tr>{{ else }}<tr><td colspan="5" class="muted">No retained volumes.</td></tr>{{ end }}
+  </tbody></table></div>
+</section>
+<section class="panel table-panel">
+  <div class="panel-heading"><div><h2>Retained directories</h2><p class="muted">Directory storage archived after explicit deletion.</p></div></div>
+  <div class="table-scroll"><table><thead><tr><th>From workspace</th><th>Mounts</th><th>Retained</th><th>Actions</th></tr></thead><tbody>
+  {{ range .MyRetainedDirectories }}<tr>
+    <td>{{ if .WorkspaceName }}{{ .WorkspaceName }}{{ else }}<span class="muted">Unknown</span>{{ end }}{{ if .TemplateName }}<br><span class="table-subtext">{{ .TemplateName }}</span>{{ end }}</td>
+    <td>{{ range $index, $mount := .Mounts }}{{ if $index }}, {{ end }}{{ $mount.Name }}{{ end }}</td>
+    <td>{{ .RetainedAt.Format "2006-01-02 15:04 UTC" }}</td>
+    <td><div class="table-actions"><a class="table-action access-action button-link" href="/storage/directories/{{ .WorkspaceID }}/download.zip">Download ZIP</a><form method="post" action="/storage/directories/{{ .WorkspaceID }}/delete" x-on:submit="if (!confirm('Discard this retained storage permanently? It cannot be reattached afterward.')) $event.preventDefault()"><input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}"><button class="table-action danger-action" type="submit">Discard</button></form></div></td>
+  </tr>{{ else }}<tr><td colspan="4" class="muted">No retained directories.</td></tr>{{ end }}
+  </tbody></table></div>
+</section>
+{{ template "base-end" . }}
+{{ end }}

@@ -34,6 +34,37 @@
         <p class="resource-warning" x-show="availableKnown && (cpu > availableCPU || memory > availableMemory)" x-cloak>Selected resources exceed your current available CPU or memory. Creation will be rejected until capacity is available.</p>
         {{ if not $.WorkspaceAvailabilityKnown }}<p class="muted">Current resource availability is unavailable. Creation will be checked on submission.</p>{{ end }}
       </fieldset>
+      {{ $template := . }}
+      {{ $hasDirectoryMount := false }}
+      {{ range .Configuration.Mounts }}{{ if and .FileManager (eq .Type "directory") }}{{ $hasDirectoryMount = true }}{{ end }}{{ end }}
+      {{ $anyReattachOption := false }}
+      {{ range .Configuration.Mounts }}{{ if and .FileManager (or (eq .Type "volume") (eq .Type "")) }}{{ if index $.ReattachVolumeOptions .Name }}{{ $anyReattachOption = true }}{{ end }}{{ end }}{{ end }}
+      {{ if and $hasDirectoryMount $.ReattachDirectoryOptions }}{{ $anyReattachOption = true }}{{ end }}
+      {{ if $anyReattachOption }}
+      <fieldset class="resource-choice" x-show="template === '{{ .ID }}'" x-cloak>
+        <legend>{{ .Name }} storage</legend>
+        <p class="resource-range">Reattach storage retained from a workspace you deleted, instead of starting empty. See <a href="/storage">My storage</a> for everything you have retained.</p>
+        {{ range .Configuration.Mounts }}
+          {{ $mount := . }}
+          {{ if and $mount.FileManager (or (eq $mount.Type "volume") (eq $mount.Type "")) }}
+            {{ with index $.ReattachVolumeOptions $mount.Name }}
+            <label for="reattach-volume-{{ $template.ID }}-{{ $mount.Name }}">Storage for &ldquo;{{ $mount.Name }}&rdquo;</label>
+            <select id="reattach-volume-{{ $template.ID }}-{{ $mount.Name }}" name="reattach_volume__{{ $mount.Name }}" :disabled="template !== '{{ $template.ID }}'">
+              <option value="">Start empty</option>
+              {{ range . }}<option value="{{ .WorkspaceID }}">{{ .WorkspaceName }} &middot; retained {{ .RetainedAt.Format "2006-01-02" }}</option>{{ end }}
+            </select>
+            {{ end }}
+          {{ end }}
+        {{ end }}
+        {{ if and $hasDirectoryMount $.ReattachDirectoryOptions }}
+        <label for="reattach-directories-{{ .ID }}">Directory storage</label>
+        <select id="reattach-directories-{{ .ID }}" name="reattach_directories" :disabled="template !== '{{ .ID }}'">
+          <option value="">Start empty</option>
+          {{ range $.ReattachDirectoryOptions }}<option value="{{ .WorkspaceID }}">{{ .WorkspaceName }} &middot; retained {{ .RetainedAt.Format "2006-01-02" }} &middot; mounts: {{ .MountNames }}</option>{{ end }}
+        </select>
+        {{ end }}
+      </fieldset>
+      {{ end }}
       {{ end }}
     </div>
     <div class="form-actions"><a class="secondary-button button-link" href="/workspaces">Cancel</a><button class="primary-button" type="submit">Create workspace</button></div>
