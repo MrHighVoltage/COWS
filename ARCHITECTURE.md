@@ -439,9 +439,11 @@ the settings as the number of users and groups grows.
 The visual design lives entirely in `web/static/css/cows.css` as CSS
 custom-property tokens (`--ink`, `--paper`, `--surface`, `--line`, `--accent`,
 and semantic `--good`/`--warn`/`--bad` state colors) plus a small set of
-reusable components; there is no per-page styling. New UI work should reuse
-these tokens and components rather than hardcoding colors or introducing
-parallel ones. The one signature, content-derived component is the
+reusable components; there is no per-page styling. The palette is dark
+(`color-scheme: dark`) so the page body matches the header/nav chrome, which
+was already dark before the rest of the app followed. New UI work should
+reuse these tokens and components rather than hardcoding colors or
+introducing parallel ones. The one signature, content-derived component is the
 `.status-stamp` bracketed monospace tag (`[ RUNNING ]`), rendered through the
 shared `state-stamp` template (`web/templates/fragments/state-stamp.html`);
 use it for any new place the app reports workspace, runtime, or connection

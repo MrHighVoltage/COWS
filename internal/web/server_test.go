@@ -70,17 +70,23 @@ func TestWorkspaceActionReturnPathKeepsAdministratorRuntimeContext(t *testing.T)
 
 	request := httptest.NewRequest(http.MethodPost, "/workspaces/id/stop", strings.NewReader("return_to=/admin/runtime"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	if got := workspaceActionReturnPath(request, admin); got != "/admin/runtime" {
+	if got := classifyWorkspaceActionContext(request, admin).redirectPath("id"); got != "/admin/runtime" {
 		t.Fatalf("administrator return path = %q, want /admin/runtime", got)
 	}
-	if got := workspaceActionReturnPath(request, user); got != "/workspaces" {
+	if got := classifyWorkspaceActionContext(request, user).redirectPath("id"); got != "/workspaces" {
 		t.Fatalf("user return path = %q, want /workspaces", got)
 	}
 
 	request = httptest.NewRequest(http.MethodPost, "/workspaces/id/stop", strings.NewReader("return_to=https://example.test"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	if got := workspaceActionReturnPath(request, admin); got != "/workspaces" {
+	if got := classifyWorkspaceActionContext(request, admin).redirectPath("id"); got != "/workspaces" {
 		t.Fatalf("external return path = %q, want /workspaces", got)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/workspaces/id/stop", strings.NewReader("context=detail"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if got := classifyWorkspaceActionContext(request, user).redirectPath("id"); got != "/workspaces/id/access" {
+		t.Fatalf("detail return path = %q, want /workspaces/id/access", got)
 	}
 }
 
@@ -92,6 +98,268 @@ func TestWorkspaceActionErrorExplainsQuotaAndCapacity(t *testing.T) {
 	capacityMessage := workspaceActionError("start", &quota.CapacityInsufficientError{Resource: "memory", Available: 1 << 30, Requested: 2 << 30})
 	if !strings.Contains(capacityMessage, "host") || !strings.Contains(capacityMessage, "1024 MiB") || !strings.Contains(capacityMessage, "2048 MiB") {
 		t.Fatalf("capacity message = %q, want actionable memory details", capacityMessage)
+	}
+}
+
+// rowActionRuntime adds working Stop/Remove to the terminal-focused fake
+// runtime (whose own Stop/Remove just stub out ErrNotSupported), so the
+// dynamic row-action test can exercise a real state transition.
+type rowActionRuntime struct{ *terminalRuntime }
+
+func (r *rowActionRuntime) StopWorkspace(context.Context, string, time.Duration) error { return nil }
+func (r *rowActionRuntime) RemoveWorkspace(context.Context, string) error              { return nil }
+
+// TestWorkspaceActionHTMXRequestSwapsRowInPlace covers the dynamic row-action
+// behavior: an htmx-triggered request gets back just the <tr> fragment
+// instead of a full page, with the outcome (success or a rejected action)
+// reflected in that same row rather than a page-level banner.
+func TestWorkspaceActionHTMXRequestSwapsRowInPlace(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "cows.db"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	store := sqlite.New(db)
+	authService, err := auth.New(store, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth service: %v", err)
+	}
+	if _, err := authService.BootstrapAdministrator(ctx, auth.CreateUserInput{Username: "admin", Password: "correct horse battery staple"}); err != nil {
+		t.Fatalf("bootstrap administrator: %v", err)
+	}
+	admin, _, err := authService.Authenticate(ctx, "admin", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate administrator: %v", err)
+	}
+	if err := authService.ChangePassword(ctx, admin.ID, "correct horse battery staple", "changed correct horse battery staple"); err != nil {
+		t.Fatalf("change administrator password: %v", err)
+	}
+	if _, err := authService.CreateUser(ctx, admin.ID, auth.CreateUserInput{Username: "row-action-user", Password: "another correct password", Role: domain.RoleUser}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	user, sessionToken, err := authService.Authenticate(ctx, "row-action-user", "another correct password")
+	if err != nil {
+		t.Fatalf("authenticate user: %v", err)
+	}
+	if err := authService.ChangePassword(ctx, user.ID, "another correct password", "changed row-action password"); err != nil {
+		t.Fatalf("change password: %v", err)
+	}
+	user, sessionToken, err = authService.Authenticate(ctx, "row-action-user", "changed row-action password")
+	if err != nil {
+		t.Fatalf("re-authenticate user: %v", err)
+	}
+
+	fake := &rowActionRuntime{terminalRuntime: newTerminalRuntime()}
+	service := workspace.NewWithRuntimeAndMountRoots(store, fake, t.TempDir(), t.TempDir())
+	template, err := service.CreateTemplate(ctx, admin.ID, workspace.TemplateInput{
+		Name: "Row action template", ImageReference: "registry.example/research:1", DefaultCPUMillis: 1000,
+		MaxCPUMillis: 2000, DefaultMemoryBytes: 2 << 30, MaxMemoryBytes: 4 << 30,
+		DefaultStorageBytes: 10 << 30, InitialConnectionTimeoutSeconds: 3600, StoppedRetentionSeconds: 3600,
+		AccessMethods: []domain.AccessMethod{domain.AccessTerminal}, AllowedRoles: []domain.Role{domain.RoleUser}, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+	value, err := service.CreateWorkspace(ctx, user.ID, workspace.CreateWorkspaceInput{Name: "Row action workspace", TemplateID: template.ID})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := service.UpdateObservedState(ctx, value.ID, "running", "abcdef0123456789", "", time.Now()); err != nil {
+		t.Fatalf("mark workspace running: %v", err)
+	}
+
+	server, err := New(db, authService, service, nil, fake, Options{SessionLifetime: time.Hour})
+	if err != nil {
+		t.Fatalf("create web server: %v", err)
+	}
+
+	const csrfToken = "test-csrf-token-0123456789abcdef"
+	postRowAction := func(action string) *httptest.ResponseRecorder {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodPost, "/workspaces/"+value.ID+"/"+action, strings.NewReader("csrf_token="+csrfToken))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		request.Header.Set("HX-Request", "true")
+		request.AddCookie(&http.Cookie{Name: "cows_session", Value: sessionToken})
+		request.AddCookie(&http.Cookie{Name: "cows_csrf", Value: csrfToken})
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, request)
+		return recorder
+	}
+
+	// Delete is rejected while running: the row must come back with the
+	// rejection message, not an empty (row-removed) response, and the
+	// workspace must still exist.
+	deleteRecorder := postRowAction("delete")
+	if deleteRecorder.Code != http.StatusOK {
+		t.Fatalf("delete-while-running status = %d, want 200", deleteRecorder.Code)
+	}
+	deleteBody := deleteRecorder.Body.String()
+	if !strings.Contains(deleteBody, `id="workspace-row-`+value.ID+`"`) {
+		t.Fatalf("delete-while-running response missing the row, body = %q", deleteBody)
+	}
+	if !strings.Contains(deleteBody, "not in a state where it can be deleted") {
+		t.Fatalf("delete-while-running response missing the rejection message, body = %q", deleteBody)
+	}
+	if _, err := service.GetWorkspace(ctx, user.ID, value.ID); err != nil {
+		t.Fatalf("workspace should still exist after a rejected delete: %v", err)
+	}
+
+	// Stop succeeds: the row comes back reflecting the new state, and the
+	// access links for a stopped workspace are gone.
+	stopRecorder := postRowAction("stop")
+	if stopRecorder.Code != http.StatusOK {
+		t.Fatalf("stop status = %d, want 200", stopRecorder.Code)
+	}
+	stopBody := stopRecorder.Body.String()
+	if !strings.Contains(stopBody, `id="workspace-row-`+value.ID+`"`) {
+		t.Fatalf("stop response missing the row, body = %q", stopBody)
+	}
+	if !strings.Contains(stopBody, "status-neutral") {
+		t.Fatalf("stop response should show the stopped state stamp, body = %q", stopBody)
+	}
+
+	// Delete now succeeds (workspace is stopped): the response is empty so
+	// htmx removes the row, and the workspace is actually gone.
+	finalDeleteRecorder := postRowAction("delete")
+	if finalDeleteRecorder.Code != http.StatusOK {
+		t.Fatalf("final delete status = %d, want 200", finalDeleteRecorder.Code)
+	}
+	if body := finalDeleteRecorder.Body.String(); body != "" {
+		t.Fatalf("final delete response should be empty (row removed), got %q", body)
+	}
+	if _, err := service.GetWorkspace(ctx, user.ID, value.ID); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("workspace should be gone after delete, err = %v", err)
+	}
+}
+
+// TestWorkspaceActionHTMXDetailContextSwapsHeaderInPlace covers the
+// Workspace Detail page's header lifecycle actions: an htmx request with
+// context=detail gets back the header fragment (not a table row), and a
+// successful delete redirects the client to the Overview via HX-Redirect
+// instead of leaving an empty fragment on a now-gone workspace's own page.
+func TestWorkspaceActionHTMXDetailContextSwapsHeaderInPlace(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "cows.db"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	store := sqlite.New(db)
+	authService, err := auth.New(store, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth service: %v", err)
+	}
+	if _, err := authService.BootstrapAdministrator(ctx, auth.CreateUserInput{Username: "admin", Password: "correct horse battery staple"}); err != nil {
+		t.Fatalf("bootstrap administrator: %v", err)
+	}
+	admin, _, err := authService.Authenticate(ctx, "admin", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate administrator: %v", err)
+	}
+	if err := authService.ChangePassword(ctx, admin.ID, "correct horse battery staple", "changed correct horse battery staple"); err != nil {
+		t.Fatalf("change administrator password: %v", err)
+	}
+	if _, err := authService.CreateUser(ctx, admin.ID, auth.CreateUserInput{Username: "detail-action-user", Password: "another correct password", Role: domain.RoleUser}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	user, sessionToken, err := authService.Authenticate(ctx, "detail-action-user", "another correct password")
+	if err != nil {
+		t.Fatalf("authenticate user: %v", err)
+	}
+	if err := authService.ChangePassword(ctx, user.ID, "another correct password", "changed detail-action password"); err != nil {
+		t.Fatalf("change password: %v", err)
+	}
+	user, sessionToken, err = authService.Authenticate(ctx, "detail-action-user", "changed detail-action password")
+	if err != nil {
+		t.Fatalf("re-authenticate user: %v", err)
+	}
+
+	fake := &rowActionRuntime{terminalRuntime: newTerminalRuntime()}
+	service := workspace.NewWithRuntimeAndMountRoots(store, fake, t.TempDir(), t.TempDir())
+	template, err := service.CreateTemplate(ctx, admin.ID, workspace.TemplateInput{
+		Name: "Detail action template", ImageReference: "registry.example/research:1", DefaultCPUMillis: 1000,
+		MaxCPUMillis: 2000, DefaultMemoryBytes: 2 << 30, MaxMemoryBytes: 4 << 30,
+		DefaultStorageBytes: 10 << 30, InitialConnectionTimeoutSeconds: 3600, StoppedRetentionSeconds: 3600,
+		AccessMethods: []domain.AccessMethod{domain.AccessTerminal}, AllowedRoles: []domain.Role{domain.RoleUser}, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+	value, err := service.CreateWorkspace(ctx, user.ID, workspace.CreateWorkspaceInput{Name: "Detail action workspace", TemplateID: template.ID})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := service.UpdateObservedState(ctx, value.ID, "running", "abcdef0123456789", "", time.Now()); err != nil {
+		t.Fatalf("mark workspace running: %v", err)
+	}
+
+	server, err := New(db, authService, service, nil, fake, Options{SessionLifetime: time.Hour})
+	if err != nil {
+		t.Fatalf("create web server: %v", err)
+	}
+
+	const csrfToken = "test-csrf-token-0123456789abcdef"
+	postDetailAction := func(action string) *httptest.ResponseRecorder {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodPost, "/workspaces/"+value.ID+"/"+action, strings.NewReader("csrf_token="+csrfToken+"&context=detail"))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		request.Header.Set("HX-Request", "true")
+		request.AddCookie(&http.Cookie{Name: "cows_session", Value: sessionToken})
+		request.AddCookie(&http.Cookie{Name: "cows_csrf", Value: csrfToken})
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, request)
+		return recorder
+	}
+
+	// Delete is rejected while running: the header must come back with the
+	// rejection message, not a redirect, and the workspace must still exist.
+	deleteRecorder := postDetailAction("delete")
+	if deleteRecorder.Code != http.StatusOK {
+		t.Fatalf("delete-while-running status = %d, want 200", deleteRecorder.Code)
+	}
+	if got := deleteRecorder.Header().Get("HX-Redirect"); got != "" {
+		t.Fatalf("delete-while-running should not redirect, got HX-Redirect = %q", got)
+	}
+	deleteBody := deleteRecorder.Body.String()
+	if !strings.Contains(deleteBody, `id="workspace-detail-header"`) {
+		t.Fatalf("delete-while-running response missing the header, body = %q", deleteBody)
+	}
+	if !strings.Contains(deleteBody, "not in a state where it can be deleted") {
+		t.Fatalf("delete-while-running response missing the rejection message, body = %q", deleteBody)
+	}
+	if _, err := service.GetWorkspace(ctx, user.ID, value.ID); err != nil {
+		t.Fatalf("workspace should still exist after a rejected delete: %v", err)
+	}
+
+	// Stop succeeds: the header comes back reflecting the new state (Start
+	// button only, no Stop/Restart).
+	stopRecorder := postDetailAction("stop")
+	if stopRecorder.Code != http.StatusOK {
+		t.Fatalf("stop status = %d, want 200", stopRecorder.Code)
+	}
+	stopBody := stopRecorder.Body.String()
+	if !strings.Contains(stopBody, `id="workspace-detail-header"`) {
+		t.Fatalf("stop response missing the header, body = %q", stopBody)
+	}
+	if !strings.Contains(stopBody, "status-neutral") {
+		t.Fatalf("stop response should show the stopped state stamp, body = %q", stopBody)
+	}
+	if strings.Contains(stopBody, ">Stop<") {
+		t.Fatalf("stop response should not still offer Stop, body = %q", stopBody)
+	}
+
+	// Delete now succeeds (workspace is stopped): the response redirects to
+	// the Overview via HX-Redirect, and the workspace is actually gone.
+	finalDeleteRecorder := postDetailAction("delete")
+	if finalDeleteRecorder.Code != http.StatusOK {
+		t.Fatalf("final delete status = %d, want 200", finalDeleteRecorder.Code)
+	}
+	if got := finalDeleteRecorder.Header().Get("HX-Redirect"); got != "/workspaces" {
+		t.Fatalf("final delete HX-Redirect = %q, want /workspaces", got)
+	}
+	if _, err := service.GetWorkspace(ctx, user.ID, value.ID); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("workspace should be gone after delete, err = %v", err)
 	}
 }
 

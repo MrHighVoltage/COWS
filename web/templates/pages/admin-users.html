@@ -17,31 +17,7 @@
     <table>
       <thead><tr><th>Username</th><th>Email</th><th>Display name</th><th>Role</th><th>Groups</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody>
-      {{ range .Users }}
-        <tr>
-          {{ $user := . }}
-          <td><strong>{{ .Username }}</strong></td>
-          <td>{{ if .Email }}{{ .Email }}{{ else }}<span class="muted">Not set</span>{{ end }}</td>
-          <td>{{ .DisplayName }}</td>
-          <td><span class="badge">{{ .Role }}</span></td>
-          <td>{{ range index $.UserGroups $user.ID }}<span class="badge">{{ .Name }}</span> {{ else }}<span class="muted">None</span>{{ end }}</td>
-          <td>{{ if .Disabled }}<span class="status-value status-disabled">Disabled</span>{{ else }}<span class="status-value status-ok">Active</span>{{ end }}</td>
-          <td><div class="table-actions">
-            <a class="table-action button-link" href="/admin/users/{{ .ID }}/edit">Edit user</a>
-            {{ if ne .ID $.User.ID }}
-            <form method="post" action="/admin/users/{{ .ID }}/disabled" x-on:submit="if (!confirm('{{ if .Disabled }}Enable this user?{{ else }}Disabling this user immediately ends all sessions and stops all of their workspaces. Unsaved work may be lost. Continue?{{ end }}')) $event.preventDefault()">
-              <input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}">
-              <input type="hidden" name="disabled" value="{{ if .Disabled }}false{{ else }}true{{ end }}">
-              <button class="table-action" type="submit">{{ if .Disabled }}Enable{{ else }}Disable{{ end }}</button>
-            </form>
-            {{ if .Disabled }}<form method="post" action="/admin/users/{{ .ID }}/delete" x-on:submit="if (!confirm('Delete this disabled user and all remaining workspaces? Managed directories will be archived and named volumes retained for administrator recovery. This cannot be undone.')) $event.preventDefault()">
-              <input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}">
-              <button class="table-action danger-action" type="submit">Delete</button>
-            </form>{{ end }}
-            {{ else }}<span class="muted">Current account</span>{{ end }}
-          </div></td>
-        </tr>
-      {{ else }}
+      {{ range .Users }}{{ template "admin-user-row" (userRow $ .) }}{{ else }}
         <tr><td colspan="7" class="muted">No users found.</td></tr>
       {{ end }}
       </tbody>
@@ -49,4 +25,30 @@
   </div>
 </section>
 {{ template "base-end" . }}
+{{ end }}
+
+{{ define "admin-user-row" }}
+<tr id="admin-user-row-{{ .Target.ID }}">
+  <td><strong>{{ .Target.Username }}</strong></td>
+  <td>{{ if .Target.Email }}{{ .Target.Email }}{{ else }}<span class="muted">Not set</span>{{ end }}</td>
+  <td>{{ .Target.DisplayName }}</td>
+  <td><span class="badge">{{ .Target.Role }}</span></td>
+  <td>{{ range .Groups }}<span class="badge">{{ .Name }}</span> {{ else }}<span class="muted">None</span>{{ end }}</td>
+  <td>{{ if .RowError }}<p class="table-subtext status-disabled">{{ .RowError }}</p>{{ end }}{{ if .Target.Disabled }}<span class="status-value status-disabled">Disabled</span>{{ else }}<span class="status-value status-ok">Active</span>{{ end }}</td>
+  <td><div class="table-actions">
+    <a class="table-action button-link" href="/admin/users/{{ .Target.ID }}/edit">Edit user</a>
+    {{ if ne .Target.ID .CurrentUserID }}
+    <form method="post" action="/admin/users/{{ .Target.ID }}/disabled" hx-post="/admin/users/{{ .Target.ID }}/disabled" hx-target="#admin-user-row-{{ .Target.ID }}" hx-swap="outerHTML" hx-disabled-elt="find button" hx-indicator="#admin-user-row-{{ .Target.ID }} .row-indicator" hx-confirm="{{ if .Target.Disabled }}Enable this user?{{ else }}Disabling this user immediately ends all sessions and stops all of their workspaces. Unsaved work may be lost. Continue?{{ end }}">
+      <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
+      <input type="hidden" name="disabled" value="{{ if .Target.Disabled }}false{{ else }}true{{ end }}">
+      <button class="table-action" type="submit">{{ if .Target.Disabled }}Enable{{ else }}Disable{{ end }}</button>
+    </form>
+    {{ if .Target.Disabled }}<form method="post" action="/admin/users/{{ .Target.ID }}/delete" hx-post="/admin/users/{{ .Target.ID }}/delete" hx-target="#admin-user-row-{{ .Target.ID }}" hx-swap="outerHTML" hx-disabled-elt="find button" hx-indicator="#admin-user-row-{{ .Target.ID }} .row-indicator" hx-confirm="Delete this disabled user and all remaining workspaces? Managed directories will be archived and named volumes retained for administrator recovery. This cannot be undone.">
+      <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
+      <button class="table-action danger-action" type="submit">Delete</button>
+    </form>{{ end }}
+    <span class="row-indicator htmx-indicator" role="status">Working&hellip;</span>
+    {{ else }}<span class="muted">Current account</span>{{ end }}
+  </div></td>
+</tr>
 {{ end }}

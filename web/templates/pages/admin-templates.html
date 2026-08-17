@@ -17,24 +17,7 @@
     <table>
       <thead><tr><th>Name</th><th>Image</th><th>Resources</th><th>Access</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody>
-      {{ range .TemplateImages }}
-        <tr>
-          <td><strong>{{ .Name }}</strong><span class="table-subtext">{{ .Description }}</span></td>
-          <td><code>{{ .ImageReference }}</code>{{ if .ImageDigest }}<span class="table-subtext">{{ .ImageDigest }}</span>{{ end }}{{ template "admin-template-image-status-content" . }}</td>
-          <td><span class="table-subtext">CPU {{ .DefaultCPUMillis }} / {{ .MaxCPUMillis }} mCPU</span><span class="table-subtext">Memory {{ mib .DefaultMemoryBytes }} / {{ mib .MaxMemoryBytes }} MiB</span><span class="table-subtext">{{ if .ResourcesConfigurable }}User selectable{{ else }}Fixed defaults{{ end }}</span></td>
-          <td><span class="table-subtext">{{ range .AccessMethods }}{{ . }} {{ end }}</span><span class="table-subtext">Roles: {{ range .AllowedRoles }}{{ . }} {{ end }}</span></td>
-          <td>{{ if .Enabled }}<span class="status-value status-ok">Enabled</span>{{ else }}<span class="status-value status-disabled">Disabled</span>{{ end }}</td>
-          <td class="action-stack">
-            <a class="table-action button-link" href="/admin/templates/{{ .ID }}/edit">Edit</a>
-            <a class="table-action button-link" href="/admin/templates/{{ .ID }}/copy">Copy</a>
-            <form method="post" action="/admin/templates/{{ .ID }}/enabled" x-on:submit="if (!confirm('Change this template status?')) $event.preventDefault()">
-              <input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}">
-              <input type="hidden" name="enabled" value="{{ if .Enabled }}false{{ else }}true{{ end }}">
-              <button class="table-action" type="submit">{{ if .Enabled }}Disable{{ else }}Enable{{ end }}</button>
-            </form>
-          </td>
-        </tr>
-      {{ else }}
+      {{ range .TemplateImages }}{{ template "admin-template-row" . }}{{ else }}
         <tr><td colspan="6" class="muted">No workspace templates have been defined.</td></tr>
       {{ end }}
       </tbody>
@@ -42,4 +25,24 @@
   </div>
 </section>
 {{ template "base-end" . }}
+{{ end }}
+
+{{ define "admin-template-row" }}
+<tr id="admin-template-row-{{ .ID }}">
+  <td><strong>{{ .Name }}</strong><span class="table-subtext">{{ .Description }}</span></td>
+  <td><code>{{ .ImageReference }}</code>{{ if .ImageDigest }}<span class="table-subtext">{{ .ImageDigest }}</span>{{ end }}{{ template "admin-template-image-status-content" . }}</td>
+  <td><span class="table-subtext">CPU {{ .DefaultCPUMillis }} / {{ .MaxCPUMillis }} mCPU</span><span class="table-subtext">Memory {{ mib .DefaultMemoryBytes }} / {{ mib .MaxMemoryBytes }} MiB</span><span class="table-subtext">{{ if .ResourcesConfigurable }}User selectable{{ else }}Fixed defaults{{ end }}</span></td>
+  <td><span class="table-subtext">{{ range .AccessMethods }}{{ . }} {{ end }}</span><span class="table-subtext">Roles: {{ range .AllowedRoles }}{{ . }} {{ end }}</span></td>
+  <td>{{ if .RowError }}<p class="table-subtext status-disabled">{{ .RowError }}</p>{{ end }}{{ if .Enabled }}<span class="status-value status-ok">Enabled</span>{{ else }}<span class="status-value status-disabled">Disabled</span>{{ end }}</td>
+  <td class="action-stack">
+    <a class="table-action button-link" href="/admin/templates/{{ .ID }}/edit">Edit</a>
+    <a class="table-action button-link" href="/admin/templates/{{ .ID }}/copy">Copy</a>
+    <form method="post" action="/admin/templates/{{ .ID }}/enabled" hx-post="/admin/templates/{{ .ID }}/enabled" hx-target="#admin-template-row-{{ .ID }}" hx-swap="outerHTML" hx-disabled-elt="find button" hx-indicator="#admin-template-row-{{ .ID }} .row-indicator" hx-confirm="Change this template status?">
+      <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
+      <input type="hidden" name="enabled" value="{{ if .Enabled }}false{{ else }}true{{ end }}">
+      <button class="table-action" type="submit">{{ if .Enabled }}Disable{{ else }}Enable{{ end }}</button>
+    </form>
+    <span class="row-indicator htmx-indicator" role="status">Working&hellip;</span>
+  </td>
+</tr>
 {{ end }}
