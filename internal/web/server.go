@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"html/template"
 	"io"
 	"io/fs"
@@ -184,6 +185,9 @@ type templateImageView struct {
 	Status    string
 	Message   string
 	Pulling   bool
+	// RowError is a transient, request-scoped message shown only in the
+	// just-swapped-in row after a rejected dynamic row action.
+	RowError string
 }
 
 type imagePullOperation struct {
@@ -226,6 +230,7 @@ type pageData struct {
 	SettingsForm                settingsFormData
 	Allocation                  *allocationView
 	ActiveWorkspace             *domain.Workspace
+	WorkspaceOwnerName          string
 	WorkspaceAccess             map[string]workspaceAccess
 	FileListing                 *files.Listing
 	FileMounts                  []workspace.FileMount
@@ -253,6 +258,10 @@ type pageData struct {
 type retainedVolumeView struct {
 	domain.RetainedWorkspaceVolume
 	RuntimePresent bool
+	CSRFToken      string
+	// RowError is a transient, request-scoped message shown only in the
+	// just-swapped-in row after a rejected dynamic row action.
+	RowError string
 }
 
 // reattachChoice is one selectable retained-volume tombstone offered for a
@@ -296,6 +305,41 @@ type workspaceAccess struct {
 	Files    bool
 }
 
+// userRowData is the "." context for the shared "admin-user-row" template
+// fragment, mirroring workspaceRowData's role for the workspace list.
+type userRowData struct {
+	Target        domain.User
+	Groups        []domain.Group
+	CSRFToken     string
+	CurrentUserID string
+	RowError      string
+}
+
+// workspaceRowData is the "." context for the shared "workspace-row"
+// template fragment, used both inside the full workspace list and as the
+// standalone HTMX response an action button swaps in, so a single template
+// definition covers both without duplicating the row markup.
+type workspaceRowData struct {
+	Workspace domain.Workspace
+	Access    workspaceAccess
+	CSRFToken string
+	// RowError is a transient, request-scoped message (e.g. "workspace is
+	// still running") shown only in the just-swapped-in row; it is never
+	// persisted and disappears on the next full list refresh.
+	RowError string
+}
+
+// workspaceDetailHeaderData is the Detail page's equivalent of
+// workspaceRowData: the badge/name/status/actions block that a lifecycle
+// action re-renders in place via htmx, instead of the whole page.
+type workspaceDetailHeaderData struct {
+	Workspace domain.Workspace
+	Access    workspaceAccess
+	CSRFToken string
+	OwnerName string
+	RowError  string
+}
+
 type runtimeWorkspaceView struct {
 	Observed       runtime.ObservedWorkspace
 	Owner          string
@@ -329,9 +373,46 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 		"timeoutPhase": func(value domain.Workspace) workspace.TimeoutStatus {
 			return workspace.EvaluateTimeouts(value, time.Now())
 		},
+		"workspaceRow": func(data pageData, value domain.Workspace) workspaceRowData {
+			return workspaceRowData{Workspace: value, Access: data.WorkspaceAccess[value.ID], CSRFToken: data.CSRFToken}
+		},
+		"workspaceDetailHeader": func(data pageData) workspaceDetailHeaderData {
+			value := domain.Workspace{}
+			if data.ActiveWorkspace != nil {
+				value = *data.ActiveWorkspace
+			}
+			return workspaceDetailHeaderData{Workspace: value, Access: data.Access, CSRFToken: data.CSRFToken, OwnerName: data.WorkspaceOwnerName, RowError: data.Error}
+		},
+		"userRow": func(data pageData, value domain.User) userRowData {
+			currentUserID := ""
+			if data.User != nil {
+				currentUserID = data.User.ID
+			}
+			return userRowData{Target: value, Groups: data.UserGroups[value.ID], CSRFToken: data.CSRFToken, CurrentUserID: currentUserID}
+		},
 		"timeoutPhaseText": func(value workspace.TimeoutPhase) string { return timeoutPhaseText(value) },
 		"timeoutText":      func(seconds int64) string { return formatTimeout(seconds) },
-		"operationText":    func(value string) string { return operationText(value) },
+		"timeoutCountdownText": func(status workspace.TimeoutStatus) string {
+			return timeoutCountdownText(status, time.Now())
+		},
+		"timeoutUrgencyClass": func(status workspace.TimeoutStatus) string {
+			return timeoutUrgencyClass(status, time.Now())
+		},
+		"workspaceInitials":     workspaceInitials,
+		"templateHue":           templateHue,
+		"relativeTime":          relativeTime,
+		"workspaceStatusBucket": workspaceStatusBucket,
+		"workspaceStatusCounts": workspaceStatusCounts,
+		"volumeMounts": func(mounts []domain.TemplateMount) []domain.TemplateMount {
+			volumes := make([]domain.TemplateMount, 0, len(mounts))
+			for _, mount := range mounts {
+				if mount.Type == domain.TemplateMountVolume {
+					volumes = append(volumes, mount)
+				}
+			}
+			return volumes
+		},
+		"operationText": func(value string) string { return operationText(value) },
 		"accessURL": func(workspaceID, tab string) string {
 			return "/workspaces/" + workspaceID + "/access?tab=" + url.QueryEscape(tab)
 		},
@@ -1013,32 +1094,188 @@ func (s *Server) workspaceAction(w http.ResponseWriter, r *http.Request, action 
 	if !ok {
 		return
 	}
-	returnPath := workspaceActionReturnPath(r, user)
+	workspaceID := r.PathValue("id")
+	actionContext := classifyWorkspaceActionContext(r, user)
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if !s.validCSRF(r) {
 		http.Error(w, "invalid request", http.StatusForbidden)
 		return
 	}
-	if err := operation(r.Context(), user.ID, r.PathValue("id")); err != nil {
+	opErr := operation(r.Context(), user.ID, workspaceID)
+	if isHTMXRequest(r) {
+		switch actionContext {
+		case workspaceActionContextList:
+			s.renderWorkspaceRow(w, r, user, workspaceID, action, opErr)
+			return
+		case workspaceActionContextDetail:
+			s.renderWorkspaceDetailHeader(w, r, user, workspaceID, action, opErr)
+			return
+		}
+		// admin-runtime's start/stop forms are plain (no HX-Request header)
+		// and fall through to the full-page behavior below unchanged; this
+		// default case only exists so a future htmx conversion there
+		// doesn't silently fall into the wrong fragment shape.
+	}
+	if opErr != nil {
 		data, _ := s.workspacePageData(r.Context(), user)
 		data.Title = "Workspaces | COWS"
 		data.User = user
 		data.CSRFToken = s.ensureCSRF(w, r)
-		data.Error = workspaceActionError(action, err)
+		data.Error = workspaceActionError(action, opErr)
 		s.render(w, http.StatusBadRequest, "workspaces-page", data)
 		return
 	}
-	http.Redirect(w, r, returnPath, http.StatusSeeOther)
+	http.Redirect(w, r, actionContext.redirectPath(workspaceID), http.StatusSeeOther)
 }
 
-// workspaceActionReturnPath accepts only the one internal administrator view
-// that needs to retain its context. Browser-supplied paths are never used as
-// arbitrary redirects.
-func workspaceActionReturnPath(r *http.Request, user *domain.User) string {
-	if user != nil && user.IsAdministrator() && r.FormValue("return_to") == "/admin/runtime" {
-		return "/admin/runtime"
+// isHTMXRequest reports whether htmx issued r (it always sends this header
+// on requests it makes), distinguishing a dynamic row-action request from a
+// plain form submission (e.g. JavaScript disabled).
+func isHTMXRequest(r *http.Request) bool {
+	return r.Header.Get("HX-Request") == "true"
+}
+
+// renderWorkspaceRow answers a row-action request with just the affected
+// <tr>, so htmx can swap it in without a full page reload. A workspace that
+// no longer exists (successful delete, or a concurrent delete from another
+// tab) renders as an empty response, which removes the row entirely.
+func (s *Server) renderWorkspaceRow(w http.ResponseWriter, r *http.Request, user *domain.User, workspaceID, action string, opErr error) {
+	if opErr != nil && errors.Is(opErr, repository.ErrNotFound) {
+		w.WriteHeader(http.StatusOK)
+		return
 	}
-	return "/workspaces"
+	value, err := s.workspace.GetWorkspace(r.Context(), user.ID, workspaceID)
+	if errors.Is(err, repository.ErrNotFound) {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to load workspace", http.StatusInternalServerError)
+		return
+	}
+	access := workspaceAccess{}
+	if methods, methodsErr := s.workspace.WorkspaceAccessMethods(r.Context(), user.ID, workspaceID); methodsErr == nil {
+		for _, method := range methods {
+			switch method {
+			case domain.AccessTerminal:
+				access.Terminal = true
+			case domain.AccessDesktop:
+				access.Desktop = true
+			case domain.AccessFiles:
+				access.Files = true
+			}
+		}
+	}
+	rowError := ""
+	if opErr != nil {
+		rowError = workspaceActionError(action, opErr)
+	}
+	row := workspaceRowData{Workspace: value, Access: access, CSRFToken: s.ensureCSRF(w, r), RowError: rowError}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = s.templates.ExecuteTemplate(w, "workspace-row", row)
+}
+
+// renderWorkspaceDetailHeader answers a Detail-page lifecycle action with
+// just the header block (badge, name, status, meta, buttons), so htmx can
+// swap it in without a full page reload. Unlike a list row, there is no
+// empty-fragment-removes-the-row equivalent here: if the workspace no
+// longer exists (successful delete, or a concurrent delete from another
+// tab), an empty header would just leave the user staring at a broken
+// page, so it sends HX-Redirect back to the Overview instead.
+func (s *Server) renderWorkspaceDetailHeader(w http.ResponseWriter, r *http.Request, user *domain.User, workspaceID, action string, opErr error) {
+	if opErr != nil && errors.Is(opErr, repository.ErrNotFound) {
+		w.Header().Set("HX-Redirect", "/workspaces")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	value, err := s.workspace.GetWorkspace(r.Context(), user.ID, workspaceID)
+	if errors.Is(err, repository.ErrNotFound) {
+		w.Header().Set("HX-Redirect", "/workspaces")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to load workspace", http.StatusInternalServerError)
+		return
+	}
+	access := workspaceAccess{}
+	if methods, methodsErr := s.workspace.WorkspaceAccessMethods(r.Context(), user.ID, workspaceID); methodsErr == nil {
+		for _, method := range methods {
+			switch method {
+			case domain.AccessTerminal:
+				access.Terminal = true
+			case domain.AccessDesktop:
+				access.Desktop = true
+			case domain.AccessFiles:
+				access.Files = true
+			}
+		}
+	}
+	rowError := ""
+	if opErr != nil {
+		rowError = workspaceActionError(action, opErr)
+	}
+	header := workspaceDetailHeaderData{
+		Workspace: value,
+		Access:    access,
+		CSRFToken: s.ensureCSRF(w, r),
+		OwnerName: s.resolveWorkspaceOwnerName(r.Context(), user, value),
+		RowError:  rowError,
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = s.templates.ExecuteTemplate(w, "workspace-detail-header", header)
+}
+
+// resolveWorkspaceOwnerName renders the Detail page's "created ... by
+// <owner>" line. For a user viewing their own workspace this is free (no
+// query); an administrator viewing another user's workspace needs one
+// best-effort lookup, and never fails the page over a display-only field.
+func (s *Server) resolveWorkspaceOwnerName(ctx context.Context, viewer *domain.User, value domain.Workspace) string {
+	if viewer != nil && value.OwnerUserID == viewer.ID {
+		return viewer.Username
+	}
+	if viewer == nil {
+		return value.OwnerUserID
+	}
+	owner, err := s.auth.FindUserForAdmin(ctx, viewer.ID, value.OwnerUserID)
+	if err != nil {
+		return value.OwnerUserID
+	}
+	return owner.Username
+}
+
+// workspaceActionContext classifies which surface issued a lifecycle
+// action request, so the handler knows whether to answer with a table-row
+// fragment, a detail-page header fragment, or a classic redirect. Browser
+// input is never used as a raw redirect target - each context maps to a
+// path computed here, never one supplied by the client.
+type workspaceActionContext string
+
+const (
+	workspaceActionContextList         workspaceActionContext = "list"
+	workspaceActionContextAdminRuntime workspaceActionContext = "admin-runtime"
+	workspaceActionContextDetail       workspaceActionContext = "detail"
+)
+
+func classifyWorkspaceActionContext(r *http.Request, user *domain.User) workspaceActionContext {
+	if user != nil && user.IsAdministrator() && r.FormValue("return_to") == "/admin/runtime" {
+		return workspaceActionContextAdminRuntime
+	}
+	if r.FormValue("context") == "detail" {
+		return workspaceActionContextDetail
+	}
+	return workspaceActionContextList
+}
+
+func (c workspaceActionContext) redirectPath(workspaceID string) string {
+	switch c {
+	case workspaceActionContextAdminRuntime:
+		return "/admin/runtime"
+	case workspaceActionContextDetail:
+		return "/workspaces/" + workspaceID + "/access"
+	default:
+		return "/workspaces"
+	}
 }
 
 func (s *Server) workspaceTerminalPage(w http.ResponseWriter, r *http.Request) {
@@ -1093,10 +1330,11 @@ func (s *Server) workspaceAccessPageData(ctx context.Context, user *domain.User,
 		return pageData{}, errors.New("workspace has no enabled access methods")
 	}
 	return pageData{
-		ActiveWorkspace: &value,
-		AccessTab:       tab,
-		Access:          access,
-		AccessFilesURL:  "/workspaces/" + workspaceID + "/access/files",
+		ActiveWorkspace:    &value,
+		WorkspaceOwnerName: s.resolveWorkspaceOwnerName(ctx, user, value),
+		AccessTab:          tab,
+		Access:             access,
+		AccessFilesURL:     "/workspaces/" + workspaceID + "/access/files",
 	}, nil
 }
 
@@ -1508,13 +1746,14 @@ func (s *Server) storagePage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	data := pageData{Title: "My storage | COWS", User: user, CSRFToken: s.ensureCSRF(w, r)}
+	csrfToken := s.ensureCSRF(w, r)
+	data := pageData{Title: "My storage | COWS", User: user, CSRFToken: csrfToken}
 	if s.options.Store != nil {
 		if volumes, err := s.options.Store.ListRetainedWorkspaceVolumesForOwner(r.Context(), user.ID); err == nil {
 			volumeRuntime, _ := s.runtime.(runtime.VolumeRuntime)
 			views := make([]retainedVolumeView, 0, len(volumes))
 			for _, volume := range volumes {
-				view := retainedVolumeView{RetainedWorkspaceVolume: volume}
+				view := retainedVolumeView{RetainedWorkspaceVolume: volume, CSRFToken: csrfToken}
 				if volumeRuntime != nil {
 					view.RuntimePresent, _ = volumeRuntime.VolumeExists(r.Context(), volume.VolumeName)
 				}
@@ -1583,6 +1822,10 @@ func (s *Server) storageVolumeDelete(w http.ResponseWriter, r *http.Request) {
 	workspaceID, mountName := r.PathValue("workspace_id"), r.PathValue("mount_name")
 	volume, err := s.options.Store.ConsumeRetainedWorkspaceVolume(r.Context(), workspaceID, mountName, user.ID)
 	if errors.Is(err, repository.ErrNotFound) || errors.Is(err, repository.ErrConflict) {
+		if isHTMXRequest(r) {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		http.NotFound(w, r)
 		return
 	}
@@ -1594,6 +1837,10 @@ func (s *Server) storageVolumeDelete(w http.ResponseWriter, r *http.Request) {
 		_ = volumeRuntime.RemoveVolume(r.Context(), volume.VolumeName)
 	}
 	s.recordStorageAudit(r.Context(), user.ID, "storage.volume_deleted", "volume", volume.VolumeName, map[string]string{"workspace_id": volume.WorkspaceID, "mount_name": volume.MountName})
+	if isHTMXRequest(r) {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	http.Redirect(w, r, "/storage", http.StatusSeeOther)
 }
 
@@ -1632,6 +1879,10 @@ func (s *Server) storageDirectoryDelete(w http.ResponseWriter, r *http.Request) 
 	workspaceID := r.PathValue("workspace_id")
 	if err := s.workspace.DeleteRetainedDirectory(r.Context(), user.ID, workspaceID); err != nil {
 		if errors.Is(err, repository.ErrNotFound) || errors.Is(err, repository.ErrConflict) {
+			if isHTMXRequest(r) {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
 			http.NotFound(w, r)
 			return
 		}
@@ -1639,6 +1890,10 @@ func (s *Server) storageDirectoryDelete(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.recordStorageAudit(r.Context(), user.ID, "storage.directory_deleted", "directory", workspaceID, map[string]string{"workspace_id": workspaceID})
+	if isHTMXRequest(r) {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	http.Redirect(w, r, "/storage", http.StatusSeeOther)
 }
 
@@ -1864,21 +2119,66 @@ func (s *Server) adminUserDisabled(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	targetID := r.PathValue("id")
+	notFound := false
+	cleanupFailed := false
+	rowErrorText := ""
 	if err := s.auth.SetUserDisabled(r.Context(), user.ID, targetID, disabled); err != nil {
-		status := http.StatusBadRequest
-		if errors.Is(err, repository.ErrNotFound) {
-			status = http.StatusNotFound
+		notFound = errors.Is(err, repository.ErrNotFound)
+		rowErrorText = userActionError(err)
+	} else if disabled {
+		if err := s.workspace.StopUserWorkspaces(r.Context(), user.ID, targetID); err != nil {
+			cleanupFailed = true
+			rowErrorText = "The user was disabled and all sessions were invalidated, but one or more workspaces could not be stopped. Check Runtime and retry."
 		}
-		http.Error(w, userActionError(err), status)
+	}
+	if isHTMXRequest(r) {
+		s.renderUserRow(w, r, user, targetID, rowErrorText, notFound)
 		return
 	}
-	if disabled {
-		if err := s.workspace.StopUserWorkspaces(r.Context(), user.ID, targetID); err != nil {
-			http.Error(w, "The user was disabled and all sessions were invalidated, but one or more workspaces could not be stopped. Check Runtime and retry.", http.StatusServiceUnavailable)
-			return
+	switch {
+	case notFound:
+		http.Error(w, rowErrorText, http.StatusNotFound)
+	case cleanupFailed:
+		http.Error(w, rowErrorText, http.StatusServiceUnavailable)
+	case rowErrorText != "":
+		http.Error(w, rowErrorText, http.StatusBadRequest)
+	default:
+		http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
+	}
+}
+
+// renderUserRow answers a row-action request with just the affected <tr>.
+// removed indicates the target no longer exists (deleted, or not found),
+// in which case the response is empty and htmx removes the row.
+func (s *Server) renderUserRow(w http.ResponseWriter, r *http.Request, actor domain.User, targetID, rowError string, removed bool) {
+	if removed {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	target, err := s.auth.FindUserForAdmin(r.Context(), actor.ID, targetID)
+	if errors.Is(err, repository.ErrNotFound) {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to load user", http.StatusInternalServerError)
+		return
+	}
+	groupIDs, err := s.auth.UserGroupIDs(r.Context(), actor.ID, targetID)
+	var groups []domain.Group
+	if err == nil {
+		for _, group := range s.templateGroups(r.Context(), actor.ID) {
+			for _, id := range groupIDs {
+				if group.ID == id {
+					groups = append(groups, group)
+					break
+				}
+			}
 		}
 	}
-	http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
+	row := userRowData{Target: target, Groups: groups, CSRFToken: s.ensureCSRF(w, r), CurrentUserID: actor.ID, RowError: rowError}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = s.templates.ExecuteTemplate(w, "admin-user-row", row)
 }
 
 func (s *Server) adminUserDelete(w http.ResponseWriter, r *http.Request) {
@@ -1896,25 +2196,35 @@ func (s *Server) adminUserDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	targetID := r.PathValue("id")
+	var opErr error
+	notFound := false
+	serviceUnavailable := false
 	if err := s.workspace.DeleteUserWorkspaces(r.Context(), user.ID, targetID); err != nil {
-		status := http.StatusBadRequest
-		if errors.Is(err, repository.ErrNotFound) {
-			status = http.StatusNotFound
-		} else if errors.Is(err, workspace.ErrRuntimeUnavailable) || errors.Is(err, workspace.ErrWorkspaceCleanupIncomplete) {
-			status = http.StatusServiceUnavailable
+		opErr = err
+		notFound = errors.Is(err, repository.ErrNotFound)
+		serviceUnavailable = errors.Is(err, workspace.ErrRuntimeUnavailable) || errors.Is(err, workspace.ErrWorkspaceCleanupIncomplete)
+	} else if err := s.auth.DeleteUser(r.Context(), user.ID, targetID); err != nil {
+		opErr = err
+		notFound = errors.Is(err, repository.ErrNotFound)
+	}
+	if isHTMXRequest(r) {
+		rowErrorText := ""
+		if opErr != nil {
+			rowErrorText = userDeleteError(opErr)
 		}
-		http.Error(w, userDeleteError(err), status)
+		s.renderUserRow(w, r, user, targetID, rowErrorText, opErr == nil || notFound)
 		return
 	}
-	if err := s.auth.DeleteUser(r.Context(), user.ID, targetID); err != nil {
-		status := http.StatusBadRequest
-		if errors.Is(err, repository.ErrNotFound) {
-			status = http.StatusNotFound
-		}
-		http.Error(w, userDeleteError(err), status)
-		return
+	switch {
+	case opErr == nil:
+		http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
+	case notFound:
+		http.Error(w, userDeleteError(opErr), http.StatusNotFound)
+	case serviceUnavailable:
+		http.Error(w, userDeleteError(opErr), http.StatusServiceUnavailable)
+	default:
+		http.Error(w, userDeleteError(opErr), http.StatusBadRequest)
 	}
-	http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
 }
 
 func (s *Server) adminUserGroups(w http.ResponseWriter, r *http.Request) {
@@ -2295,31 +2605,35 @@ func (s *Server) adminTemplates(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) templateImageViews(ctx context.Context, templates []domain.WorkspaceTemplate, csrfToken string) []templateImageView {
 	views := make([]templateImageView, 0, len(templates))
-	imageRuntime, supported := s.runtime.(runtime.ImageRuntime)
 	for _, value := range templates {
-		view := templateImageView{WorkspaceTemplate: value, CSRFToken: csrfToken, Status: "unavailable", Message: "Runtime image status unavailable."}
-		image := runtime.Image{Reference: value.ImageReference, Digest: value.ImageDigest}
-		if operation := s.imagePullSnapshot(value.ID); operation != nil && operation.Reference == imageReference(image) {
-			view.Status = operation.Status
-			view.Message = operation.Message
-			view.Pulling = operation.Status == "pulling"
-		} else if supported {
-			available, err := imageRuntime.ImageAvailable(ctx, image)
-			switch {
-			case err != nil:
-				view.Status = "unavailable"
-				view.Message = "Runtime image status unavailable."
-			case available:
-				view.Status = "available"
-				view.Message = "Available on this system."
-			default:
-				view.Status = "missing"
-				view.Message = "Not available on this system. Pull it before creating a workspace."
-			}
-		}
-		views = append(views, view)
+		views = append(views, s.templateImageViewFor(ctx, value, csrfToken))
 	}
 	return views
+}
+
+func (s *Server) templateImageViewFor(ctx context.Context, value domain.WorkspaceTemplate, csrfToken string) templateImageView {
+	imageRuntime, supported := s.runtime.(runtime.ImageRuntime)
+	view := templateImageView{WorkspaceTemplate: value, CSRFToken: csrfToken, Status: "unavailable", Message: "Runtime image status unavailable."}
+	image := runtime.Image{Reference: value.ImageReference, Digest: value.ImageDigest}
+	if operation := s.imagePullSnapshot(value.ID); operation != nil && operation.Reference == imageReference(image) {
+		view.Status = operation.Status
+		view.Message = operation.Message
+		view.Pulling = operation.Status == "pulling"
+	} else if supported {
+		available, err := imageRuntime.ImageAvailable(ctx, image)
+		switch {
+		case err != nil:
+			view.Status = "unavailable"
+			view.Message = "Runtime image status unavailable."
+		case available:
+			view.Status = "available"
+			view.Message = "Available on this system."
+		default:
+			view.Status = "missing"
+			view.Message = "Not available on this system. Pull it before creating a workspace."
+		}
+	}
+	return view
 }
 
 func imageReference(image runtime.Image) string {
@@ -2566,15 +2880,46 @@ func (s *Server) adminTemplateEnabled(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	if err := s.workspace.SetTemplateEnabled(r.Context(), user.ID, r.PathValue("id"), enabled); err != nil {
+	templateID := r.PathValue("id")
+	opErr := s.workspace.SetTemplateEnabled(r.Context(), user.ID, templateID, enabled)
+	if isHTMXRequest(r) {
+		s.renderTemplateRow(w, r, user, templateID, opErr)
+		return
+	}
+	if opErr != nil {
 		status := http.StatusBadRequest
-		if errors.Is(err, repository.ErrNotFound) {
+		if errors.Is(opErr, repository.ErrNotFound) {
 			status = http.StatusNotFound
 		}
-		http.Error(w, templateActionError(err), status)
+		http.Error(w, templateActionError(opErr), status)
 		return
 	}
 	http.Redirect(w, r, "/admin/templates", http.StatusSeeOther)
+}
+
+// renderTemplateRow is adminTemplateEnabled's dynamic-row counterpart to
+// renderWorkspaceRow: it answers with just the affected <tr> so the
+// templates list can update in place instead of reloading.
+func (s *Server) renderTemplateRow(w http.ResponseWriter, r *http.Request, user domain.User, templateID string, opErr error) {
+	if opErr != nil && errors.Is(opErr, repository.ErrNotFound) {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	value, err := s.workspace.GetTemplate(r.Context(), user.ID, templateID)
+	if errors.Is(err, repository.ErrNotFound) {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to load workspace template", http.StatusInternalServerError)
+		return
+	}
+	view := s.templateImageViewFor(r.Context(), value, s.ensureCSRF(w, r))
+	if opErr != nil {
+		view.RowError = templateActionError(opErr)
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = s.templates.ExecuteTemplate(w, "admin-template-row", view)
 }
 
 func (s *Server) adminRuntime(w http.ResponseWriter, r *http.Request) {
@@ -2670,16 +3015,17 @@ func (s *Server) adminVolumes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to load retained volumes", http.StatusInternalServerError)
 		return
 	}
+	csrfToken := s.ensureCSRF(w, r)
 	volumeRuntime, _ := s.runtime.(runtime.VolumeRuntime)
 	views := make([]retainedVolumeView, 0, len(values))
 	for _, value := range values {
-		view := retainedVolumeView{RetainedWorkspaceVolume: value}
+		view := retainedVolumeView{RetainedWorkspaceVolume: value, CSRFToken: csrfToken}
 		if volumeRuntime != nil {
 			view.RuntimePresent, _ = volumeRuntime.VolumeExists(r.Context(), value.VolumeName)
 		}
 		views = append(views, view)
 	}
-	s.render(w, http.StatusOK, "admin-volumes-page", pageData{Title: "Retained volumes | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), RetainedVolumes: views})
+	s.render(w, http.StatusOK, "admin-volumes-page", pageData{Title: "Retained volumes | COWS", User: &user, CSRFToken: csrfToken, RetainedVolumes: views})
 }
 
 func (s *Server) retainedVolumeForRoute(ctx context.Context, workspaceID, mountName string) (domain.RetainedWorkspaceVolume, error) {
@@ -2744,20 +3090,46 @@ func (s *Server) adminVolumeDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	volumeRuntime, ok := s.runtime.(runtime.VolumeRuntime)
+	rowErrorText := ""
 	if !ok {
-		http.Error(w, "named volume management is unavailable", http.StatusServiceUnavailable)
+		rowErrorText = "Named volume management is unavailable."
+	} else if err := volumeRuntime.RemoveVolume(r.Context(), volume.VolumeName); err != nil && !errors.Is(err, runtime.ErrNotFound) {
+		rowErrorText = "The retained volume could not be removed."
+	} else if err := s.options.Store.DeleteRetainedWorkspaceVolume(r.Context(), volume.VolumeName); err != nil && !errors.Is(err, repository.ErrNotFound) {
+		rowErrorText = "The retained volume metadata could not be removed."
+	}
+	if rowErrorText == "" {
+		s.recordAdminAudit(r.Context(), user.ID, "volume.recovery_removed", volume.VolumeName, map[string]string{"workspace_id": volume.WorkspaceID, "mount_name": volume.MountName})
+	}
+	if isHTMXRequest(r) {
+		s.renderAdminVolumeRow(w, r, volume.WorkspaceID, volume.MountName, rowErrorText)
 		return
 	}
-	if err := volumeRuntime.RemoveVolume(r.Context(), volume.VolumeName); err != nil && !errors.Is(err, runtime.ErrNotFound) {
-		http.Error(w, "the retained volume could not be removed", http.StatusServiceUnavailable)
+	if rowErrorText != "" {
+		http.Error(w, rowErrorText, http.StatusServiceUnavailable)
 		return
 	}
-	if err := s.options.Store.DeleteRetainedWorkspaceVolume(r.Context(), volume.VolumeName); err != nil && !errors.Is(err, repository.ErrNotFound) {
-		http.Error(w, "the retained volume metadata could not be removed", http.StatusInternalServerError)
-		return
-	}
-	s.recordAdminAudit(r.Context(), user.ID, "volume.recovery_removed", volume.VolumeName, map[string]string{"workspace_id": volume.WorkspaceID, "mount_name": volume.MountName})
 	http.Redirect(w, r, "/admin/volumes", http.StatusSeeOther)
+}
+
+// renderAdminVolumeRow answers a row-action request with just the affected
+// <tr>. An empty response (tombstone gone) removes the row.
+func (s *Server) renderAdminVolumeRow(w http.ResponseWriter, r *http.Request, workspaceID, mountName, rowError string) {
+	volume, err := s.retainedVolumeForRoute(r.Context(), workspaceID, mountName)
+	if errors.Is(err, repository.ErrNotFound) {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to load retained volume", http.StatusInternalServerError)
+		return
+	}
+	view := retainedVolumeView{RetainedWorkspaceVolume: volume, RowError: rowError, CSRFToken: s.ensureCSRF(w, r)}
+	if volumeRuntime, ok := s.runtime.(runtime.VolumeRuntime); ok {
+		view.RuntimePresent, _ = volumeRuntime.VolumeExists(r.Context(), volume.VolumeName)
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = s.templates.ExecuteTemplate(w, "admin-volume-row", view)
 }
 
 func (s *Server) recordAdminAudit(ctx context.Context, actorID, eventType, targetID string, metadata map[string]string) {
@@ -3042,6 +3414,129 @@ func timeoutPhaseText(phase workspace.TimeoutPhase) string {
 		return "Stopped container retention"
 	default:
 		return "No active timeout"
+	}
+}
+
+// timeoutCountdownText renders a live "stop in 2d 21h" / "delete in 3d 2h"
+// readout. The verb comes from Phase, not Action: Action only flips away
+// from "none" once the deadline has actually passed (see
+// workspace.EvaluateTimeouts), but Phase already tells us which action a
+// still-pending deadline is heading toward.
+func timeoutCountdownText(status workspace.TimeoutStatus, now time.Time) string {
+	var verb string
+	switch status.Phase {
+	case workspace.TimeoutPhaseAwaitingConnection:
+		verb = "stop"
+	case workspace.TimeoutPhaseStoppedRetention:
+		verb = "delete"
+	default:
+		return ""
+	}
+	if status.Deadline.IsZero() {
+		return ""
+	}
+	remaining := status.Deadline.Sub(now)
+	if remaining <= 0 {
+		return verb + " due now"
+	}
+	return verb + " in " + formatTimeout(int64(remaining.Seconds()))
+}
+
+// timeoutUrgencyClass escalates the countdown's color as its deadline
+// nears, so a user glancing at the list notices an imminent auto-stop or
+// auto-delete without having to read the exact duration.
+func timeoutUrgencyClass(status workspace.TimeoutStatus, now time.Time) string {
+	if status.Deadline.IsZero() {
+		return ""
+	}
+	switch remaining := status.Deadline.Sub(now); {
+	case remaining <= 6*time.Hour:
+		return "timeout-urgent"
+	case remaining <= 48*time.Hour:
+		return "timeout-soon"
+	default:
+		return ""
+	}
+}
+
+// workspaceInitials derives a two-letter badge label from a workspace name,
+// e.g. "iic-osic-tools-dev" -> "IO". Purely cosmetic; any deterministic
+// rule is fine since it only has to be stable and short.
+func workspaceInitials(name string) string {
+	words := strings.FieldsFunc(name, func(r rune) bool {
+		return r == '-' || r == '_' || r == ' ' || r == '.'
+	})
+	switch len(words) {
+	case 0:
+		return "?"
+	case 1:
+		runes := []rune(words[0])
+		if len(runes) >= 2 {
+			return strings.ToUpper(string(runes[:2]))
+		}
+		return strings.ToUpper(string(runes))
+	default:
+		first := []rune(words[0])[:1]
+		second := []rune(words[1])[:1]
+		return strings.ToUpper(string(first) + string(second))
+	}
+}
+
+// templateHue derives a stable badge hue (0-359) from a template ID, so the
+// same template always gets the same badge color across every row and page
+// it appears on, without an administrator having to assign one.
+func templateHue(templateID string) int {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(templateID))
+	return int(h.Sum32() % 360)
+}
+
+// workspaceStatusBucket collapses the runtime's finer-grained observed
+// states into the three buckets the Overview's filter pills offer. Shared
+// by the filter counts and each row's data-status attribute so the two
+// never drift apart.
+func workspaceStatusBucket(observedState string) string {
+	switch observedState {
+	case "running":
+		return "running"
+	case "failed":
+		return "error"
+	default:
+		return "stopped"
+	}
+}
+
+func workspaceStatusCounts(workspaces []domain.Workspace) map[string]int {
+	counts := map[string]int{"all": len(workspaces), "running": 0, "stopped": 0, "error": 0}
+	for _, value := range workspaces {
+		counts[workspaceStatusBucket(value.ObservedState)]++
+	}
+	return counts
+}
+
+// relativeTime renders a short "3 min ago" / "4 days ago" readout for
+// timestamps like LastConnectedAt, where the exact instant matters less
+// than roughly how long ago it was.
+func relativeTime(t time.Time) string {
+	if t.IsZero() {
+		return "Never"
+	}
+	d := time.Since(t)
+	switch {
+	case d < 45*time.Second:
+		return "just now"
+	case d < 90*time.Second:
+		return "1 min ago"
+	case d < 60*time.Minute:
+		return fmt.Sprintf("%d min ago", int(d.Minutes()))
+	case d < 90*time.Minute:
+		return "1 hour ago"
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%d hours ago", int(d.Hours()))
+	case d < 48*time.Hour:
+		return "1 day ago"
+	default:
+		return fmt.Sprintf("%d days ago", int(d.Hours()/24))
 	}
 }
 

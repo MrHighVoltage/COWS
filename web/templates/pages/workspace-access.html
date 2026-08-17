@@ -1,27 +1,97 @@
 {{ define "workspace-access-page" }}
 {{ template "base-start" . }}
 <link rel="stylesheet" href="/static/vendor/xterm/xterm.css">
-<div class="access-header">
-  <a class="access-back" href="/workspaces">&larr; Workspaces</a>
-  <h1 class="access-header-title" id="workspace-access-title">{{ .ActiveWorkspace.Name }}</h1>
+<nav class="detail-breadcrumb" aria-label="Breadcrumb"><a href="/workspaces">Workspaces</a><span aria-hidden="true">/</span><span>{{ .ActiveWorkspace.Name }}</span></nav>
+{{ template "workspace-detail-header" (workspaceDetailHeader .) }}
+<div class="detail-grid">
+  <section id="workspace-access-shell" class="workspace-access-shell" data-access data-initial-tab="{{ .AccessTab }}" data-files-url="{{ .AccessFilesURL }}" aria-label="Workspace access methods">
+    <div class="access-tabs">
+      <nav class="access-tab-list" role="tablist" aria-label="Workspace access methods">
+        {{ if .Access.Terminal }}<button class="access-tab" type="button" role="tab" data-access-tab="terminal" aria-controls="access-terminal-panel">Terminal</button>{{ end }}
+        {{ if .Access.Desktop }}<button class="access-tab" type="button" role="tab" data-access-tab="desktop" aria-controls="access-desktop-panel">Desktop</button>{{ end }}
+        {{ if .Access.Files }}<button class="access-tab" type="button" role="tab" data-access-tab="files" aria-controls="access-files-panel">Files</button>{{ end }}
+      </nav>
+      {{ if .Access.Terminal }}{{ template "workspace-terminal-controls" . }}{{ end }}
+      {{ if .Access.Desktop }}{{ template "workspace-desktop-controls" . }}{{ end }}
+    </div>
+    <div class="access-panels">
+      {{ if .Access.Terminal }}<div id="access-terminal-panel" class="access-panel" data-access-panel="terminal" role="tabpanel" aria-label="Terminal access" hidden>{{ template "workspace-terminal-panel" . }}</div>{{ end }}
+      {{ if .Access.Desktop }}<div id="access-desktop-panel" class="access-panel" data-access-panel="desktop" role="tabpanel" aria-label="Desktop access" hidden>{{ template "workspace-desktop-panel" . }}</div>{{ end }}
+      {{ if .Access.Files }}<div id="access-files-panel" class="access-panel" data-access-panel="files" role="tabpanel" aria-label="File manager access" hidden><div data-access-files>{{ if .FileListing }}{{ template "workspace-files-panel" . }}{{ else }}<p class="panel access-placeholder">Select the Files tab to load the approved workspace directories.</p>{{ end }}</div></div>{{ end }}
+    </div>
+  </section>
+  <aside class="detail-sidebar">
+    {{ template "workspace-detail-resources-card" .ActiveWorkspace }}
+    {{ template "workspace-detail-timeout-card" .ActiveWorkspace }}
+    {{ template "workspace-detail-storage-card" .ActiveWorkspace }}
+  </aside>
 </div>
-
-<section id="workspace-access-shell" class="workspace-access-shell" data-access data-initial-tab="{{ .AccessTab }}" data-files-url="{{ .AccessFilesURL }}" aria-label="Workspace access methods">
-  <div class="access-tabs">
-    <nav class="access-tab-list" role="tablist" aria-label="Workspace access methods">
-      {{ if .Access.Terminal }}<button class="access-tab" type="button" role="tab" data-access-tab="terminal" aria-controls="access-terminal-panel">Terminal</button>{{ end }}
-      {{ if .Access.Desktop }}<button class="access-tab" type="button" role="tab" data-access-tab="desktop" aria-controls="access-desktop-panel">Desktop</button>{{ end }}
-      {{ if .Access.Files }}<button class="access-tab" type="button" role="tab" data-access-tab="files" aria-controls="access-files-panel">Files</button>{{ end }}
-    </nav>
-    {{ if .Access.Terminal }}{{ template "workspace-terminal-controls" . }}{{ end }}
-    {{ if .Access.Desktop }}{{ template "workspace-desktop-controls" . }}{{ end }}
-  </div>
-  <div class="access-panels">
-    {{ if .Access.Terminal }}<div id="access-terminal-panel" class="access-panel" data-access-panel="terminal" role="tabpanel" aria-label="Terminal access" hidden>{{ template "workspace-terminal-panel" . }}</div>{{ end }}
-    {{ if .Access.Desktop }}<div id="access-desktop-panel" class="access-panel" data-access-panel="desktop" role="tabpanel" aria-label="Desktop access" hidden>{{ template "workspace-desktop-panel" . }}</div>{{ end }}
-    {{ if .Access.Files }}<div id="access-files-panel" class="access-panel" data-access-panel="files" role="tabpanel" aria-label="File manager access" hidden><div data-access-files>{{ if .FileListing }}{{ template "workspace-files-panel" . }}{{ else }}<p class="panel access-placeholder">Select the Files tab to load the approved workspace directories.</p>{{ end }}</div></div>{{ end }}
-  </div>
-</section>
 <script type="module" src="/static/js/access.js"></script>
 {{ template "base-end" . }}
+{{ end }}
+
+{{ define "workspace-detail-header" }}
+<header class="detail-header" id="workspace-detail-header">
+  <div class="detail-identity">
+    <span class="workspace-badge workspace-badge-lg" style="--badge-hue:{{ templateHue .Workspace.TemplateID }}">{{ workspaceInitials .Workspace.Name }}</span>
+    <div class="detail-identity-text">
+      <div class="detail-title-row"><h1 id="workspace-access-title">{{ .Workspace.Name }}</h1>{{ template "state-stamp" .Workspace.ObservedState }}</div>
+      <p class="detail-meta">{{ if .Workspace.TemplateName }}{{ .Workspace.TemplateName }}{{ else }}Unavailable{{ end }} &middot; created {{ relativeTime .Workspace.CreatedAt }} by {{ .OwnerName }}</p>
+      {{ if .RowError }}<p class="table-subtext status-disabled">{{ .RowError }}</p>{{ end }}
+    </div>
+  </div>
+  <div class="detail-actions" hx-select="unset">
+    <a class="primary-button button-link" href="#workspace-access-shell">Connect</a>
+    {{ if eq .Workspace.ObservedState "running" }}
+    <form method="post" action="/workspaces/{{ .Workspace.ID }}/stop" hx-post="/workspaces/{{ .Workspace.ID }}/stop" hx-target="#workspace-detail-header" hx-swap="outerHTML" hx-disabled-elt="find button" hx-indicator="#workspace-detail-header .row-indicator"><input type="hidden" name="csrf_token" value="{{ .CSRFToken }}"><input type="hidden" name="context" value="detail"><button class="table-action state-action" type="submit">Stop</button></form>
+    <form method="post" action="/workspaces/{{ .Workspace.ID }}/restart" hx-post="/workspaces/{{ .Workspace.ID }}/restart" hx-target="#workspace-detail-header" hx-swap="outerHTML" hx-disabled-elt="find button" hx-indicator="#workspace-detail-header .row-indicator"><input type="hidden" name="csrf_token" value="{{ .CSRFToken }}"><input type="hidden" name="context" value="detail"><button class="table-action state-action" type="submit">Restart</button></form>
+    {{ else }}
+    <form method="post" action="/workspaces/{{ .Workspace.ID }}/start" hx-post="/workspaces/{{ .Workspace.ID }}/start" hx-target="#workspace-detail-header" hx-swap="outerHTML" hx-disabled-elt="find button" hx-indicator="#workspace-detail-header .row-indicator"><input type="hidden" name="csrf_token" value="{{ .CSRFToken }}"><input type="hidden" name="context" value="detail"><button class="table-action state-action" type="submit">Start</button></form>
+    {{ end }}
+    <form method="post" action="/workspaces/{{ .Workspace.ID }}/delete" hx-post="/workspaces/{{ .Workspace.ID }}/delete" hx-target="#workspace-detail-header" hx-swap="outerHTML" hx-disabled-elt="find button" hx-indicator="#workspace-detail-header .row-indicator" hx-confirm="Delete this workspace and its container? Managed directory files will be moved to the COWS archive, and named volumes will be retained for administrator recovery. The workspace record and container will be removed. This cannot be undone."><input type="hidden" name="csrf_token" value="{{ .CSRFToken }}"><input type="hidden" name="context" value="detail"><button class="table-action danger-action" type="submit">Delete</button></form>
+    <span class="row-indicator htmx-indicator" role="status">Working&hellip;</span>
+  </div>
+</header>
+{{ end }}
+
+{{ define "workspace-detail-resources-card" }}
+<section class="detail-card" aria-labelledby="detail-resources-title">
+  <h2 id="detail-resources-title" class="detail-card-title">Resources</h2>
+  <div class="detail-resource-row">
+    <div class="detail-resource-label"><span>CPU</span><span class="table-subtext">{{ .AllocatedCPUMillis }} mCPU allocated{{ if and (eq .ObservedState "running") .ResourceUsageKnown }} &middot; {{ cpuPercent .CPUUsagePercentMilli }} in use{{ end }}</span></div>
+  </div>
+  <div class="detail-resource-row">
+    <div class="detail-resource-label"><span>Memory</span><span class="table-subtext">{{ if and (eq .ObservedState "running") .ResourceUsageKnown }}{{ fileSize .MemoryUsageBytes }} / {{ end }}{{ mib .AllocatedMemoryBytes }} MiB</span></div>
+    {{ if and (eq .ObservedState "running") .ResourceUsageKnown }}<progress class="detail-resource-progress" value="{{ .MemoryUsageBytes }}" max="{{ .AllocatedMemoryBytes }}" aria-label="Memory in use"></progress>{{ end }}
+  </div>
+  <div class="detail-resource-row">
+    <div class="detail-resource-label"><span>Storage</span><span class="table-subtext">{{ if .StorageUsageKnown }}{{ fileSize .StorageUsageBytes }}{{ else }}unavailable{{ end }}</span></div>
+    {{ if .StorageUsageKnown }}<progress class="detail-resource-progress" value="{{ .StorageUsageBytes }}" max="{{ .AllocatedStorageBytes }}" aria-label="Storage in use"></progress>{{ end }}
+  </div>
+</section>
+{{ end }}
+
+{{ define "workspace-detail-timeout-card" }}
+{{ $timeout := timeoutPhase . }}
+<section class="detail-card" aria-labelledby="detail-timeout-title">
+  <h2 id="detail-timeout-title" class="detail-card-title">Timeout policy</h2>
+  <p class="detail-card-text">Stops after <strong>{{ timeoutText .InitialConnectionTimeoutSeconds }}</strong> without a connection &middot; deletes <strong>{{ timeoutText .StoppedRetentionSeconds }}</strong> after stopping</p>
+  {{ $countdown := timeoutCountdownText $timeout }}
+  {{ if $countdown }}<p class="detail-timeout-countdown {{ timeoutUrgencyClass $timeout }}">{{ $countdown }}</p>{{ end }}
+</section>
+{{ end }}
+
+{{ define "workspace-detail-storage-card" }}
+{{ $volumes := volumeMounts .TemplateConfiguration.Mounts }}
+{{ if $volumes }}
+<section class="detail-card" aria-labelledby="detail-storage-title">
+  <h2 id="detail-storage-title" class="detail-card-title">Storage</h2>
+  {{ range $volumes }}
+  <div class="detail-storage-item">
+    <div><span class="detail-storage-name">{{ .Name }}</span><span class="table-subtext">{{ .ContainerPath }}{{ if .ReadOnly }} &middot; read-only{{ end }}</span></div>
+    <span class="detail-storage-tag">retained</span>
+  </div>
+  {{ end }}
+</section>
+{{ end }}
 {{ end }}

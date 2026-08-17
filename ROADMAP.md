@@ -57,6 +57,10 @@ Not implemented or incomplete:
   see decision 0025.);
 - archive extraction, file previews, bulk file operations, and stronger
   filesystem race/integration coverage;
+- container log viewing (a "Logs" tab on the workspace detail page); there is
+  no runtime log-fetch capability today (no `runtime.LogsRuntime`, no log
+  endpoint). Scoped out of the dark-theme workspace redesign as a genuinely
+  new backend feature rather than a UI port;
 - multi-host agents, host pools, PostgreSQL, high availability, GPUs, and
   shared storage;
 - packaged service units, upgrade tooling, and production deployment hardening.
