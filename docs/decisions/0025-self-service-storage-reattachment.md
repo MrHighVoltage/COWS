@@ -76,16 +76,32 @@ the rename rather than relying on `rename(2)`'s POSIX allowance to replace
 an empty directory in place, since that is not honored consistently by
 every filesystem this runs on.
 
-**Consequence of the consumption ordering.** A tombstone is consumed
-(deleted from the database) before the corresponding filesystem/runtime
-step runs. If that later step fails, the new workspace is rolled back but
-the tombstone is not restored — the underlying volume or archived directory
-is never deleted by this path, only the database record that made it
-discoverable, so data is not lost, but the self-service "browse and
-reattach" trail is. True cross-system atomicity (a database transaction
-spanning a Podman API call) is not achievable, and this asymmetry was
-chosen over a more complex compensating-transaction scheme as an accepted,
-documented trade-off rather than a hidden gap.
+**Consequence of the consumption ordering.** A volume tombstone is consumed
+(deleted from the database) before the corresponding runtime step runs. If
+a later step fails, the new workspace is rolled back but the tombstone is
+not restored — the underlying named volume is never deleted by this path,
+only the database record that made it discoverable, so data is not lost,
+but the self-service "browse and reattach" trail is. True cross-system
+atomicity (a database transaction spanning a Podman API call) is not
+achievable, and this asymmetry was chosen over a more complex
+compensating-transaction scheme as an accepted, documented trade-off rather
+than a hidden gap.
+
+A directory tombstone cannot take the same shortcut, because restoring one
+is not a discoverability-only operation like deleting a database row — it
+physically renames the archived files onto disk. An early failed fix
+consumed and restored a directory tombstone at the same point in
+`CreateWorkspace` as a volume tombstone, before the workspace row, its
+ports, and (when combined with a volume reattachment) its container were
+confirmed; a later failure in any of those steps then triggered the same
+mount-directory cleanup used for an ordinary failed creation, which deleted
+the just-restored files along with the fresh, empty ones — turning
+"discoverability lost" into real data loss and contradicting the paragraph
+above. `CreateWorkspace` therefore claims and restores a directory
+tombstone last, after the workspace row and its ports are secured, and the
+cleanup path never deletes mount directories once a restore has succeeded
+(if a container start afterward still fails, the restored directory is
+orphaned on disk rather than deleted).
 
 **No admission deadlock.** `CreateWorkspace` already holds the service's
 process-wide admission mutex (ADR 0012/0013's single-instance admission
