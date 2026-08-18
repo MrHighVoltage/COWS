@@ -27,6 +27,7 @@ var (
 	ErrSelfDelete              = errors.New("administrator cannot delete their own account")
 	ErrInvalidGroup            = errors.New("invalid group")
 	ErrGroupInUse              = errors.New("group is still referenced by a workspace template")
+	ErrUserHasWorkspaces       = errors.New("user still owns workspaces")
 	ErrUserMustBeDisabled      = errors.New("user must be disabled before deletion")
 	ErrRegistrationDisabled    = errors.New("registration is disabled")
 	ErrRegistrationUnavailable = errors.New("registration is unavailable")
@@ -466,6 +467,17 @@ func (s *Service) DeleteUser(ctx context.Context, actorID, targetID string) erro
 	}
 	if !target.Disabled {
 		return ErrUserMustBeDisabled
+	}
+	// Defense in depth: today the only caller (adminUserDelete) always calls
+	// DeleteUserWorkspaces first and checks its error, but workspaces.owner_user_id
+	// is ON DELETE CASCADE - a future caller that skips or reorders that step
+	// would otherwise have the database cascade silently delete workspace rows,
+	// bypassing DeleteWorkspace's container removal, directory archival, and
+	// retained-storage tombstoning entirely.
+	if workspaces, err := s.store.ListWorkspacesForUser(ctx, targetID); err != nil {
+		return err
+	} else if len(workspaces) > 0 {
+		return ErrUserHasWorkspaces
 	}
 	if err := s.store.CancelEmailNotificationsForUser(ctx, targetID); err != nil {
 		return err
