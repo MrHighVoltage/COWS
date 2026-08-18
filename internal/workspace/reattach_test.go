@@ -380,3 +380,64 @@ func TestConsumeRetainedWorkspaceVolumeConflictOnDoubleConsume(t *testing.T) {
 		t.Fatalf("second consume error = %v, want ErrNotFound (already gone)", err)
 	}
 }
+
+func TestRestoreDirectoryMountsRollsBackPartialMoveOnFailure(t *testing.T) {
+	root := t.TempDir()
+	archiveRoot := t.TempDir()
+	workspaceID := "new-workspace"
+	archivedContainerPath := filepath.Join(archiveRoot, "cows-old-workspace")
+
+	mounts := []domain.TemplateMount{
+		{Name: "alpha", Type: domain.TemplateMountDirectory, ContainerPath: "/alpha"},
+		{Name: "beta", Type: domain.TemplateMountDirectory, ContainerPath: "/beta"},
+	}
+	archivedMounts := []domain.RetainedDirectoryMount{
+		{Name: "alpha"},
+		{Name: "beta"},
+	}
+
+	for _, name := range []string{"alpha", "beta"} {
+		src := filepath.Join(archivedContainerPath, name)
+		if err := os.MkdirAll(src, 0o700); err != nil {
+			t.Fatalf("seed archived %s: %v", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(src, "file.txt"), []byte("content-"+name), 0o600); err != nil {
+			t.Fatalf("seed archived %s file: %v", name, err)
+		}
+	}
+
+	if err := ensureMountDirectories(root, workspaceID, mounts); err != nil {
+		t.Fatalf("ensure mount directories: %v", err)
+	}
+	// Sabotage the SECOND mount's destination (non-empty directories fail
+	// os.Remove with ENOTEMPTY regardless of user/permissions, so this is a
+	// reliable, portable way to force a failure after the first move has
+	// already succeeded, without relying on permission bits that root
+	// ignores).
+	betaDestination := filepath.Join(root, "cows-"+workspaceID, "beta")
+	if err := os.WriteFile(filepath.Join(betaDestination, "blocker.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("sabotage beta destination: %v", err)
+	}
+
+	err := restoreDirectoryMounts(root, archivedContainerPath, workspaceID, mounts, archivedMounts)
+	if !errors.Is(err, ErrMountUnavailable) {
+		t.Fatalf("restoreDirectoryMounts error = %v, want ErrMountUnavailable", err)
+	}
+
+	// The first mount's move must have been rolled back: its archived
+	// content must be back at the original archive path, not left sitting
+	// inside the new workspace's mount tree where a caller's failure
+	// cleanup would delete it.
+	restoredAlpha := filepath.Join(root, "cows-"+workspaceID, "alpha", "file.txt")
+	if _, err := os.Stat(restoredAlpha); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("alpha should have been rolled back out of the new workspace, stat err = %v", err)
+	}
+	archivedAlpha := filepath.Join(archivedContainerPath, "alpha", "file.txt")
+	content, err := os.ReadFile(archivedAlpha)
+	if err != nil {
+		t.Fatalf("alpha content should be back at the archive path: %v", err)
+	}
+	if string(content) != "content-alpha" {
+		t.Fatalf("rolled-back alpha content = %q, want original content", content)
+	}
+}
