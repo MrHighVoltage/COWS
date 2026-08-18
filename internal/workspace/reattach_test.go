@@ -116,6 +116,75 @@ func TestDirectoryReattachmentRestoresContentIntoNewWorkspace(t *testing.T) {
 	}
 }
 
+// TestDirectoryReattachmentSurvivesLaterFailure reproduces the reported bug:
+// a directory tombstone is consumed and its archived content restored into
+// the new workspace's mount directory, but a later step in CreateWorkspace
+// (here, port pool exhaustion) fails. ADR 0025 promises the archived data is
+// never deleted by this path, only its self-service discoverability - so the
+// retained directory must still be listed (and its content intact) after the
+// failed creation, exactly as if the reattachment had never been attempted.
+func TestDirectoryReattachmentSurvivesLaterFailure(t *testing.T) {
+	ctx := context.Background()
+	_, authService, adminID, store := testService(t)
+	mountRoot := t.TempDir()
+	archiveRoot := t.TempDir()
+	service := NewWithRuntimeAndMountRoots(store, &lifecycleRuntime{}, mountRoot, archiveRoot)
+
+	portService := domain.TemplateService{Name: "desktop", Protocol: "tcp", ContainerPort: 5901, PortPool: "vnc", HostPortStart: 21000, HostPortEnd: 21000}
+	oldTemplate, err := service.CreateTemplate(ctx, adminID, directoryTemplateInput("Old Directory Template", "designs"))
+	if err != nil {
+		t.Fatalf("create old template: %v", err)
+	}
+	owner := newReattachUser(t, authService, adminID, "directory-owner-2")
+
+	old, err := service.CreateWorkspace(ctx, owner.ID, CreateWorkspaceInput{Name: "old workspace", TemplateID: oldTemplate.ID})
+	if err != nil {
+		t.Fatalf("create old workspace: %v", err)
+	}
+	oldMountDir := filepath.Join(mountRoot, "cows-"+old.ID, "designs")
+	if err := os.WriteFile(filepath.Join(oldMountDir, "notes.txt"), []byte("hello from the old workspace"), 0o600); err != nil {
+		t.Fatalf("seed file into old mount: %v", err)
+	}
+	if err := service.DeleteWorkspace(ctx, owner.ID, old.ID); err != nil {
+		t.Fatalf("delete old workspace: %v", err)
+	}
+
+	newTemplateInput := directoryTemplateInput("New Directory Template", "designs")
+	newTemplateInput.Configuration.Services = []domain.TemplateService{portService}
+	newTemplate, err := service.CreateTemplate(ctx, adminID, newTemplateInput)
+	if err != nil {
+		t.Fatalf("create new template: %v", err)
+	}
+
+	// Exhaust the single-port pool so reserveWorkspacePorts fails - a step
+	// that runs after the tombstone is consumed and its content restored.
+	// The allocation's workspace_id has a foreign key onto workspaces(id), so
+	// a real workspace row is needed to hold the blocking reservation.
+	blocker, err := service.CreateWorkspace(ctx, owner.ID, CreateWorkspaceInput{Name: "port blocker", TemplateID: oldTemplate.ID})
+	if err != nil {
+		t.Fatalf("create blocker workspace: %v", err)
+	}
+	if err := store.ReserveWorkspacePort(ctx, domain.PortAllocation{WorkspaceID: blocker.ID, ServiceName: "desktop", Protocol: "tcp", ContainerPort: 5901, PortPool: "vnc", HostPort: 21000}); err != nil {
+		t.Fatalf("pre-reserve blocking port: %v", err)
+	}
+
+	if _, err := service.CreateWorkspace(ctx, owner.ID, CreateWorkspaceInput{Name: "new workspace", TemplateID: newTemplate.ID, ReattachDirectoriesFrom: old.ID}); !errors.Is(err, ErrPortPoolUnavailable) {
+		t.Fatalf("create workspace with exhausted ports error = %v, want ErrPortPoolUnavailable", err)
+	}
+
+	directories, err := store.ListRetainedWorkspaceDirectoriesForOwner(ctx, owner.ID)
+	if err != nil || len(directories) != 1 {
+		t.Fatalf("retained directories after failed creation = %d, err=%v, want 1 (tombstone must survive an unrelated later failure)", len(directories), err)
+	}
+	restored, err := os.ReadFile(filepath.Join(directories[0].ArchivePath, "designs", "notes.txt"))
+	if err != nil {
+		t.Fatalf("read archived file after failed creation: %v", err)
+	}
+	if string(restored) != "hello from the old workspace" {
+		t.Fatalf("archived content = %q, want original content", restored)
+	}
+}
+
 func TestVolumeReattachmentUsesExistingVolumeNameAndRemapsOwnership(t *testing.T) {
 	ctx := context.Background()
 	_, authService, adminID, store := testService(t)

@@ -144,30 +144,17 @@ func (s *Service) CreateWorkspace(ctx context.Context, actorID string, input Cre
 	if err != nil {
 		return domain.Workspace{}, fmt.Errorf("create workspace ID: %w", err)
 	}
-	// Claim (consume) every referenced tombstone before touching the
-	// filesystem or the runtime. A tombstone consumed here is gone even if a
-	// later step in this function fails; see decision 0025 for why this
-	// ordering was chosen over a stricter but more complex rollback.
+	// Claim (consume) every referenced volume tombstone before touching the
+	// filesystem or the runtime. A volume tombstone consumed here is gone
+	// even if a later step in this function fails, but the underlying named
+	// volume itself is never deleted by any cleanup path below, so only its
+	// self-service discoverability is lost, not the data; see decision 0025.
 	volumeOverrides, err := s.consumeReattachedVolumes(ctx, user.ID, input.ReattachVolumesFrom)
 	if err != nil {
 		return domain.Workspace{}, err
 	}
 	if err := ensureMountDirectories(s.mountRoot, id, template.Configuration.Mounts); err != nil {
 		return domain.Workspace{}, err
-	}
-	if input.ReattachDirectoriesFrom != "" {
-		directory, err := s.store.ConsumeRetainedWorkspaceDirectory(ctx, input.ReattachDirectoriesFrom, user.ID)
-		if err != nil {
-			_ = removeMountDirectories(s.mountRoot, id, template.Configuration.Mounts)
-			if errors.Is(err, repository.ErrNotFound) {
-				return domain.Workspace{}, ErrRetainedStorageIncompatible
-			}
-			return domain.Workspace{}, err
-		}
-		if err := restoreDirectoryMounts(s.mountRoot, directory.ArchivePath, id, template.Configuration.Mounts, directory.Mounts); err != nil {
-			_ = removeMountDirectories(s.mountRoot, id, template.Configuration.Mounts)
-			return domain.Workspace{}, err
-		}
 	}
 	now := s.now().UTC()
 	workspace := domain.Workspace{
@@ -199,11 +186,40 @@ func (s *Service) CreateWorkspace(ctx context.Context, actorID string, input Cre
 		_ = removeMountDirectories(s.mountRoot, id, template.Configuration.Mounts)
 		return domain.Workspace{}, err
 	}
+	// A directory tombstone is claimed and restored last, only once the
+	// workspace row and its ports are secured: unlike a volume, restoring a
+	// directory physically renames the archived files onto disk, so no
+	// cleanup path past this point may delete the workspace's mount
+	// directories - that would destroy the very data it just restored,
+	// contradicting decision 0025's guarantee that this path never loses
+	// data, only self-service discoverability.
+	directoriesRestored := false
+	if input.ReattachDirectoriesFrom != "" {
+		directory, err := s.store.ConsumeRetainedWorkspaceDirectory(ctx, input.ReattachDirectoriesFrom, user.ID)
+		if err != nil {
+			_ = s.store.DeleteWorkspace(ctx, id)
+			_ = s.store.ReleaseWorkspacePorts(ctx, id)
+			_ = removeMountDirectories(s.mountRoot, id, template.Configuration.Mounts)
+			if errors.Is(err, repository.ErrNotFound) {
+				return domain.Workspace{}, ErrRetainedStorageIncompatible
+			}
+			return domain.Workspace{}, err
+		}
+		if err := restoreDirectoryMounts(s.mountRoot, directory.ArchivePath, id, template.Configuration.Mounts, directory.Mounts); err != nil {
+			_ = s.store.DeleteWorkspace(ctx, id)
+			_ = s.store.ReleaseWorkspacePorts(ctx, id)
+			_ = removeMountDirectories(s.mountRoot, id, template.Configuration.Mounts)
+			return domain.Workspace{}, err
+		}
+		directoriesRestored = true
+	}
 	if len(volumeOverrides) > 0 {
 		if err := s.startWorkspace(ctx, user.ID, id, volumeOverrides); err != nil {
 			_ = s.store.DeleteWorkspace(ctx, id)
 			_ = s.store.ReleaseWorkspacePorts(ctx, id)
-			_ = removeMountDirectories(s.mountRoot, id, template.Configuration.Mounts)
+			if !directoriesRestored {
+				_ = removeMountDirectories(s.mountRoot, id, template.Configuration.Mounts)
+			}
 			return domain.Workspace{}, err
 		}
 	}
@@ -555,6 +571,26 @@ func (s *Service) GetWorkspace(ctx context.Context, actorID, workspaceID string)
 		return domain.Workspace{}, repository.ErrNotFound
 	}
 	return workspace, nil
+}
+
+// GetWorkspaceWithUsage is GetWorkspace plus the same live storage/resource
+// enrichment ListWorkspaces applies to every row. GetWorkspace itself stays
+// bare because it's also called from many internal lifecycle paths
+// (start/stop/delete/mounts) that only need the stored record and shouldn't
+// pay for a storage measurement or a runtime stats call on every use; this
+// is for display paths that specifically want up-to-date numbers - the
+// access/detail page, and row/header fragments re-rendered right after an
+// action - rather than waiting for the next periodic list refresh.
+func (s *Service) GetWorkspaceWithUsage(ctx context.Context, actorID, workspaceID string) (domain.Workspace, error) {
+	value, err := s.GetWorkspace(ctx, actorID, workspaceID)
+	if err != nil {
+		return domain.Workspace{}, err
+	}
+	values, err := s.withStorageUsage(ctx, []domain.Workspace{value})
+	if err != nil {
+		return domain.Workspace{}, err
+	}
+	return s.withResourceUsage(ctx, values)[0], nil
 }
 
 // WorkspaceAccessMethods returns the current template access policy after
