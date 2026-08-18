@@ -13,6 +13,7 @@ import (
 
 	"github.com/cows-project/cows/internal/archive"
 	"github.com/cows-project/cows/internal/domain"
+	"github.com/cows-project/cows/internal/repository"
 	"github.com/cows-project/cows/internal/runtime"
 )
 
@@ -486,26 +487,33 @@ func (s *Service) OpenRetainedDirectoryZip(ctx context.Context, actorID, workspa
 
 // DeleteRetainedDirectory permanently discards a retained-directory
 // tombstone and its archived content (self-service, decision 0025). The
-// filesystem removal is best-effort, matching the compensating-cleanup
-// pattern used elsewhere in this package (e.g. removeMountDirectories):
-// the tombstone is already gone from the database by the time it runs, so a
-// filesystem error here must not be reported as the operation having failed.
+// physical removal is attempted before the tombstone is consumed: if it
+// fails, the tombstone must survive so the archived data stays
+// discoverable and the caller can retry, instead of silently leaking it
+// on disk with no way back to it (mirrors the volume-deletion ordering
+// fix applied to storageVolumeDelete).
 func (s *Service) DeleteRetainedDirectory(ctx context.Context, actorID, workspaceID string) error {
 	user, err := s.requireActor(ctx, actorID)
 	if err != nil {
 		return err
 	}
-	directory, err := s.store.ConsumeRetainedWorkspaceDirectory(ctx, workspaceID, user.ID)
+	directory, err := s.store.FindRetainedWorkspaceDirectory(ctx, workspaceID, user.ID)
 	if err != nil {
 		return err
 	}
-	if s.mountArchiveRoot == "" {
-		return nil
+	if s.mountArchiveRoot != "" {
+		path, pathErr := filepath.Abs(filepath.Join(s.mountArchiveRoot, managedContainerName(directory.WorkspaceID)))
+		if pathErr != nil {
+			return ErrMountUnavailable
+		}
+		if err := os.RemoveAll(path); err != nil {
+			_ = recordArchiveActivity(s.mountArchiveRoot, archiveActivity{Action: "directory_recovery_discarded", WorkspaceID: directory.WorkspaceID, ArchivePath: path, Status: "failed", Error: err.Error()})
+			return ErrMountUnavailable
+		}
+		_ = recordArchiveActivity(s.mountArchiveRoot, archiveActivity{Action: "directory_recovery_discarded", WorkspaceID: directory.WorkspaceID, ArchivePath: path, Status: "succeeded"})
 	}
-	path, err := filepath.Abs(filepath.Join(s.mountArchiveRoot, managedContainerName(directory.WorkspaceID)))
-	if err != nil {
-		return nil
+	if _, err := s.store.ConsumeRetainedWorkspaceDirectory(ctx, workspaceID, user.ID); err != nil && !errors.Is(err, repository.ErrNotFound) {
+		return err
 	}
-	_ = os.RemoveAll(path)
 	return nil
 }
