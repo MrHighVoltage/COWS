@@ -253,6 +253,8 @@ func archiveMountDirectories(root, archiveRoot, workspaceID string, mounts []dom
 	return nil
 }
 
+type directoryMove struct{ source, destination string }
+
 // restoreDirectoryMounts renames each archived directory-type mount from a
 // retained-directory tombstone into a newly created workspace's
 // corresponding mount directory (self-service reattachment, decision 0025).
@@ -276,8 +278,7 @@ func restoreDirectoryMounts(root, archivedContainerPath, newWorkspaceID string, 
 			newByName[mount.Name] = mount
 		}
 	}
-	type move struct{ source, destination string }
-	moves := make([]move, 0, len(archivedMounts))
+	moves := make([]directoryMove, 0, len(archivedMounts))
 	for _, archived := range archivedMounts {
 		newMount, ok := newByName[archived.Name]
 		if !ok {
@@ -292,26 +293,47 @@ func restoreDirectoryMounts(root, archivedContainerPath, newWorkspaceID string, 
 		if err != nil {
 			return ErrMountUnavailable
 		}
-		moves = append(moves, move{source: source, destination: destination})
+		moves = append(moves, directoryMove{source: source, destination: destination})
 	}
 	for _, m := range moves {
 		if _, err := os.Lstat(m.source); err != nil {
 			return ErrMountUnavailable
 		}
 	}
+	completed := make([]directoryMove, 0, len(moves))
 	for _, m := range moves {
 		// The destination is the empty directory ensureMountDirectories just
 		// created. Remove it explicitly rather than relying on Rename to
 		// replace an empty directory in place: that POSIX allowance is not
 		// honored consistently by every filesystem this runs on.
 		if err := os.Remove(m.destination); err != nil {
+			rollbackDirectoryMoves(completed)
 			return ErrMountUnavailable
 		}
 		if err := os.Rename(m.source, m.destination); err != nil {
+			rollbackDirectoryMoves(completed)
 			return ErrMountUnavailable
 		}
+		completed = append(completed, m)
 	}
 	return nil
+}
+
+// rollbackDirectoryMoves reverses a prefix of restoreDirectoryMounts' moves,
+// most-recent first, after a later move in the same call fails. Without
+// this, a partial restore (e.g. 2 of 3 directory mounts renamed before the
+// 3rd fails) would leave the first two mounts' real archived content sitting
+// inside the new workspace's mount tree with their tombstone already
+// consumed by the caller - exactly the data a caller's failure cleanup
+// (removeMountDirectories) would then delete, reproducing the bug fixed for
+// CreateWorkspace as a whole in 6cb4195, one level deeper. Best-effort: a
+// failed rename-back leaves that one mount's content orphaned in the new
+// workspace's tree rather than destroyed, which is still strictly better
+// than deletion.
+func rollbackDirectoryMoves(completed []directoryMove) {
+	for i := len(completed) - 1; i >= 0; i-- {
+		_ = os.Rename(completed[i].destination, completed[i].source)
+	}
 }
 
 type archiveActivity struct {
