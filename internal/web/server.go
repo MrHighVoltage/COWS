@@ -1820,8 +1820,8 @@ func (s *Server) storageVolumeDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	workspaceID, mountName := r.PathValue("workspace_id"), r.PathValue("mount_name")
-	volume, err := s.options.Store.ConsumeRetainedWorkspaceVolume(r.Context(), workspaceID, mountName, user.ID)
-	if errors.Is(err, repository.ErrNotFound) || errors.Is(err, repository.ErrConflict) {
+	volume, err := s.options.Store.FindRetainedWorkspaceVolume(r.Context(), workspaceID, mountName, user.ID)
+	if errors.Is(err, repository.ErrNotFound) {
 		if isHTMXRequest(r) {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -1830,11 +1830,23 @@ func (s *Server) storageVolumeDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		http.Error(w, "failed to remove retained volume", http.StatusInternalServerError)
+		http.Error(w, "failed to load retained volume", http.StatusInternalServerError)
 		return
 	}
+	// Remove the real volume before consuming its tombstone: if removal
+	// fails, the tombstone must survive so the volume stays discoverable
+	// and the user can retry, instead of silently leaking it while
+	// reporting success (mirrors the already-correct ordering in
+	// adminVolumeDelete).
 	if volumeRuntime, ok := s.runtime.(runtime.VolumeRuntime); ok {
-		_ = volumeRuntime.RemoveVolume(r.Context(), volume.VolumeName)
+		if err := volumeRuntime.RemoveVolume(r.Context(), volume.VolumeName); err != nil && !errors.Is(err, runtime.ErrNotFound) {
+			http.Error(w, "the retained volume could not be removed", http.StatusServiceUnavailable)
+			return
+		}
+	}
+	if _, err := s.options.Store.ConsumeRetainedWorkspaceVolume(r.Context(), workspaceID, mountName, user.ID); err != nil && !errors.Is(err, repository.ErrNotFound) && !errors.Is(err, repository.ErrConflict) {
+		http.Error(w, "failed to remove retained volume", http.StatusInternalServerError)
+		return
 	}
 	s.recordStorageAudit(r.Context(), user.ID, "storage.volume_deleted", "volume", volume.VolumeName, map[string]string{"workspace_id": volume.WorkspaceID, "mount_name": volume.MountName})
 	if isHTMXRequest(r) {

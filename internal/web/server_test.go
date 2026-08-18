@@ -980,3 +980,116 @@ func cookieByName(cookies []*http.Cookie, name string) *http.Cookie {
 	}
 	return nil
 }
+
+type storageTestRuntime struct {
+	*terminalRuntime
+	removeVolumeErr error
+	removedVolumes  []string
+}
+
+func (r *storageTestRuntime) RemoveWorkspace(context.Context, string) error      { return nil }
+func (r *storageTestRuntime) VolumeExists(context.Context, string) (bool, error) { return true, nil }
+func (r *storageTestRuntime) RemoveVolume(_ context.Context, name string) error {
+	if r.removeVolumeErr != nil {
+		return r.removeVolumeErr
+	}
+	r.removedVolumes = append(r.removedVolumes, name)
+	return nil
+}
+
+func TestStorageVolumeDeleteKeepsTombstoneWhenRemovalFails(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "cows.db"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	store := sqlite.New(db)
+	authService, err := auth.New(store, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth service: %v", err)
+	}
+	if _, err := authService.BootstrapAdministrator(ctx, auth.CreateUserInput{Username: "admin", Password: "correct horse battery staple"}); err != nil {
+		t.Fatalf("bootstrap administrator: %v", err)
+	}
+	admin, _, err := authService.Authenticate(ctx, "admin", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate administrator: %v", err)
+	}
+	if err := authService.ChangePassword(ctx, admin.ID, "correct horse battery staple", "changed correct horse battery staple"); err != nil {
+		t.Fatalf("change administrator password: %v", err)
+	}
+	if _, err := authService.CreateUser(ctx, admin.ID, auth.CreateUserInput{Username: "volume-owner", Password: "another correct password", Role: domain.RoleUser}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	owner, _, err := authService.Authenticate(ctx, "volume-owner", "another correct password")
+	if err != nil {
+		t.Fatalf("authenticate owner: %v", err)
+	}
+	if err := authService.ChangePassword(ctx, owner.ID, "another correct password", "changed another correct password"); err != nil {
+		t.Fatalf("change owner password: %v", err)
+	}
+	owner, sessionToken, err := authService.Authenticate(ctx, "volume-owner", "changed another correct password")
+	if err != nil {
+		t.Fatalf("re-authenticate owner: %v", err)
+	}
+
+	fake := &storageTestRuntime{terminalRuntime: newTerminalRuntime()}
+	service := workspace.NewWithRuntimeAndMountRoots(store, fake, t.TempDir(), t.TempDir())
+	template, err := service.CreateTemplate(ctx, admin.ID, workspace.TemplateInput{
+		Name: "Storage Volume Template", ImageReference: "registry.example/research:1", DefaultCPUMillis: 1000,
+		MaxCPUMillis: 2000, DefaultMemoryBytes: 2 << 30, MaxMemoryBytes: 4 << 30,
+		DefaultStorageBytes: 10 << 30, InitialConnectionTimeoutSeconds: 3600, StoppedRetentionSeconds: 3600,
+		AccessMethods: []domain.AccessMethod{domain.AccessFiles}, AllowedRoles: []domain.Role{domain.RoleUser}, Enabled: true,
+		Configuration: domain.TemplateConfiguration{Mounts: []domain.TemplateMount{{Name: "data", Type: domain.TemplateMountVolume, ContainerPath: "/data", FileManager: true}}},
+	})
+	if err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+	old, err := service.CreateWorkspace(ctx, owner.ID, workspace.CreateWorkspaceInput{Name: "old volume workspace", TemplateID: template.ID})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := store.UpdateWorkspaceObservedState(ctx, old.ID, "stopped", "runtime-storage-test", "", "", old.CreatedAt, old.CreatedAt); err != nil {
+		t.Fatalf("set stopped state: %v", err)
+	}
+	if err := service.DeleteWorkspace(ctx, owner.ID, old.ID); err != nil {
+		t.Fatalf("delete workspace to create retained volume: %v", err)
+	}
+	volumes, err := store.ListRetainedWorkspaceVolumesForOwner(ctx, owner.ID)
+	if err != nil || len(volumes) != 1 {
+		t.Fatalf("retained volumes = %d, err=%v, want 1", len(volumes), err)
+	}
+
+	server, err := New(db, authService, service, nil, fake, Options{SessionLifetime: time.Hour, Store: store})
+	if err != nil {
+		t.Fatalf("create web server: %v", err)
+	}
+	sessionCookie := &http.Cookie{Name: "cows_session", Value: sessionToken}
+	pageRequest := httptest.NewRequest(http.MethodGet, "/storage", nil)
+	pageRequest.AddCookie(sessionCookie)
+	pageRecorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(pageRecorder, pageRequest)
+	csrfCookie := cookieByName(pageRecorder.Result().Cookies(), "cows_csrf")
+	if pageRecorder.Code != http.StatusOK || csrfCookie == nil {
+		t.Fatalf("storage page response: status=%d csrf=%#v", pageRecorder.Code, csrfCookie)
+	}
+
+	fake.removeVolumeErr = errors.New("simulated podman failure")
+	deletePath := "/storage/volumes/" + old.ID + "/data/delete"
+	form := url.Values{"csrf_token": {csrfCookie.Value}}
+	deleteRequest := httptest.NewRequest(http.MethodPost, deletePath, strings.NewReader(form.Encode()))
+	deleteRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	deleteRequest.AddCookie(sessionCookie)
+	deleteRequest.AddCookie(csrfCookie)
+	deleteRecorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(deleteRecorder, deleteRequest)
+	if deleteRecorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("delete-with-failing-removal status = %d, want 503, body = %s", deleteRecorder.Code, deleteRecorder.Body.String())
+	}
+
+	volumesAfter, err := store.ListRetainedWorkspaceVolumesForOwner(ctx, owner.ID)
+	if err != nil || len(volumesAfter) != 1 {
+		t.Fatalf("retained volumes after failed removal = %d, err=%v, want 1 (tombstone must survive)", len(volumesAfter), err)
+	}
+}
