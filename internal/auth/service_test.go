@@ -11,6 +11,7 @@ import (
 	"github.com/cows-project/cows/internal/domain"
 	"github.com/cows-project/cows/internal/repository"
 	"github.com/cows-project/cows/internal/repository/sqlite"
+	"github.com/cows-project/cows/internal/workspace"
 )
 
 func testService(t *testing.T) *Service {
@@ -329,5 +330,65 @@ func TestRevokeOtherSessionsWithBlankTokenRevokesAll(t *testing.T) {
 	}
 	if _, err := service.UserForSession(ctx, secondToken); !errors.Is(err, repository.ErrNotFound) {
 		t.Fatalf("second session should be revoked, got err=%v", err)
+	}
+}
+
+func TestDeleteUserRejectsWhenWorkspacesStillOwned(t *testing.T) {
+	db, err := database.Open(context.Background(), filepath.Join(t.TempDir(), "cows.db"))
+	if err != nil {
+		t.Fatalf("open test database: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store := sqlite.New(db)
+	authService, err := New(store, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth service: %v", err)
+	}
+	ctx := context.Background()
+	if _, err := authService.BootstrapAdministrator(ctx, CreateUserInput{Username: "admin", Password: "correct horse battery staple"}); err != nil {
+		t.Fatalf("bootstrap administrator: %v", err)
+	}
+	adminBeforeChange, _, err := authService.Authenticate(ctx, "admin", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate administrator: %v", err)
+	}
+	if err := authService.ChangePassword(ctx, adminBeforeChange.ID, "correct horse battery staple", "changed correct horse battery staple"); err != nil {
+		t.Fatalf("change administrator password: %v", err)
+	}
+	admin, _, err := authService.Authenticate(ctx, "admin", "changed correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate administrator: %v", err)
+	}
+	target, err := authService.CreateUser(ctx, admin.ID, CreateUserInput{Username: "still-owns-workspaces", Password: "another correct password", Role: domain.RoleUser})
+	if err != nil {
+		t.Fatalf("create target user: %v", err)
+	}
+	if err := authService.ChangePassword(ctx, target.ID, "another correct password", "changed target password"); err != nil {
+		t.Fatalf("change target user password: %v", err)
+	}
+
+	workspaceService := workspace.New(store)
+	template, err := workspaceService.CreateTemplate(ctx, admin.ID, workspace.TemplateInput{
+		Name: "Guard Template", ImageReference: "registry.example/research:1", DefaultCPUMillis: 1000,
+		MaxCPUMillis: 2000, DefaultMemoryBytes: 2 << 30, MaxMemoryBytes: 4 << 30,
+		DefaultStorageBytes: 10 << 30, InitialConnectionTimeoutSeconds: 3600, StoppedRetentionSeconds: 3600,
+		AccessMethods: []domain.AccessMethod{domain.AccessTerminal}, AllowedRoles: []domain.Role{domain.RoleUser}, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+	if _, err := workspaceService.CreateWorkspace(ctx, target.ID, workspace.CreateWorkspaceInput{Name: "still-here", TemplateID: template.ID}); err != nil {
+		t.Fatalf("create workspace for target: %v", err)
+	}
+
+	if err := authService.SetUserDisabled(ctx, admin.ID, target.ID, true); err != nil {
+		t.Fatalf("disable target user: %v", err)
+	}
+
+	if err := authService.DeleteUser(ctx, admin.ID, target.ID); !errors.Is(err, ErrUserHasWorkspaces) {
+		t.Fatalf("DeleteUser with an owned workspace error = %v, want ErrUserHasWorkspaces", err)
+	}
+	if _, err := authService.FindUserForAdmin(ctx, admin.ID, target.ID); err != nil {
+		t.Fatalf("target user should still exist after rejected deletion: %v", err)
 	}
 }
