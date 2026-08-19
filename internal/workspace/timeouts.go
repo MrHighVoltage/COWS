@@ -40,8 +40,15 @@ func EvaluateTimeouts(value domain.Workspace, now time.Time) TimeoutStatus {
 		}
 		return status
 	}
-	if value.ObservedState == "running" && value.LastConnectedAt.IsZero() && !value.StartedAt.IsZero() && value.InitialConnectionTimeoutSeconds > 0 {
-		deadline := value.StartedAt.Add(time.Duration(value.InitialConnectionTimeoutSeconds) * time.Second)
+	// A running workspace with no open session (ActiveSessions == 0) is a
+	// stop candidate once it has been idle - never yet connected, or
+	// disconnected since - for InitialConnectionTimeoutSeconds. IdleSince is
+	// cleared to zero for as long as any session is open (see
+	// RecordWorkspaceSessionStart), so a connected workspace never reaches
+	// this branch regardless of connection duration - only the elapsed time
+	// since the workspace last had zero open sessions matters.
+	if value.ObservedState == "running" && value.ActiveSessions == 0 && !value.IdleSince.IsZero() && value.InitialConnectionTimeoutSeconds > 0 {
+		deadline := value.IdleSince.Add(time.Duration(value.InitialConnectionTimeoutSeconds) * time.Second)
 		status := TimeoutStatus{Phase: TimeoutPhaseAwaitingConnection, Action: TimeoutActionNone, Deadline: deadline}
 		if !now.Before(deadline) {
 			status.Action = TimeoutActionStop

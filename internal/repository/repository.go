@@ -137,6 +137,15 @@ type WorkspaceRepository interface {
 	SetWorkspaceDesiredState(ctx context.Context, id string, state domain.DesiredWorkspaceState, updatedAt time.Time) error
 	UpdateWorkspaceObservedState(ctx context.Context, id, observedState, runtimeID, observedErrorCode, observedError string, observedAt, updatedAt time.Time) error
 	UpdateWorkspaceLifecycle(ctx context.Context, id string, startedAt, lastConnectedAt, stoppedAt, containerDeletedAt, dataArchiveEligibleAt, updatedAt time.Time) error
+	// RecordWorkspaceSessionStart/End track how many terminal/desktop
+	// sessions are currently open on a workspace, so EvaluateTimeouts can
+	// tell "connected" apart from "has connected at least once" - see
+	// workspace.EvaluateTimeouts and its idle-shutdown phase.
+	RecordWorkspaceSessionStart(ctx context.Context, id string, connectedAt, updatedAt time.Time) error
+	RecordWorkspaceSessionEnd(ctx context.Context, id string, idleAt, updatedAt time.Time) error
+	// ResetWorkspaceSessions unconditionally zeroes the session count and
+	// sets idle_since, used on every fresh start (see startWorkspace).
+	ResetWorkspaceSessions(ctx context.Context, id string, idleAt, updatedAt time.Time) error
 	UpdateWorkspaceOperation(ctx context.Context, id, operation, status, operationError string, startedAt, updatedAt time.Time) error
 	WorkspaceAllocations(ctx context.Context, ownerUserID string) (domain.AllocationSummary, error)
 	AllWorkspaceAllocations(ctx context.Context) (domain.AllocationSummary, error)
