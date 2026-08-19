@@ -151,14 +151,25 @@ type Workspace struct {
 	ObservedAt                      time.Time
 	StartedAt                       time.Time
 	LastConnectedAt                 time.Time
-	StoppedAt                       time.Time
-	ContainerDeletedAt              time.Time
-	DataArchiveEligibleAt           time.Time
-	Operation                       string
-	OperationStatus                 string
-	OperationError                  string
-	OperationStartedAt              time.Time
-	OperationUpdatedAt              time.Time
+	// ActiveSessions counts currently open terminal/desktop sessions. It is
+	// zeroed whenever the workspace (re)starts and adjusted by
+	// RecordWorkspaceConnection/the disconnect hooks as sessions open and
+	// close; it never goes negative.
+	ActiveSessions int64
+	// IdleSince is when ActiveSessions last dropped to zero (or StartedAt,
+	// if nobody has connected yet this run) - the base EvaluateTimeouts
+	// measures its idle-shutdown deadline from. It is cleared to the zero
+	// value while ActiveSessions > 0, so a connected workspace is never a
+	// timeout candidate regardless of how long the connection has been open.
+	IdleSince             time.Time
+	StoppedAt             time.Time
+	ContainerDeletedAt    time.Time
+	DataArchiveEligibleAt time.Time
+	Operation             string
+	OperationStatus       string
+	OperationError        string
+	OperationStartedAt    time.Time
+	OperationUpdatedAt    time.Time
 }
 
 type UserQuota struct {

@@ -739,13 +739,13 @@ func (s *Store) CreateWorkspace(ctx context.Context, workspace domain.Workspace)
 		(id, owner_user_id, template_id, template_revision, template_configuration_json, template_secrets_json, template_image_reference, template_image_digest, name, desired_state, observed_state, runtime_id, observed_error_code, observed_error,
 		 allocated_cpu_millis, allocated_memory_bytes, allocated_storage_bytes, initial_connection_timeout_seconds,
 		 stopped_retention_seconds, data_retention_seconds, created_at, updated_at, observed_at, started_at,
-		 last_connected_at, stopped_at, container_deleted_at, data_archive_eligible_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, workspace.ID, workspace.OwnerUserID, workspace.TemplateID,
+		 last_connected_at, active_sessions, idle_since, stopped_at, container_deleted_at, data_archive_eligible_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, workspace.ID, workspace.OwnerUserID, workspace.TemplateID,
 		workspace.TemplateRevision, templateConfigurationJSON(workspace.TemplateConfiguration), templateSecretsJSON(workspace.TemplateSecrets), workspace.TemplateImageReference, workspace.TemplateImageDigest, workspace.Name, workspace.DesiredState, workspace.ObservedState, workspace.RuntimeID, workspace.ObservedErrorCode, workspace.ObservedError,
 		workspace.AllocatedCPUMillis, workspace.AllocatedMemoryBytes, workspace.AllocatedStorageBytes,
 		workspace.InitialConnectionTimeoutSeconds, workspace.StoppedRetentionSeconds, workspace.DataRetentionSeconds,
 		unixOrZero(workspace.CreatedAt), unixOrZero(workspace.UpdatedAt), unixOrZero(workspace.ObservedAt), unixOrZero(workspace.StartedAt),
-		unixOrZero(workspace.LastConnectedAt), unixOrZero(workspace.StoppedAt), unixOrZero(workspace.ContainerDeletedAt), unixOrZero(workspace.DataArchiveEligibleAt))
+		unixOrZero(workspace.LastConnectedAt), workspace.ActiveSessions, unixOrZero(workspace.IdleSince), unixOrZero(workspace.StoppedAt), unixOrZero(workspace.ContainerDeletedAt), unixOrZero(workspace.DataArchiveEligibleAt))
 	if err != nil {
 		return fmt.Errorf("create workspace: %w", err)
 	}
@@ -1162,6 +1162,76 @@ func (s *Store) UpdateWorkspaceLifecycle(ctx context.Context, id string, started
 	return nil
 }
 
+// RecordWorkspaceSessionStart increments active_sessions and clears
+// idle_since (a workspace with any open session is never idle) as one
+// atomic statement, so concurrent connects/disconnects can't race each
+// other into an inconsistent count.
+func (s *Store) RecordWorkspaceSessionStart(ctx context.Context, id string, connectedAt, updatedAt time.Time) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE workspaces SET active_sessions = active_sessions + 1,
+		idle_since = 0, last_connected_at = ?, updated_at = ? WHERE id = ?`,
+		unixOrZero(connectedAt), unixOrZero(updatedAt), id)
+	if err != nil {
+		return fmt.Errorf("record workspace session start: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check workspace session start: %w", err)
+	}
+	if count == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
+// RecordWorkspaceSessionEnd decrements active_sessions (never below zero)
+// and, only if that was the last open session, sets idle_since to idleAt so
+// EvaluateTimeouts starts measuring the idle-shutdown deadline from the
+// moment of this disconnect rather than from the workspace's original
+// start. The CASE condition reads active_sessions' pre-update value (SQLite
+// evaluates every SET expression against the row as it was before the
+// statement, not sequentially), so this is race-safe without a
+// read-modify-write round trip.
+func (s *Store) RecordWorkspaceSessionEnd(ctx context.Context, id string, idleAt, updatedAt time.Time) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE workspaces SET
+		active_sessions = MAX(active_sessions - 1, 0),
+		idle_since = CASE WHEN active_sessions <= 1 THEN ? ELSE idle_since END,
+		updated_at = ?
+		WHERE id = ?`, unixOrZero(idleAt), unixOrZero(updatedAt), id)
+	if err != nil {
+		return fmt.Errorf("record workspace session end: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check workspace session end: %w", err)
+	}
+	if count == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
+// ResetWorkspaceSessions unconditionally zeroes active_sessions and sets
+// idle_since to idleAt, regardless of the row's current count. Used on
+// every fresh start so a stale count left over from a prior run (e.g. a
+// disconnect hook that never fired because the process restarted) cannot
+// linger - unlike RecordWorkspaceSessionEnd, which only ever decrements by
+// one and so cannot correct a count that's already wrong by more than one.
+func (s *Store) ResetWorkspaceSessions(ctx context.Context, id string, idleAt, updatedAt time.Time) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE workspaces SET active_sessions = 0, idle_since = ?, updated_at = ? WHERE id = ?`,
+		unixOrZero(idleAt), unixOrZero(updatedAt), id)
+	if err != nil {
+		return fmt.Errorf("reset workspace sessions: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check workspace sessions reset: %w", err)
+	}
+	if count == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) UpdateWorkspaceOperation(ctx context.Context, id, operation, status, operationError string, startedAt, updatedAt time.Time) error {
 	result, err := s.db.ExecContext(ctx, `UPDATE workspaces SET operation = ?, operation_status = ?, operation_error = ?,
 		operation_started_at = ?, operation_updated_at = ?, updated_at = ? WHERE id = ?`, operation, status, operationError,
@@ -1473,7 +1543,7 @@ func (s *Store) CancelEmailNotificationsForUser(ctx context.Context, userID stri
 const workspaceSelect = `SELECT id, owner_user_id, template_id, name, desired_state, observed_state, runtime_id,
 	template_revision, template_configuration_json, template_secrets_json, template_image_reference, template_image_digest, observed_error_code, observed_error, allocated_cpu_millis, allocated_memory_bytes, allocated_storage_bytes, created_at, updated_at,
 	observed_at, initial_connection_timeout_seconds, stopped_retention_seconds, data_retention_seconds,
-	started_at, last_connected_at, stopped_at, container_deleted_at, data_archive_eligible_at,
+	started_at, last_connected_at, active_sessions, idle_since, stopped_at, container_deleted_at, data_archive_eligible_at,
 	operation, operation_status, operation_error, operation_started_at, operation_updated_at FROM workspaces`
 
 func (s *Store) listWorkspaces(ctx context.Context, query string, args ...any) ([]domain.Workspace, error) {
@@ -1498,22 +1568,22 @@ func (s *Store) listWorkspaces(ctx context.Context, query string, args ...any) (
 
 func scanWorkspace(row scanner) (domain.Workspace, error) {
 	var (
-		workspace                                                                 domain.Workspace
-		desiredState                                                              string
-		templateConfiguration                                                     string
-		templateSecrets                                                           string
-		createdUnix                                                               int64
-		updatedUnix                                                               int64
-		observedAtUnix                                                            int64
-		startedUnix, connectedUnix, stoppedUnix, deletedUnix, archiveEligibleUnix int64
-		operationStartedUnix, operationUpdatedUnix                                int64
-		operation, operationStatus, operationError                                string
+		workspace                                                                                domain.Workspace
+		desiredState                                                                             string
+		templateConfiguration                                                                    string
+		templateSecrets                                                                          string
+		createdUnix                                                                              int64
+		updatedUnix                                                                              int64
+		observedAtUnix                                                                           int64
+		startedUnix, connectedUnix, idleSinceUnix, stoppedUnix, deletedUnix, archiveEligibleUnix int64
+		operationStartedUnix, operationUpdatedUnix                                               int64
+		operation, operationStatus, operationError                                               string
 	)
 	if err := row.Scan(&workspace.ID, &workspace.OwnerUserID, &workspace.TemplateID, &workspace.Name, &desiredState,
 		&workspace.ObservedState, &workspace.RuntimeID, &workspace.TemplateRevision, &templateConfiguration, &templateSecrets, &workspace.TemplateImageReference, &workspace.TemplateImageDigest, &workspace.ObservedErrorCode, &workspace.ObservedError, &workspace.AllocatedCPUMillis,
 		&workspace.AllocatedMemoryBytes, &workspace.AllocatedStorageBytes, &createdUnix, &updatedUnix,
 		&observedAtUnix, &workspace.InitialConnectionTimeoutSeconds, &workspace.StoppedRetentionSeconds,
-		&workspace.DataRetentionSeconds, &startedUnix, &connectedUnix, &stoppedUnix, &deletedUnix, &archiveEligibleUnix,
+		&workspace.DataRetentionSeconds, &startedUnix, &connectedUnix, &workspace.ActiveSessions, &idleSinceUnix, &stoppedUnix, &deletedUnix, &archiveEligibleUnix,
 		&operation, &operationStatus, &operationError, &operationStartedUnix, &operationUpdatedUnix); err != nil {
 		if err == sql.ErrNoRows {
 			return domain.Workspace{}, repository.ErrNotFound
@@ -1528,6 +1598,7 @@ func scanWorkspace(row scanner) (domain.Workspace, error) {
 	}
 	workspace.StartedAt = timeFromUnix(startedUnix)
 	workspace.LastConnectedAt = timeFromUnix(connectedUnix)
+	workspace.IdleSince = timeFromUnix(idleSinceUnix)
 	workspace.StoppedAt = timeFromUnix(stoppedUnix)
 	workspace.ContainerDeletedAt = timeFromUnix(deletedUnix)
 	workspace.DataArchiveEligibleAt = timeFromUnix(archiveEligibleUnix)

@@ -724,6 +724,14 @@ func (s *Service) startWorkspace(ctx context.Context, actorID, workspaceID strin
 	if err := s.store.UpdateWorkspaceLifecycle(ctx, value.ID, value.StartedAt, value.LastConnectedAt, value.StoppedAt, value.ContainerDeletedAt, value.DataArchiveEligibleAt, now); err != nil {
 		return err
 	}
+	// A fresh start has no open sessions yet, and is idle (for the purposes
+	// of the idle-shutdown timeout) from this moment until someone connects
+	// - any stale active_sessions count left over from a prior run (e.g. a
+	// disconnect hook that never fired because the process restarted) is
+	// wiped here rather than carried forward.
+	if err := s.store.ResetWorkspaceSessions(ctx, value.ID, now, now); err != nil {
+		return err
+	}
 	if err := s.finishOperation(ctx, value.ID, "start", "succeeded", "", operationStarted); err != nil {
 		return err
 	}
@@ -973,8 +981,13 @@ func retainedWorkspaceDirectory(value domain.Workspace, mounts []domain.Template
 	}
 }
 
-// RecordWorkspaceConnection is the hook used by terminal, desktop, and
-// file-manager access to cancel the no-connection timeout.
+// RecordWorkspaceConnection is the hook used by terminal and desktop access
+// (via OpenTerminal/OpenDesktop) to mark a session as open, which both
+// records this as the workspace's most recent connection and cancels the
+// idle-shutdown timeout for as long as this - or any other concurrently
+// open - session lasts. It must be paired with RecordTerminalDisconnect or
+// RecordDesktopDisconnect once the caller's session ends, or the workspace
+// will never be considered idle again this run.
 func (s *Service) RecordWorkspaceConnection(ctx context.Context, actorID, workspaceID string) error {
 	value, err := s.GetWorkspace(ctx, actorID, workspaceID)
 	if err != nil {
@@ -984,7 +997,7 @@ func (s *Service) RecordWorkspaceConnection(ctx context.Context, actorID, worksp
 		return ErrWorkspaceStateConflict
 	}
 	now := s.now().UTC()
-	if err := s.store.UpdateWorkspaceLifecycle(ctx, value.ID, value.StartedAt, now, value.StoppedAt, value.ContainerDeletedAt, value.DataArchiveEligibleAt, now); err != nil {
+	if err := s.store.RecordWorkspaceSessionStart(ctx, value.ID, now, now); err != nil {
 		return err
 	}
 	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "workspace.connected", TargetType: "workspace", TargetID: value.ID})
@@ -1085,6 +1098,8 @@ func containsInt64(values []int64, want int64) bool {
 }
 
 func (s *Service) RecordTerminalDisconnect(ctx context.Context, actorID, workspaceID string) {
+	now := s.now().UTC()
+	_ = s.store.RecordWorkspaceSessionEnd(ctx, workspaceID, now, now)
 	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "terminal.session_ended", TargetType: "workspace", TargetID: workspaceID})
 }
 
@@ -1181,6 +1196,8 @@ func (s *Service) GetDesktopCredentials(ctx context.Context, actorID, workspaceI
 }
 
 func (s *Service) RecordDesktopDisconnect(ctx context.Context, actorID, workspaceID string) {
+	now := s.now().UTC()
+	_ = s.store.RecordWorkspaceSessionEnd(ctx, workspaceID, now, now)
 	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "desktop.session_ended", TargetType: "workspace", TargetID: workspaceID})
 }
 
