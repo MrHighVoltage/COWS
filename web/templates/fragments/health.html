@@ -2,13 +2,13 @@
 <div id="health-status" class="status-row" role="status" aria-live="polite">
   <div>
     <span class="status-label">COWS server</span>
-    <strong class="status-value status-{{ .Status }}">{{ .Status }}</strong>
+    {{ template "status-dot-view" (booleanStatusDot (eq .Status "ok") .Status .Status) }}
   </div>
   <div>
     <span class="status-label">SQLite</span>
-    <strong class="status-value status-{{ .Database }}">{{ .Database }}</strong>
+    {{ template "status-dot-view" (booleanStatusDot (eq .Database "ok") .Database .Database) }}
   </div>
   <time datetime="{{ .CheckedAt }}">Checked {{ .CheckedAt }}</time>
-  <button class="primary-button" type="button" hx-get="/fragments/health" hx-target="#health-status" hx-swap="outerHTML">Refresh status</button>
+  <button class="primary-button" type="button" hx-get="/fragments/health" hx-target="#health-status" hx-swap="outerHTML"><span class="action-label">Refresh status</span><span class="action-pending">Refreshing&hellip;</span></button>
 </div>
 {{ end }}

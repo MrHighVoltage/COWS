@@ -1,0 +1,3 @@
+{{ define "status-dot" }}{{ template "status-dot-view" (workspaceStatusDot .) }}{{ end }}
+
+{{ define "status-dot-view" }}<span class="status-dot-chip status-dot-{{ .Bucket }}"><span class="status-dot-mark{{ if .Pulsing }} status-dot-pulse{{ end }}"></span>{{ .Label }}</span>{{ end }}

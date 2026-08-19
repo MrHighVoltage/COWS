@@ -444,12 +444,18 @@ reusable components; there is no per-page styling. The palette is dark
 was already dark before the rest of the app followed. New UI work should
 reuse these tokens and components rather than hardcoding colors or
 introducing parallel ones. The one signature, content-derived component is the
-`.status-stamp` bracketed monospace tag (`[ RUNNING ]`), rendered through the
-shared `state-stamp` template (`web/templates/fragments/state-stamp.html`);
-use it for any new place the app reports workspace, runtime, or connection
-state, rather than printing raw state strings or inventing another status
-treatment. Plain tags (roles, groups) use the undecorated `.badge` class
-instead, so brackets consistently mean "this is a state."
+status dot (a colored dot plus a monospaced label, pulsing while an
+operation is actively in progress), rendered through the shared
+`status-dot-view` template (`web/templates/fragments/status-dot.html`) from
+a `statusDotView` value built by `workspaceStatusDot` (workspace lifecycle,
+including the in-progress pulse), `stateStatusDot` (a raw runtime state
+string), `booleanStatusDot` (simple on/off pairs like enabled/disabled), or
+the generic `statusDot`/`pulsingStatusDot` escape hatches, all in
+`internal/web/server.go`. Use one of these for any new place the app
+reports workspace, runtime, or connection state, rather than printing raw
+state strings or inventing another status treatment. Plain tags (roles,
+groups) use the undecorated `.badge` class instead, so the status dot
+consistently means "this is a state."
 
 ## Future host-agent boundary
 

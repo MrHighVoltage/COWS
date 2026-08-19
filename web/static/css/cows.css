@@ -171,38 +171,51 @@ h3 { font-size: 1rem; font-weight: 700; }
 .panel-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: .5rem; }
 .status-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: center; gap: 1rem; padding-top: 1.25rem; border-top: 1px solid var(--line); }
 .status-label { display: block; color: var(--text-mute); font-family: var(--font-mono); font-size: .78rem; text-transform: uppercase; letter-spacing: .03em; }
-.status-value { display: block; margin-top: .2rem; font-family: var(--font-mono); font-size: 1rem; font-weight: 700; text-transform: capitalize; }
 .status-ok { color: var(--good); }
 .status-degraded, .status-unavailable, .status-disabled { color: var(--bad); }
 .status-warning, .status-pending { color: var(--warn); }
 .status-neutral { color: var(--text-mute); }
 time { color: var(--text-mute); font-family: var(--font-mono); font-size: .8rem; }
 
-/* ---------- Status stamps (signature component) ----------
+/* ---------- Status dots (signature component) ----------
  * The one recurring motif for anything the app reports as *state*:
  * workspace lifecycle, image availability, connection status, health.
- * Bracketed and monospaced like a log line, colored only by semantics.
+ * A colored dot plus a monospaced label, pulsing while an operation is
+ * actively in progress. Colored only by semantics (ok/warn/bad/neutral).
  * Plain tag/role/group labels use .badge instead, deliberately undecorated,
- * so brackets always mean "this is a state," never "this is a label."
+ * so this component always means "this is a state," never "this is a
+ * label." Built via the shared "status-dot-view" template
+ * (web/templates/fragments/status-dot.html) from a statusDotView value -
+ * see workspaceStatusDot/stateStatusDot/booleanStatusDot/statusDot in
+ * internal/web/server.go for the various ways to build one.
  */
-.status-stamp {
+.status-dot-chip {
   display: inline-flex;
   align-items: center;
-  padding: .15rem .25rem;
-  border-radius: .2rem;
+  gap: .45rem;
+  padding: .2rem .6rem .2rem .5rem;
+  border-radius: 100px;
   font-family: var(--font-mono);
-  font-size: .78rem;
-  font-weight: 700;
+  font-size: .74rem;
+  font-weight: 600;
   letter-spacing: .03em;
   text-transform: uppercase;
   white-space: nowrap;
 }
-.status-stamp::before { content: "["; margin-right: .25rem; opacity: .5; }
-.status-stamp::after { content: "]"; margin-left: .25rem; opacity: .5; }
-.status-stamp.status-ok, .status-stamp.status-good { color: var(--good); background: var(--good-bg); }
-.status-stamp.status-warning { color: var(--warn); background: var(--warn-bg); }
-.status-stamp.status-disabled, .status-stamp.status-degraded, .status-stamp.status-unavailable { color: var(--bad); background: var(--bad-bg); }
-.status-stamp.status-neutral { color: var(--text-mute); background: var(--surface-sunk); }
+.status-dot-mark { width: .4rem; height: .4rem; border-radius: 50%; }
+.status-dot-mark.status-dot-pulse { animation: status-dot-pulse 1.4s ease-in-out infinite; }
+.status-dot-chip.status-dot-ok { color: var(--good); background: var(--good-bg); }
+.status-dot-chip.status-dot-ok .status-dot-mark { background: var(--good); }
+.status-dot-chip.status-dot-warn { color: var(--warn); background: var(--warn-bg); }
+.status-dot-chip.status-dot-warn .status-dot-mark { background: var(--warn); }
+.status-dot-chip.status-dot-bad { color: var(--bad); background: var(--bad-bg); }
+.status-dot-chip.status-dot-bad .status-dot-mark { background: var(--bad); }
+.status-dot-chip.status-dot-neutral { color: var(--text-mute); background: var(--surface-sunk); }
+.status-dot-chip.status-dot-neutral .status-dot-mark { background: var(--text-faint); }
+@keyframes status-dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) {
+  .status-dot-mark.status-dot-pulse { animation-duration: 2.8s; }
+}
 
 button {
   min-height: 2.5rem;
@@ -235,14 +248,17 @@ button:hover, .primary-button:hover, .secondary-button:hover { filter: brightnes
 button:focus-visible, .primary-button:focus-visible, .secondary-button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: .2rem solid var(--accent-ring); outline-offset: .15rem; }
 button:disabled, .table-action:disabled { opacity: .55; cursor: not-allowed; filter: none; }
 /*
- * Shared "an htmx request is in flight" indicator: a small spinner dot plus
- * label, next to whichever row/panel is mid-action. htmx's own injected
- * styles toggle visibility (opacity 0 by default, 1 while .htmx-request is
- * set on an ancestor) - see the .pull-indicator/.image-pull-spinner pair
- * this mirrors for the template image-pull status.
+ * Per-button pending state: each action button carries its own resting
+ * label and an in-progress label+spinner, toggled by htmx's own
+ * "htmx-request" class (added to the form/button that issued the request -
+ * see htmx's hx-indicator docs) rather than a separate indicator element
+ * elsewhere on the row. The action is visible directly in the button that
+ * was clicked, not next to it.
  */
-.row-indicator { display: inline-flex; align-items: center; gap: .35rem; color: var(--accent-strong); font-family: var(--font-mono); font-size: .78rem; }
-.row-indicator::before { content: ""; width: .65rem; height: .65rem; border: 2px solid var(--accent-soft); border-top-color: var(--accent); border-radius: 50%; animation: image-pull-spin .8s linear infinite; }
+.action-pending { display: none; align-items: center; gap: .35rem; }
+.action-pending::before { content: ""; width: .6rem; height: .6rem; flex-shrink: 0; border: 2px solid var(--accent-soft); border-top-color: var(--accent); border-radius: 50%; animation: image-pull-spin .8s linear infinite; }
+form.htmx-request .action-label, button.htmx-request .action-label { display: none; }
+form.htmx-request .action-pending, button.htmx-request .action-pending { display: inline-flex; }
 .details { margin-top: 1rem; padding: .9rem 1rem; color: var(--text-mute); border-left: .25rem solid var(--warn-line); background: var(--warn-bg); }
 .details dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; margin: 0; }
 .details dt { color: var(--text-mute); font-family: var(--font-mono); font-size: .78rem; text-transform: uppercase; }
@@ -266,6 +282,7 @@ button:disabled, .table-action:disabled { opacity: .55; cursor: not-allowed; fil
 .template-form-section textarea { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
 .template-form-section #configuration-json { font-family: var(--font-mono); font-size: .84rem; line-height: 1.45; }
 .form-panel input:focus, .form-panel select:focus, .form-panel textarea:focus { outline: .2rem solid var(--accent-ring); border-color: var(--accent); }
+.form-panel input.is-inert { background: var(--surface-sunk); color: var(--text-mute); cursor: not-allowed; }
 .form-panel fieldset { display: grid; gap: .6rem; min-width: 0; margin: 1rem 0 0; padding: 1rem; border: 1px solid var(--line); border-radius: .3rem; }
 .form-panel legend { padding: 0 .35rem; color: var(--text-mute); font-family: var(--font-mono); font-size: .82rem; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem 1rem; }
@@ -393,14 +410,13 @@ code { color: var(--text-mute); font-family: var(--font-mono); font-size: .82rem
 .workspace-cell-text { display: grid; min-width: 0; gap: .1rem; }
 .workspace-cell-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-cell-template { color: var(--text-mute); font-family: var(--font-mono); font-size: .76rem; }
-.workspace-actions { display: flex; flex-direction: column; align-items: flex-start; gap: .4rem; min-width: max-content; }
-.workspace-actions-row { display: flex; flex-wrap: nowrap; align-items: center; gap: .5rem; }
-.workspace-actions-row:empty { display: none; }
+.workspace-actions { display: flex; flex-wrap: nowrap; align-items: center; gap: .5rem; min-width: max-content; }
 .workspace-actions form { margin: 0; }
 .workspace-actions .table-action { width: auto; }
 .table-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; min-width: max-content; }
 .table-actions form { margin: 0; }
 .actions-column { min-width: 18rem; }
+.workspace-table .actions-column { min-width: 9rem; }
 .inline-form { display: inline; margin: 0; }
 .danger-action { color: var(--bad); border-color: var(--bad-line); }
 .title-actions { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; }
@@ -415,12 +431,9 @@ code { color: var(--text-mute); font-family: var(--font-mono); font-size: .82rem
 .operation-progress { width: 7rem; height: .55rem; accent-color: var(--warn); }
 .template-image-status { display: grid; gap: .2rem; margin-top: .35rem; }
 .template-image-status form { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
-.template-image-status .pull-indicator { color: var(--accent-strong); font-family: var(--font-mono); font-size: .8rem; }
-.image-pull-working { display: inline-flex; align-items: center; gap: .35rem; }
-.image-pull-spinner { width: .75rem; height: .75rem; border: 2px solid var(--accent-soft); border-top-color: var(--accent); border-radius: 50%; animation: image-pull-spin .8s linear infinite; }
 @keyframes image-pull-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
-  .image-pull-spinner { animation-duration: 2.4s; }
+  .action-pending::before { animation-duration: 2.4s; }
 }
 .access-header { display: flex; flex-wrap: wrap; align-items: baseline; gap: .75rem; margin-bottom: 1rem; }
 .access-header-title { font-size: 1.3rem; }
@@ -635,5 +648,11 @@ code { color: var(--text-mute); font-family: var(--font-mono); font-size: .82rem
   .file-actions form > * { width: 100%; }
   .actions-column { position: sticky; right: 0; z-index: 1; background: var(--surface); box-shadow: -.65rem 0 .8rem rgb(16 22 29 / 7%); }
   tbody tr:hover .actions-column { background: var(--surface-sunk); }
-  .workspace-table .actions-column { min-width: 16rem; }
+  /* The workspace table's actions column now holds at most two small
+     buttons (Start, or Stop+Restart) - freezing it in place while
+     scrolling is no longer pulling its weight the way it did with the
+     larger button set, and reads as buttons visually detaching from
+     their row instead. Let it scroll like every other column. */
+  .workspace-table .actions-column { position: static; min-width: 9rem; background: transparent; box-shadow: none; }
+  .workspace-table tbody tr:hover .actions-column { background: transparent; }
 }

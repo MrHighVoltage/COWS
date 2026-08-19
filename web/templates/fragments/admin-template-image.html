@@ -5,34 +5,31 @@
 {{ define "admin-template-image-status-content" }}
 <div id="template-image-{{ .ID }}" class="template-image-status" role="status" aria-live="polite"{{ if .Pulling }} hx-get="/admin/templates/{{ .ID }}/image/status" hx-trigger="every 1s" hx-swap="outerHTML"{{ end }}>
   {{ if eq .Status "available" }}
-    <span class="status-value status-ok">Available</span>
+    {{ template "status-dot-view" (statusDot "Available" "ok") }}
     <span class="table-subtext">{{ .Message }}</span>
-    <form method="post" action="/admin/templates/{{ .ID }}/image/pull" hx-post="/admin/templates/{{ .ID }}/image/pull" hx-target="#template-image-{{ .ID }}" hx-swap="outerHTML" hx-indicator="#template-image-{{ .ID }} .pull-indicator">
+    <form method="post" action="/admin/templates/{{ .ID }}/image/pull" hx-post="/admin/templates/{{ .ID }}/image/pull" hx-target="#template-image-{{ .ID }}" hx-swap="outerHTML" hx-disabled-elt="find button">
       <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
-      <button class="table-action" type="submit">Pull / update</button>
-      <span class="pull-indicator htmx-indicator" aria-label="Pulling image">Working...</span>
+      <button class="table-action" type="submit"><span class="action-label">Pull / update</span><span class="action-pending">Pulling&hellip;</span></button>
     </form>
   {{ else if eq .Status "missing" }}
-    <span class="status-value status-disabled">Not available</span>
+    {{ template "status-dot-view" (statusDot "Not available" "bad") }}
     <span class="table-subtext">{{ .Message }}</span>
-    <form method="post" action="/admin/templates/{{ .ID }}/image/pull" hx-post="/admin/templates/{{ .ID }}/image/pull" hx-target="#template-image-{{ .ID }}" hx-swap="outerHTML" hx-indicator="#template-image-{{ .ID }} .pull-indicator">
+    <form method="post" action="/admin/templates/{{ .ID }}/image/pull" hx-post="/admin/templates/{{ .ID }}/image/pull" hx-target="#template-image-{{ .ID }}" hx-swap="outerHTML" hx-disabled-elt="find button">
       <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
-      <button class="table-action" type="submit">Pull image</button>
-      <span class="pull-indicator htmx-indicator" aria-label="Pulling image">Working...</span>
+      <button class="table-action" type="submit"><span class="action-label">Pull image</span><span class="action-pending">Pulling&hellip;</span></button>
     </form>
   {{ else if eq .Status "pulling" }}
-    <span class="status-value status-pending">Pulling</span>
-    <span class="table-subtext image-pull-working"><span class="image-pull-spinner" aria-hidden="true"></span>{{ .Message }}</span>
-  {{ else if eq .Status "failed" }}
-    <span class="status-value status-disabled">Pull failed</span>
+    {{ template "status-dot-view" (pulsingStatusDot "Pulling" "warn") }}
     <span class="table-subtext">{{ .Message }}</span>
-    <form method="post" action="/admin/templates/{{ .ID }}/image/pull" hx-post="/admin/templates/{{ .ID }}/image/pull" hx-target="#template-image-{{ .ID }}" hx-swap="outerHTML" hx-indicator="#template-image-{{ .ID }} .pull-indicator">
+  {{ else if eq .Status "failed" }}
+    {{ template "status-dot-view" (statusDot "Pull failed" "bad") }}
+    <span class="table-subtext">{{ .Message }}</span>
+    <form method="post" action="/admin/templates/{{ .ID }}/image/pull" hx-post="/admin/templates/{{ .ID }}/image/pull" hx-target="#template-image-{{ .ID }}" hx-swap="outerHTML" hx-disabled-elt="find button">
       <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
-      <button class="table-action" type="submit">Try again</button>
-      <span class="pull-indicator htmx-indicator" aria-label="Pulling image">Working...</span>
+      <button class="table-action" type="submit"><span class="action-label">Try again</span><span class="action-pending">Pulling&hellip;</span></button>
     </form>
   {{ else }}
-    <span class="status-value status-disabled">Unavailable</span>
+    {{ template "status-dot-view" (statusDot "Unavailable" "bad") }}
     <span class="table-subtext">{{ .Message }}</span>
   {{ end }}
 </div>
