@@ -40,7 +40,7 @@ this keeps runtime-owned files out of `go test ./...`'s package scan and
 lets state persist across sessions:
 
 ```sh
-COWS_LISTEN_ADDR=127.0.0.1:8081 \
+COWS_LISTEN_ADDR=0.0.0.0:8081 \
 COWS_DATABASE_PATH=./.cows-test/cows.db \
 COWS_MOUNT_ROOT=./.cows-test/cows-mounts \
 COWS_MOUNT_ARCHIVE_ROOT=./.cows-test/cows-mounts-archive \
@@ -52,12 +52,13 @@ sleep 1
 cat /tmp/cows-test.log   # confirm "COWS server started", no bind error
 ```
 
-The default listener (`127.0.0.1`) is local-only. If the instance needs to be
-reachable from another machine (e.g. the user testing from a browser on a
-different host), bind all interfaces instead: `COWS_LISTEN_ADDR=0.0.0.0:8081`.
-This is still plain HTTP with no TLS — fine for throwaway dev/test use, never
-for real credentials or untrusted users (`docs/configuration.md` says the
-same). Find LAN-reachable addresses with `ip -4 addr show | grep inet`.
+This machine is headless, so the instance always binds all interfaces
+(`0.0.0.0`) by default — there's no local browser session that needs
+`127.0.0.1`-only isolation, and the user routinely tests from another host
+on the LAN. This is still plain HTTP with no TLS — fine for throwaway
+dev/test use, never for real credentials or untrusted users
+(`docs/configuration.md` says the same). Find LAN-reachable addresses with
+`ip -4 addr show | grep inet`.
 
 **Bootstrap credentials only take effect on a database with zero users.**
 `.cows-test/cows.db` from a prior session likely already has accounts (an
