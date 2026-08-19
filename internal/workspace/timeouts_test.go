@@ -53,6 +53,19 @@ func TestEvaluateTimeouts(t *testing.T) {
 			value: domain.Workspace{ContainerDeletedAt: base},
 			now:   base.Add(time.Hour), phase: TimeoutPhaseNone, action: TimeoutActionNone,
 		},
+		{
+			// RunTimeouts's delete branch never clears StoppedAt when it
+			// removes the container - it only sets ContainerDeletedAt (see
+			// workspace.go's TimeoutActionDelete case). So the realistic
+			// post-deletion shape keeps StoppedAt, StoppedRetentionSeconds,
+			// and RuntimeID exactly as they were, plus a non-zero
+			// ContainerDeletedAt. Without checking that field, this reports
+			// Action: Delete/Due: true forever after the deletion already
+			// happened.
+			name:  "container already deleted by a prior timeout is not perpetually due again",
+			value: domain.Workspace{ObservedState: "removed", RuntimeID: "container-1", StoppedAt: base, StoppedRetentionSeconds: 3600, ContainerDeletedAt: base.Add(time.Hour)},
+			now:   base.Add(2 * time.Hour), phase: TimeoutPhaseNone, action: TimeoutActionNone,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

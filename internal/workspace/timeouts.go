@@ -31,7 +31,7 @@ type TimeoutStatus struct {
 
 func EvaluateTimeouts(value domain.Workspace, now time.Time) TimeoutStatus {
 	now = now.UTC()
-	if !value.StoppedAt.IsZero() && value.RuntimeID != "" && value.StoppedRetentionSeconds > 0 {
+	if !value.StoppedAt.IsZero() && value.RuntimeID != "" && value.ContainerDeletedAt.IsZero() && value.StoppedRetentionSeconds > 0 {
 		deadline := value.StoppedAt.Add(time.Duration(value.StoppedRetentionSeconds) * time.Second)
 		status := TimeoutStatus{Phase: TimeoutPhaseStoppedRetention, Action: TimeoutActionNone, Deadline: deadline}
 		if !now.Before(deadline) {
