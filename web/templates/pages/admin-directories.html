@@ -1,0 +1,23 @@
+{{ define "admin-directories-page" }}
+{{ template "base-start" . }}
+<section class="intro" aria-labelledby="directories-title">
+  <p class="eyebrow">Administration</p>
+  <h1 id="directories-title">Retained directories</h1>
+  <p class="lede">Explicitly deleted workspaces retain archived directory mounts for manual recovery, including ones whose owning user account has since been deleted. These records do not grant user access.</p>
+</section>
+<section class="panel table-panel">
+  <div class="table-scroll"><table><thead><tr><th>Former workspace</th><th>Owner</th><th>Retained</th><th>Actions</th></tr></thead><tbody>
+  {{ range .RetainedDirectories }}{{ template "admin-directory-row" . }}{{ else }}<tr><td colspan="4" class="muted">No retained directories.</td></tr>{{ end }}
+  </tbody></table></div>
+</section>
+{{ template "base-end" . }}
+{{ end }}
+
+{{ define "admin-directory-row" }}
+<tr id="admin-directory-row-{{ .WorkspaceID }}">
+  <td>{{ .WorkspaceName }}<br><span class="table-subtext">{{ .TemplateName }}</span></td>
+  <td><code>{{ .OwnerUserID }}</code></td>
+  <td>{{ .RetainedAt.Format "2006-01-02 15:04 UTC" }}</td>
+  <td>{{ if .RowError }}<p class="table-subtext status-disabled">{{ .RowError }}</p>{{ end }}<div class="table-actions"><a class="table-action access-action button-link" href="/admin/directories/{{ .WorkspaceID }}/download.zip">Download ZIP</a><form method="post" action="/admin/directories/{{ .WorkspaceID }}/delete" hx-post="/admin/directories/{{ .WorkspaceID }}/delete" hx-target="#admin-directory-row-{{ .WorkspaceID }}" hx-swap="outerHTML" hx-disabled-elt="find button" hx-confirm="Remove this retained directory permanently?"><input type="hidden" name="csrf_token" value="{{ .CSRFToken }}"><button class="table-action danger-action" type="submit"><span class="action-label">Remove</span><span class="action-pending">Removing&hellip;</span></button></form></div></td>
+</tr>
+{{ end }}

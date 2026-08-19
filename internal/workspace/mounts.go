@@ -453,6 +453,15 @@ func (s *Service) OpenRetainedDirectoryZip(ctx context.Context, actorID, workspa
 	if err != nil {
 		return nil, "", err
 	}
+	return s.streamRetainedDirectoryZip(ctx, directory)
+}
+
+// streamRetainedDirectoryZip is the shared streaming logic behind
+// OpenRetainedDirectoryZip (owner-scoped, self-service) and
+// OpenRetainedDirectoryZipByID (unscoped, administrator recovery) - the
+// tombstone lookup differs between the two callers, everything after it
+// does not.
+func (s *Service) streamRetainedDirectoryZip(ctx context.Context, directory domain.RetainedWorkspaceDirectory) (io.ReadCloser, string, error) {
 	if s.mountArchiveRoot == "" {
 		return nil, "", ErrMountUnavailable
 	}
@@ -485,6 +494,19 @@ func (s *Service) OpenRetainedDirectoryZip(ctx context.Context, actorID, workspa
 	return reader, name, nil
 }
 
+// OpenRetainedDirectoryZipByID is the administrator-recovery counterpart of
+// OpenRetainedDirectoryZip: no ownership check, since an administrator must
+// be able to recover a directory whose owning user account was deleted
+// (decision 0022's recovery guarantee, extended to directories by decision
+// 0025's directory tombstones).
+func (s *Service) OpenRetainedDirectoryZipByID(ctx context.Context, workspaceID string) (io.ReadCloser, string, error) {
+	directory, err := s.store.FindRetainedWorkspaceDirectoryByID(ctx, workspaceID)
+	if err != nil {
+		return nil, "", err
+	}
+	return s.streamRetainedDirectoryZip(ctx, directory)
+}
+
 // DeleteRetainedDirectory permanently discards a retained-directory
 // tombstone and its archived content (self-service, decision 0025). The
 // physical removal is attempted before the tombstone is consumed: if it
@@ -514,6 +536,33 @@ func (s *Service) DeleteRetainedDirectory(ctx context.Context, actorID, workspac
 	}
 	if _, err := s.store.ConsumeRetainedWorkspaceDirectory(ctx, workspaceID, user.ID); err != nil && !errors.Is(err, repository.ErrNotFound) {
 		return err
+	}
+	return nil
+}
+
+// DeleteRetainedDirectoryByID is the administrator-recovery counterpart of
+// DeleteRetainedDirectory: no ownership check, and it removes the real
+// archived content before consuming the tombstone for the same reason
+// described there.
+func (s *Service) DeleteRetainedDirectoryByID(ctx context.Context, workspaceID string) error {
+	directory, err := s.store.FindRetainedWorkspaceDirectoryByID(ctx, workspaceID)
+	if err != nil {
+		return err
+	}
+	if s.mountArchiveRoot != "" {
+		path, pathErr := filepath.Abs(filepath.Join(s.mountArchiveRoot, managedContainerName(directory.WorkspaceID)))
+		if pathErr != nil {
+			return ErrMountUnavailable
+		}
+		if err := os.RemoveAll(path); err != nil {
+			_ = recordArchiveActivity(s.mountArchiveRoot, archiveActivity{Action: "directory_recovery_discarded", WorkspaceID: directory.WorkspaceID, ArchivePath: path, Status: "failed", Error: err.Error()})
+			return ErrMountUnavailable
+		}
+		_ = recordArchiveActivity(s.mountArchiveRoot, archiveActivity{Action: "directory_recovery_discarded", WorkspaceID: directory.WorkspaceID, ArchivePath: path, Status: "succeeded"})
+	}
+	result := s.store.DeleteRetainedWorkspaceDirectory(ctx, workspaceID)
+	if result != nil && !errors.Is(result, repository.ErrNotFound) {
+		return result
 	}
 	return nil
 }

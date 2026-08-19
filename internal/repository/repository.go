@@ -126,6 +126,11 @@ type WorkspaceRepository interface {
 	// FindRetainedWorkspaceVolume is the read-only counterpart of
 	// ConsumeRetainedWorkspaceVolume, for self-service download.
 	FindRetainedWorkspaceVolume(ctx context.Context, workspaceID, mountName, ownerUserID string) (domain.RetainedWorkspaceVolume, error)
+	// ListAllRetainedWorkspaceDirectories is the administrator-recovery
+	// counterpart of ListRetainedWorkspaceDirectoriesForOwner (decision 0022):
+	// it returns every retained directory regardless of owner, including
+	// ones whose owning user account no longer exists.
+	ListAllRetainedWorkspaceDirectories(ctx context.Context) ([]domain.RetainedWorkspaceDirectory, error)
 	ListRetainedWorkspaceDirectoriesForOwner(ctx context.Context, ownerUserID string) ([]domain.RetainedWorkspaceDirectory, error)
 	DeleteRetainedWorkspaceDirectory(ctx context.Context, workspaceID string) error
 	// ConsumeRetainedWorkspaceDirectory is the directory equivalent of
@@ -134,6 +139,11 @@ type WorkspaceRepository interface {
 	// FindRetainedWorkspaceDirectory is the read-only counterpart, for
 	// self-service download.
 	FindRetainedWorkspaceDirectory(ctx context.Context, workspaceID, ownerUserID string) (domain.RetainedWorkspaceDirectory, error)
+	// FindRetainedWorkspaceDirectoryByID is the administrator-recovery
+	// counterpart of FindRetainedWorkspaceDirectory: it looks a tombstone up
+	// by workspace ID alone, without an owner check, since an administrator
+	// must be able to reach a directory whose owning user was deleted.
+	FindRetainedWorkspaceDirectoryByID(ctx context.Context, workspaceID string) (domain.RetainedWorkspaceDirectory, error)
 	SetWorkspaceDesiredState(ctx context.Context, id string, state domain.DesiredWorkspaceState, updatedAt time.Time) error
 	UpdateWorkspaceObservedState(ctx context.Context, id, observedState, runtimeID, observedErrorCode, observedError string, observedAt, updatedAt time.Time) error
 	UpdateWorkspaceLifecycle(ctx context.Context, id string, startedAt, lastConnectedAt, stoppedAt, containerDeletedAt, dataArchiveEligibleAt, updatedAt time.Time) error

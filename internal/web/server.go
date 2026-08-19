@@ -255,6 +255,7 @@ type pageData struct {
 	RetainedVolumes             []retainedVolumeView
 	MyRetainedVolumes           []retainedVolumeView
 	MyRetainedDirectories       []domain.RetainedWorkspaceDirectory
+	RetainedDirectories         []retainedDirectoryView
 	ReattachVolumeOptions       map[string][]reattachChoice
 	ReattachDirectoryOptions    []reattachDirectoryChoice
 }
@@ -263,6 +264,14 @@ type retainedVolumeView struct {
 	domain.RetainedWorkspaceVolume
 	RuntimePresent bool
 	CSRFToken      string
+	// RowError is a transient, request-scoped message shown only in the
+	// just-swapped-in row after a rejected dynamic row action.
+	RowError string
+}
+
+type retainedDirectoryView struct {
+	domain.RetainedWorkspaceDirectory
+	CSRFToken string
 	// RowError is a transient, request-scoped message shown only in the
 	// just-swapped-in row after a rejected dynamic row action.
 	RowError string
@@ -613,6 +622,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/volumes", s.adminVolumes)
 	mux.HandleFunc("GET /admin/volumes/{workspace_id}/{mount_name}/download.zip", s.adminVolumeDownload)
 	mux.HandleFunc("POST /admin/volumes/{workspace_id}/{mount_name}/delete", s.adminVolumeDelete)
+	mux.HandleFunc("GET /admin/directories", s.adminDirectories)
+	mux.HandleFunc("GET /admin/directories/{workspace_id}/download.zip", s.adminDirectoryDownload)
+	mux.HandleFunc("POST /admin/directories/{workspace_id}/delete", s.adminDirectoryDelete)
 	mux.HandleFunc("GET /", s.home)
 	return securityHeaders(mux)
 }
@@ -3316,6 +3328,106 @@ func (s *Server) recordAdminAudit(ctx context.Context, actorID, eventType, targe
 	if s.options.Store != nil {
 		_ = s.options.Store.RecordAuditEvent(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: eventType, TargetType: "volume", TargetID: targetID, Metadata: metadata, CreatedAt: time.Now().UTC()})
 	}
+}
+
+func (s *Server) adminDirectories(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	if s.options.Store == nil {
+		http.Error(w, "directory metadata is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	values, err := s.options.Store.ListAllRetainedWorkspaceDirectories(r.Context())
+	if err != nil {
+		http.Error(w, "failed to load retained directories", http.StatusInternalServerError)
+		return
+	}
+	csrfToken := s.ensureCSRF(w, r)
+	views := make([]retainedDirectoryView, 0, len(values))
+	for _, value := range values {
+		views = append(views, retainedDirectoryView{RetainedWorkspaceDirectory: value, CSRFToken: csrfToken})
+	}
+	s.render(w, http.StatusOK, "admin-directories-page", pageData{Title: "Retained directories | COWS", User: &user, CSRFToken: csrfToken, RetainedDirectories: views})
+}
+
+func (s *Server) adminDirectoryDownload(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	if s.options.Store == nil {
+		http.Error(w, "directory metadata is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	workspaceID := r.PathValue("workspace_id")
+	directory, err := s.options.Store.FindRetainedWorkspaceDirectoryByID(r.Context(), workspaceID)
+	if errors.Is(err, repository.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to load retained directory", http.StatusInternalServerError)
+		return
+	}
+	reader, name, err := s.workspace.OpenRetainedDirectoryZipByID(r.Context(), workspaceID)
+	if err != nil {
+		http.Error(w, "the retained directory could not be read", http.StatusServiceUnavailable)
+		return
+	}
+	defer reader.Close()
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`.zip"`)
+	s.recordStorageAudit(r.Context(), user.ID, "directory.recovery_downloaded", "directory", directory.WorkspaceID, map[string]string{"workspace_id": directory.WorkspaceID, "owner_user_id": directory.OwnerUserID})
+	_, _ = io.Copy(w, reader)
+}
+
+func (s *Server) adminDirectoryDelete(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if !s.validCSRF(r) {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return
+	}
+	if s.options.Store == nil {
+		http.Error(w, "directory metadata is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	workspaceID := r.PathValue("workspace_id")
+	directory, err := s.options.Store.FindRetainedWorkspaceDirectoryByID(r.Context(), workspaceID)
+	if errors.Is(err, repository.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to load retained directory", http.StatusInternalServerError)
+		return
+	}
+	rowErrorText := ""
+	if err := s.workspace.DeleteRetainedDirectoryByID(r.Context(), workspaceID); err != nil {
+		rowErrorText = "The retained directory could not be removed."
+	} else {
+		s.recordStorageAudit(r.Context(), user.ID, "directory.recovery_removed", "directory", directory.WorkspaceID, map[string]string{"workspace_id": directory.WorkspaceID, "owner_user_id": directory.OwnerUserID})
+	}
+	if isHTMXRequest(r) {
+		if rowErrorText == "" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		view := retainedDirectoryView{RetainedWorkspaceDirectory: directory, RowError: rowErrorText, CSRFToken: s.ensureCSRF(w, r)}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_ = s.templates.ExecuteTemplate(w, "admin-directory-row", view)
+		return
+	}
+	if rowErrorText != "" {
+		http.Error(w, rowErrorText, http.StatusServiceUnavailable)
+		return
+	}
+	http.Redirect(w, r, "/admin/directories", http.StatusSeeOther)
 }
 
 func (s *Server) runtimeWorkspaceViews(ctx context.Context, actorID string, observations []runtime.ObservedWorkspace) []runtimeWorkspaceView {
