@@ -934,6 +934,27 @@ func (s *Store) ConsumeRetainedWorkspaceVolume(ctx context.Context, workspaceID,
 	return volume, nil
 }
 
+func (s *Store) ListAllRetainedWorkspaceDirectories(ctx context.Context) ([]domain.RetainedWorkspaceDirectory, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT workspace_id, owner_user_id, template_id, template_name, workspace_name,
+		archive_path, mounts_json, retained_at FROM retained_workspace_directories ORDER BY retained_at DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list all retained workspace directories: %w", err)
+	}
+	defer rows.Close()
+	directories := make([]domain.RetainedWorkspaceDirectory, 0)
+	for rows.Next() {
+		directory, err := scanRetainedWorkspaceDirectory(rows)
+		if err != nil {
+			return nil, err
+		}
+		directories = append(directories, directory)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate all retained workspace directories: %w", err)
+	}
+	return directories, nil
+}
+
 func (s *Store) ListRetainedWorkspaceDirectoriesForOwner(ctx context.Context, ownerUserID string) ([]domain.RetainedWorkspaceDirectory, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT workspace_id, owner_user_id, template_id, template_name, workspace_name,
 		archive_path, mounts_json, retained_at FROM retained_workspace_directories WHERE owner_user_id = ? ORDER BY retained_at DESC`, ownerUserID)
@@ -973,6 +994,23 @@ func (s *Store) DeleteRetainedWorkspaceDirectory(ctx context.Context, workspaceI
 func (s *Store) FindRetainedWorkspaceDirectory(ctx context.Context, workspaceID, ownerUserID string) (domain.RetainedWorkspaceDirectory, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT workspace_id, owner_user_id, template_id, template_name, workspace_name,
 		archive_path, mounts_json, retained_at FROM retained_workspace_directories WHERE workspace_id = ? AND owner_user_id = ?`, workspaceID, ownerUserID)
+	directory, err := scanRetainedWorkspaceDirectory(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.RetainedWorkspaceDirectory{}, repository.ErrNotFound
+		}
+		return domain.RetainedWorkspaceDirectory{}, err
+	}
+	return directory, nil
+}
+
+// FindRetainedWorkspaceDirectoryByID is the administrator-recovery
+// counterpart of FindRetainedWorkspaceDirectory: no owner_user_id filter,
+// since an administrator must be able to reach a tombstone whose owning
+// user account has since been deleted.
+func (s *Store) FindRetainedWorkspaceDirectoryByID(ctx context.Context, workspaceID string) (domain.RetainedWorkspaceDirectory, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT workspace_id, owner_user_id, template_id, template_name, workspace_name,
+		archive_path, mounts_json, retained_at FROM retained_workspace_directories WHERE workspace_id = ?`, workspaceID)
 	directory, err := scanRetainedWorkspaceDirectory(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

@@ -1093,3 +1093,100 @@ func TestStorageVolumeDeleteKeepsTombstoneWhenRemovalFails(t *testing.T) {
 		t.Fatalf("retained volumes after failed removal = %d, err=%v, want 1 (tombstone must survive)", len(volumesAfter), err)
 	}
 }
+
+func TestAdminDirectoriesRecoversStorageAfterOwnerDeleted(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "cows.db"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	store := sqlite.New(db)
+	authService, err := auth.New(store, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth service: %v", err)
+	}
+	if _, err := authService.BootstrapAdministrator(ctx, auth.CreateUserInput{Username: "admin", Password: "correct horse battery staple"}); err != nil {
+		t.Fatalf("bootstrap administrator: %v", err)
+	}
+	admin, adminToken, err := authService.Authenticate(ctx, "admin", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate administrator: %v", err)
+	}
+	if err := authService.ChangePassword(ctx, admin.ID, "correct horse battery staple", "changed correct horse battery staple"); err != nil {
+		t.Fatalf("change administrator password: %v", err)
+	}
+	target, err := authService.CreateUser(ctx, admin.ID, auth.CreateUserInput{Username: "orphan-owner", Password: "another correct password", Role: domain.RoleUser})
+	if err != nil {
+		t.Fatalf("create target user: %v", err)
+	}
+	if err := authService.ChangePassword(ctx, target.ID, "another correct password", "changed another correct password"); err != nil {
+		t.Fatalf("change target password: %v", err)
+	}
+
+	fake := &storageTestRuntime{terminalRuntime: newTerminalRuntime()}
+	mountRoot, archiveRoot := t.TempDir(), t.TempDir()
+	service := workspace.NewWithRuntimeAndMountRoots(store, fake, mountRoot, archiveRoot)
+	template, err := service.CreateTemplate(ctx, admin.ID, workspace.TemplateInput{
+		Name: "Admin Directory Recovery Template", ImageReference: "registry.example/research:1", DefaultCPUMillis: 1000,
+		MaxCPUMillis: 2000, DefaultMemoryBytes: 2 << 30, MaxMemoryBytes: 4 << 30,
+		DefaultStorageBytes: 10 << 30, InitialConnectionTimeoutSeconds: 3600, StoppedRetentionSeconds: 3600,
+		AccessMethods: []domain.AccessMethod{domain.AccessFiles}, AllowedRoles: []domain.Role{domain.RoleUser}, Enabled: true,
+		Configuration: domain.TemplateConfiguration{Mounts: []domain.TemplateMount{{Name: "designs", Type: domain.TemplateMountDirectory, ContainerPath: "/designs", FileManager: true}}},
+	})
+	if err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+	old, err := service.CreateWorkspace(ctx, target.ID, workspace.CreateWorkspaceInput{Name: "orphaned directory workspace", TemplateID: template.ID})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := service.DeleteWorkspace(ctx, target.ID, old.ID); err != nil {
+		t.Fatalf("delete workspace to create retained directory: %v", err)
+	}
+	if err := authService.SetUserDisabled(ctx, admin.ID, target.ID, true); err != nil {
+		t.Fatalf("disable target: %v", err)
+	}
+	if err := authService.DeleteUser(ctx, admin.ID, target.ID); err != nil {
+		t.Fatalf("delete target (must succeed: they no longer own any workspace rows): %v", err)
+	}
+
+	server, err := New(db, authService, service, nil, fake, Options{SessionLifetime: time.Hour, Store: store})
+	if err != nil {
+		t.Fatalf("create web server: %v", err)
+	}
+	sessionCookie := &http.Cookie{Name: "cows_session", Value: adminToken}
+	pageRequest := httptest.NewRequest(http.MethodGet, "/admin/directories", nil)
+	pageRequest.AddCookie(sessionCookie)
+	pageRecorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(pageRecorder, pageRequest)
+	if pageRecorder.Code != http.StatusOK || !strings.Contains(pageRecorder.Body.String(), "orphaned directory workspace") {
+		t.Fatalf("admin directories page status=%d body=%s", pageRecorder.Code, pageRecorder.Body.String())
+	}
+	csrfCookie := cookieByName(pageRecorder.Result().Cookies(), "cows_csrf")
+	if csrfCookie == nil {
+		t.Fatalf("expected a csrf cookie")
+	}
+
+	downloadRequest := httptest.NewRequest(http.MethodGet, "/admin/directories/"+old.ID+"/download.zip", nil)
+	downloadRequest.AddCookie(sessionCookie)
+	downloadRecorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(downloadRecorder, downloadRequest)
+	if downloadRecorder.Code != http.StatusOK || downloadRecorder.Header().Get("Content-Type") != "application/zip" {
+		t.Fatalf("download status=%d content-type=%q", downloadRecorder.Code, downloadRecorder.Header().Get("Content-Type"))
+	}
+
+	form := url.Values{"csrf_token": {csrfCookie.Value}}
+	deleteRequest := httptest.NewRequest(http.MethodPost, "/admin/directories/"+old.ID+"/delete", strings.NewReader(form.Encode()))
+	deleteRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	deleteRequest.AddCookie(sessionCookie)
+	deleteRequest.AddCookie(csrfCookie)
+	deleteRecorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(deleteRecorder, deleteRequest)
+	if deleteRecorder.Code != http.StatusSeeOther {
+		t.Fatalf("delete status=%d body=%s", deleteRecorder.Code, deleteRecorder.Body.String())
+	}
+	if directories, err := store.ListAllRetainedWorkspaceDirectories(ctx); err != nil || len(directories) != 0 {
+		t.Fatalf("retained directories after admin delete = %d, err=%v, want 0", len(directories), err)
+	}
+}
