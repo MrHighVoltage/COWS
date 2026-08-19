@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -245,6 +246,97 @@ func (a *Adapter) WorkspaceResourceUsage(ctx context.Context, runtimeID string) 
 		usage.CPUPercentMilli = int64(percentMilli)
 	}
 	return usage, nil
+}
+
+const maxLogResponseBytes = 1 << 20
+
+// WorkspaceLogs fetches a bounded tail of the container's own stdout/stderr
+// (what "podman logs" shows), not exec/terminal session output. COWS never
+// creates the main container with a TTY, so Podman multiplexes stdout and
+// stderr into the Docker-compatible frame format (an 8-byte header per
+// chunk: 1 stream-type byte, 3 reserved bytes, then a 4-byte big-endian
+// length) rather than returning plain text; demuxLogStream unwraps that.
+func (a *Adapter) WorkspaceLogs(ctx context.Context, runtimeID string, tailLines int) ([]runtime.LogLine, error) {
+	if !validRuntimeID(runtimeID) {
+		return nil, runtime.ErrNotFound
+	}
+	if tailLines <= 0 {
+		tailLines = 200
+	}
+	version, err := a.version(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := url.Values{"stdout": {"true"}, "stderr": {"true"}, "timestamps": {"true"}, "tail": {strconv.Itoa(tailLines)}}
+	path := "/v" + version + "/containers/" + url.PathEscape(runtimeID) + "/logs?" + query.Encode()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://podman"+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create Podman request: %w", err)
+	}
+	response, err := a.client.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("%w: Podman request: %v", runtime.ErrUnavailable, err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxLogResponseBytes))
+	if err != nil {
+		return nil, fmt.Errorf("read Podman logs: %w", err)
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		base := runtime.ErrUnavailable
+		if response.StatusCode == http.StatusNotFound {
+			base = runtime.ErrNotFound
+		}
+		return nil, fmt.Errorf("%w: Podman API returned %s: %s", base, response.Status, strings.TrimSpace(string(body)))
+	}
+	return parseLogLines(demuxLogStream(body)), nil
+}
+
+// demuxLogStream unwraps Podman/Docker's multiplexed log frame format into
+// plain text lines. A malformed trailing frame (the response was truncated
+// by maxLogResponseBytes) is simply dropped rather than causing an error -
+// a cut-off tail of container logs is expected, not exceptional.
+func demuxLogStream(raw []byte) []string {
+	var lines []string
+	for len(raw) >= 8 {
+		length := binary.BigEndian.Uint32(raw[4:8])
+		raw = raw[8:]
+		if uint64(length) > uint64(len(raw)) {
+			length = uint32(len(raw))
+		}
+		chunk := raw[:length]
+		raw = raw[length:]
+		for _, line := range strings.Split(strings.TrimRight(string(chunk), "\n"), "\n") {
+			if line != "" {
+				lines = append(lines, line)
+			}
+		}
+	}
+	return lines
+}
+
+// parseLogLines splits Podman's leading RFC3339Nano timestamp (added by the
+// timestamps=true query parameter) off each line, when present. Podman
+// timestamps once per frame, not once per line, so a single write()
+// containing several newlines produces one timestamped line followed by
+// untimestamped continuation lines; those inherit the previous line's
+// timestamp rather than showing as blank.
+func parseLogLines(rawLines []string) []runtime.LogLine {
+	lines := make([]runtime.LogLine, 0, len(rawLines))
+	var lastObservedAt time.Time
+	for _, raw := range rawLines {
+		text := raw
+		observedAt := lastObservedAt
+		if space := strings.IndexByte(raw, ' '); space > 0 {
+			if parsed, err := time.Parse(time.RFC3339Nano, raw[:space]); err == nil {
+				observedAt = parsed
+				text = raw[space+1:]
+			}
+		}
+		lastObservedAt = observedAt
+		lines = append(lines, runtime.LogLine{Timestamp: observedAt, Text: text})
+	}
+	return lines
 }
 
 func (a *Adapter) CreateWorkspace(ctx context.Context, spec runtime.WorkspaceSpec) (runtime.WorkspaceHandle, error) {

@@ -251,6 +251,22 @@ type ResourceUsageRuntime interface {
 	WorkspaceResourceUsage(ctx context.Context, runtimeID string) (ResourceUsage, error)
 }
 
+// LogLine is one line of container output. Timestamp is zero when the
+// runtime did not provide one for that line.
+type LogLine struct {
+	Timestamp time.Time
+	Text      string
+}
+
+// LogsRuntime is optional so lifecycle-only test runtimes can be used
+// without pretending to provide log retrieval. Output is a bounded tail,
+// never an unbounded stream, matching the app's general stance against
+// unbounded browser-facing data (see the bounded ZIP/upload handling
+// elsewhere).
+type LogsRuntime interface {
+	WorkspaceLogs(ctx context.Context, runtimeID string, tailLines int) ([]LogLine, error)
+}
+
 type Runtime interface {
 	Name(ctx context.Context) (string, error)
 	Capabilities(ctx context.Context) (Capabilities, error)

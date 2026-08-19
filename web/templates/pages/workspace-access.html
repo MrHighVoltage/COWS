@@ -4,12 +4,13 @@
 <nav class="detail-breadcrumb" aria-label="Breadcrumb"><a href="/workspaces">Workspaces</a><span aria-hidden="true">/</span><span>{{ .ActiveWorkspace.Name }}</span></nav>
 {{ template "workspace-detail-header" (workspaceDetailHeader .) }}
 <div class="detail-grid">
-  <section id="workspace-access-shell" class="workspace-access-shell" data-access data-initial-tab="{{ .AccessTab }}" data-files-url="{{ .AccessFilesURL }}" aria-label="Workspace access methods">
+  <section id="workspace-access-shell" class="workspace-access-shell" data-access data-initial-tab="{{ .AccessTab }}" data-files-url="{{ .AccessFilesURL }}" data-logs-url="{{ .AccessLogsURL }}" aria-label="Workspace access methods">
     <div class="access-tabs">
       <nav class="access-tab-list" role="tablist" aria-label="Workspace access methods">
         {{ if .Access.Terminal }}<button class="access-tab" type="button" role="tab" data-access-tab="terminal" aria-controls="access-terminal-panel">Terminal</button>{{ end }}
         {{ if .Access.Desktop }}<button class="access-tab" type="button" role="tab" data-access-tab="desktop" aria-controls="access-desktop-panel">Desktop</button>{{ end }}
         {{ if .Access.Files }}<button class="access-tab" type="button" role="tab" data-access-tab="files" aria-controls="access-files-panel">Files</button>{{ end }}
+        {{ if .Access.Logs }}<button class="access-tab" type="button" role="tab" data-access-tab="logs" aria-controls="access-logs-panel">Logs</button>{{ end }}
       </nav>
       {{ if .Access.Terminal }}{{ template "workspace-terminal-controls" . }}{{ end }}
       {{ if .Access.Desktop }}{{ template "workspace-desktop-controls" . }}{{ end }}

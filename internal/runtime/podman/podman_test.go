@@ -3,6 +3,7 @@ package podman
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
@@ -383,6 +384,52 @@ func TestWorkspaceResourceUsageReadsNonStreamingStats(t *testing.T) {
 	}
 	if usage.CPUPercentMilli != 200000 || usage.MemoryBytes != 4096 || usage.PIDs != 7 || usage.ObservedAt.IsZero() {
 		t.Fatalf("unexpected resource usage: %+v", usage)
+	}
+}
+
+func TestWorkspaceLogsDemuxesFramedStdoutAndStderr(t *testing.T) {
+	frame := func(stream byte, text string) []byte {
+		header := make([]byte, 8)
+		header[0] = stream
+		binary.BigEndian.PutUint32(header[4:], uint32(len(text)))
+		return append(header, []byte(text)...)
+	}
+	var body []byte
+	body = append(body, frame(1, "2026-08-17T10:00:00.000000000Z booting up\n")...)
+	body = append(body, frame(2, "2026-08-17T10:00:01.500000000Z a warning on stderr\n")...)
+	body = append(body, frame(1, "2026-08-17T10:00:02.000000000Z line one\nline two\n")...)
+
+	adapter := &Adapter{client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path == "/version" {
+			return podmanResponse(http.StatusOK, `{"ApiVersion":"1.45"}`), nil
+		}
+		if request.URL.Path != "/v1.45/containers/abcdef0123456789/logs" {
+			t.Fatalf("unexpected logs request path: %s", request.URL.String())
+		}
+		if request.URL.Query().Get("tail") != "50" || request.URL.Query().Get("timestamps") != "true" {
+			t.Fatalf("unexpected logs query: %s", request.URL.RawQuery)
+		}
+		return podmanResponse(http.StatusOK, string(body)), nil
+	})}}
+
+	lines, err := adapter.WorkspaceLogs(context.Background(), "abcdef0123456789", 50)
+	if err != nil {
+		t.Fatalf("workspace logs: %v", err)
+	}
+	want := []string{"booting up", "a warning on stderr", "line one", "line two"}
+	if len(lines) != len(want) {
+		t.Fatalf("got %d lines, want %d: %+v", len(lines), len(want), lines)
+	}
+	for index, line := range lines {
+		if line.Text != want[index] {
+			t.Fatalf("line %d text = %q, want %q", index, line.Text, want[index])
+		}
+		if line.Timestamp.IsZero() {
+			t.Fatalf("line %d timestamp should be parsed, got zero", index)
+		}
+	}
+	if !lines[0].Timestamp.Before(lines[1].Timestamp) {
+		t.Fatalf("timestamps should be in order: %v then %v", lines[0].Timestamp, lines[1].Timestamp)
 	}
 }
 

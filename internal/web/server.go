@@ -171,6 +171,7 @@ type templateFormData struct {
 	TerminalAccess         bool
 	DesktopAccess          bool
 	FilesAccess            bool
+	LogsAccess             bool
 	UserRole               bool
 	AdministratorRole      bool
 	GroupAccessMode        string
@@ -235,6 +236,9 @@ type pageData struct {
 	FileListing                 *files.Listing
 	FileMounts                  []workspace.FileMount
 	FileError                   string
+	AccessLogsURL               string
+	LogLines                    []runtime.LogLine
+	LogError                    string
 	Groups                      []domain.Group
 	UserGroupIDs                map[string][]string
 	UserGroups                  map[string][]domain.Group
@@ -303,6 +307,7 @@ type workspaceAccess struct {
 	Terminal bool
 	Desktop  bool
 	Files    bool
+	Logs     bool
 }
 
 // userRowData is the "." context for the shared "admin-user-row" template
@@ -532,6 +537,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /workspaces/{id}/terminal/ws", s.workspaceTerminalWebSocket)
 	mux.HandleFunc("GET /workspaces/{id}/access", s.workspaceAccessPage)
 	mux.HandleFunc("GET /workspaces/{id}/access/files", s.workspaceAccessFilesFragment)
+	mux.HandleFunc("GET /workspaces/{id}/access/logs", s.workspaceAccessLogsFragment)
 	mux.HandleFunc("GET /workspaces/{id}/desktop", s.workspaceDesktopPage)
 	mux.HandleFunc("GET /workspaces/{id}/desktop/credentials", s.workspaceDesktopCredentials)
 	mux.HandleFunc("GET /workspaces/{id}/desktop/ws", s.workspaceDesktopWebSocket)
@@ -923,6 +929,8 @@ func (s *Server) workspacePageData(ctx context.Context, user *domain.User) (page
 				access.Desktop = true
 			case domain.AccessFiles:
 				access.Files = true
+			case domain.AccessLogs:
+				access.Logs = true
 			}
 		}
 		data.WorkspaceAccess[value.ID] = access
@@ -1163,6 +1171,8 @@ func (s *Server) renderWorkspaceRow(w http.ResponseWriter, r *http.Request, user
 				access.Desktop = true
 			case domain.AccessFiles:
 				access.Files = true
+			case domain.AccessLogs:
+				access.Logs = true
 			}
 		}
 	}
@@ -1208,6 +1218,8 @@ func (s *Server) renderWorkspaceDetailHeader(w http.ResponseWriter, r *http.Requ
 				access.Desktop = true
 			case domain.AccessFiles:
 				access.Files = true
+			case domain.AccessLogs:
+				access.Logs = true
 			}
 		}
 	}
@@ -1320,10 +1332,12 @@ func (s *Server) workspaceAccessPageData(ctx context.Context, user *domain.User,
 			access.Desktop = true
 		case domain.AccessFiles:
 			access.Files = true
+		case domain.AccessLogs:
+			access.Logs = true
 		}
 	}
 	tab := requestedTab
-	if (tab == "terminal" && !access.Terminal) || (tab == "desktop" && !access.Desktop) || (tab == "files" && !access.Files) || (tab != "terminal" && tab != "desktop" && tab != "files") {
+	if (tab == "terminal" && !access.Terminal) || (tab == "desktop" && !access.Desktop) || (tab == "files" && !access.Files) || (tab == "logs" && !access.Logs) || (tab != "terminal" && tab != "desktop" && tab != "files" && tab != "logs") {
 		tab = firstAccessTab(access)
 	}
 	if tab == "" {
@@ -1335,6 +1349,7 @@ func (s *Server) workspaceAccessPageData(ctx context.Context, user *domain.User,
 		AccessTab:          tab,
 		Access:             access,
 		AccessFilesURL:     "/workspaces/" + workspaceID + "/access/files",
+		AccessLogsURL:      "/workspaces/" + workspaceID + "/access/logs",
 	}, nil
 }
 
@@ -1347,6 +1362,9 @@ func firstAccessTab(access workspaceAccess) string {
 	}
 	if access.Files {
 		return "files"
+	}
+	if access.Logs {
+		return "logs"
 	}
 	return ""
 }
@@ -1370,6 +1388,57 @@ func (s *Server) workspaceAccessFilesFragment(w http.ResponseWriter, r *http.Req
 		return
 	}
 	s.render(w, http.StatusOK, "workspace-files-panel", pageData{User: user, CSRFToken: s.ensureCSRF(w, r), ActiveWorkspace: &domain.Workspace{ID: workspaceID}, FileListing: &listing, FileMounts: mounts})
+}
+
+// workspaceAccessLogsFragment answers the Logs tab's lazy-load fetch (and
+// its own Refresh button) with a rendered fragment of the container's own
+// stdout/stderr - a bounded tail, not a live stream. Access is gated the
+// same way Files is: the workspace must belong to the requester (or the
+// requester must be an administrator, via GetWorkspace), and the template
+// must have Logs enabled as an access method.
+func (s *Server) workspaceAccessLogsFragment(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := r.PathValue("id")
+	value, err := s.workspace.GetWorkspace(r.Context(), user.ID, workspaceID)
+	if errors.Is(err, repository.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, "workspace is not available", http.StatusForbidden)
+		return
+	}
+	methods, err := s.workspace.WorkspaceAccessMethods(r.Context(), user.ID, workspaceID)
+	logsEnabled := false
+	for _, method := range methods {
+		if method == domain.AccessLogs {
+			logsEnabled = true
+			break
+		}
+	}
+	if err != nil || !logsEnabled {
+		http.Error(w, "log access is not enabled for this workspace", http.StatusForbidden)
+		return
+	}
+	data := pageData{AccessLogsURL: "/workspaces/" + workspaceID + "/access/logs"}
+	logsRuntime, runtimeOK := s.runtime.(runtime.LogsRuntime)
+	switch {
+	case !runtimeOK:
+		data.LogError = "Log viewing is not supported by the configured runtime."
+	case value.RuntimeID == "":
+		data.LogError = "This workspace has no container yet."
+	default:
+		lines, logsErr := logsRuntime.WorkspaceLogs(r.Context(), value.RuntimeID, 200)
+		if logsErr != nil {
+			data.LogError = "The container logs could not be read."
+		} else {
+			data.LogLines = lines
+		}
+	}
+	s.render(w, http.StatusOK, "workspace-logs-panel", data)
 }
 
 type terminalResizeMessage struct {
@@ -3211,6 +3280,8 @@ func (s *Server) runtimeWorkspaceViews(ctx context.Context, actorID string, obse
 					view.Access.Desktop = true
 				case domain.AccessFiles:
 					view.Access.Files = true
+				case domain.AccessLogs:
+					view.Access.Logs = true
 				}
 			}
 		}
@@ -3252,6 +3323,8 @@ func (s *Server) parseTemplateForm(r *http.Request) (templateFormData, workspace
 			form.DesktopAccess = true
 		case domain.AccessFiles:
 			form.FilesAccess = true
+		case domain.AccessLogs:
+			form.LogsAccess = true
 		}
 	}
 	for _, role := range r.Form["allowed_roles"] {
@@ -3302,6 +3375,9 @@ func (s *Server) parseTemplateForm(r *http.Request) (templateFormData, workspace
 	}
 	if form.FilesAccess {
 		methods = append(methods, domain.AccessFiles)
+	}
+	if form.LogsAccess {
+		methods = append(methods, domain.AccessLogs)
 	}
 	roles := make([]domain.Role, 0, 2)
 	if form.UserRole {
@@ -3712,6 +3788,8 @@ func templateFormFromDomain(template domain.WorkspaceTemplate) templateFormData 
 			form.DesktopAccess = true
 		case domain.AccessFiles:
 			form.FilesAccess = true
+		case domain.AccessLogs:
+			form.LogsAccess = true
 		}
 	}
 	for _, role := range template.AllowedRoles {

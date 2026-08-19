@@ -43,6 +43,12 @@ if (shell) {
           if (!response.ok) throw new Error("file listing request failed");
         }
         window.CowsFiles.init(target);
+      } else if (tab === "logs") {
+        const target = shell.querySelector("[data-access-logs]");
+        const response = await fetch(shell.dataset.logsUrl, { credentials: "same-origin", headers: { "Accept": "text/html" } });
+        target.innerHTML = await response.text();
+        if (window.htmx) window.htmx.process(target);
+        if (!response.ok) throw new Error("log request failed");
       }
       loaded.add(tab);
     } catch (error) {
