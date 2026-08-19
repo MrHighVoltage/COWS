@@ -15,15 +15,15 @@
     <label for="image-digest">Image digest <span class="muted">optional</span></label>
     <input id="image-digest" name="image_digest" type="text" value="{{ .Template.ImageDigest }}" placeholder="sha256:...">
 
-    <fieldset>
+    <fieldset x-data="{ resourcesConfigurable: {{ if .Template.ResourcesConfigurable }}true{{ else }}false{{ end }} }">
       <legend>CPU and memory resources</legend>
       <div class="form-grid">
         <div><label for="default-cpu">Default CPU (mCPU)</label><input id="default-cpu" name="default_cpu_millis" type="number" min="1" max="1000000" value="{{ .Template.DefaultCPUMillis }}" required></div>
-        <div><label for="max-cpu">Maximum CPU (mCPU)</label><input id="max-cpu" name="max_cpu_millis" type="number" min="1" max="1000000" value="{{ .Template.MaxCPUMillis }}" required></div>
+        <div><label for="max-cpu">Maximum CPU (mCPU)</label><input id="max-cpu" name="max_cpu_millis" type="number" min="1" max="1000000" value="{{ .Template.MaxCPUMillis }}" :readonly="!resourcesConfigurable" :class="{ 'is-inert': !resourcesConfigurable }" required></div>
         <div><label for="default-memory">Default memory (MiB)</label><input id="default-memory" name="default_memory_mib" type="number" min="1" value="{{ .Template.DefaultMemoryMiB }}" required></div>
-        <div><label for="max-memory">Maximum memory (MiB)</label><input id="max-memory" name="max_memory_mib" type="number" min="1" value="{{ .Template.MaxMemoryMiB }}" required></div>
+        <div><label for="max-memory">Maximum memory (MiB)</label><input id="max-memory" name="max_memory_mib" type="number" min="1" value="{{ .Template.MaxMemoryMiB }}" :readonly="!resourcesConfigurable" :class="{ 'is-inert': !resourcesConfigurable }" required></div>
       </div>
-      <label class="check-row"><input type="checkbox" name="resources_configurable"{{ if .Template.ResourcesConfigurable }} checked{{ end }}> Allow users to choose CPU and memory between the default and maximum</label>
+      <label class="check-row"><input type="checkbox" name="resources_configurable" x-model="resourcesConfigurable"> Allow users to choose CPU and memory between the default and maximum</label>
       <p class="muted">When disabled, every workspace uses the default values. Storage is measured after creation and is not allocated per template or workspace.</p>
     </fieldset>
 

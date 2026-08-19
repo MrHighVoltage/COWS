@@ -24,7 +24,7 @@
   <div class="table-scroll"><table><thead><tr><th>Workspace</th><th>State</th><th>Allocated</th><th>Consumed</th></tr></thead><tbody>
   {{ range .Workspaces }}<tr>
     <td><strong>{{ .Workspace.Name }}</strong><br><span class="muted">{{ .Workspace.ID }}</span></td>
-    <td>{{ template "state-stamp" .Workspace.ObservedState }}</td>
+    <td>{{ template "status-dot-view" (stateStatusDot .Workspace.ObservedState) }}</td>
     <td>{{ .Workspace.AllocatedCPUMillis }} mCPU / {{ mib .Workspace.AllocatedMemoryBytes }} MiB</td>
     <td>{{ if .Known }}{{ cpuPercent .Usage.CPUPercentMilli }} / {{ mib .Usage.MemoryBytes }} MiB / {{ .Usage.PIDs }} PIDs{{ else }}<span class="muted">Not available</span>{{ end }}</td>
   </tr>{{ else }}<tr><td colspan="4" class="muted">No workspaces found.</td></tr>{{ end }}

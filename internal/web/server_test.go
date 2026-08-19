@@ -215,7 +215,7 @@ func TestWorkspaceActionHTMXRequestSwapsRowInPlace(t *testing.T) {
 	if !strings.Contains(stopBody, `id="workspace-row-`+value.ID+`"`) {
 		t.Fatalf("stop response missing the row, body = %q", stopBody)
 	}
-	if !strings.Contains(stopBody, "status-neutral") {
+	if !strings.Contains(stopBody, "status-dot-neutral") {
 		t.Fatalf("stop response should show the stopped state stamp, body = %q", stopBody)
 	}
 
@@ -342,7 +342,7 @@ func TestWorkspaceActionHTMXDetailContextSwapsHeaderInPlace(t *testing.T) {
 	if !strings.Contains(stopBody, `id="workspace-detail-header"`) {
 		t.Fatalf("stop response missing the header, body = %q", stopBody)
 	}
-	if !strings.Contains(stopBody, "status-neutral") {
+	if !strings.Contains(stopBody, "status-dot-neutral") {
 		t.Fatalf("stop response should show the stopped state stamp, body = %q", stopBody)
 	}
 	if strings.Contains(stopBody, ">Stop<") {

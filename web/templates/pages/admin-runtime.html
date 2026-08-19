@@ -13,7 +13,7 @@
 </section>
 {{ else if .Inspection }}
 <section class="panel" aria-labelledby="runtime-summary-title">
-  <div class="panel-heading"><div><p class="eyebrow">Connection</p><h2 id="runtime-summary-title">{{ .Inspection.RuntimeName }}</h2></div><span class="status-stamp status-ok">Connected</span></div>
+  <div class="panel-heading"><div><p class="eyebrow">Connection</p><h2 id="runtime-summary-title">{{ .Inspection.RuntimeName }}</h2></div>{{ template "status-dot-view" (statusDot "Connected" "ok") }}</div>
   <div class="runtime-facts">
     <div><span class="status-label">CPU limits</span><strong>{{ if .Inspection.Capabilities.SupportsCPUResourceLimits }}Supported{{ else }}Unavailable{{ end }}</strong></div>
     <div><span class="status-label">Memory limits</span><strong>{{ if .Inspection.Capabilities.SupportsMemoryResourceLimits }}Supported{{ else }}Unavailable{{ end }}</strong></div>
@@ -27,28 +27,33 @@
 <section class="panel table-panel" aria-labelledby="managed-title">
   <h2 id="managed-title">Managed containers</h2>
   <div class="table-scroll"><table class="runtime-table"><thead><tr><th>Workspace</th><th>Owner</th><th>Template</th><th>State</th><th>Observed</th><th class="actions-column">Access and controls</th></tr></thead><tbody>
-  {{ range .RuntimeWorkspaces }}<tr>
-    <td><strong>{{ .WorkspaceID }}</strong>{{ if not .Managed }}<span class="status-stamp status-warning">Orphan</span>{{ else if not .RuntimePresent }}<span class="status-stamp status-warning">Runtime missing</span>{{ end }}</td>
-    <td>{{ if .Owner }}{{ .Owner }}{{ else }}<span class="muted">Unknown</span>{{ end }}</td>
-    <td>{{ if .Template }}{{ .Template }}{{ else }}<span class="muted">Unknown</span>{{ end }}</td>
-    <td>{{ template "state-stamp" .Observed.State }}</td><td>{{ observedTime .Observed.ObservedAt }}</td>
-    <td class="actions-column">
-      {{ if .Managed }}
-      <div class="table-actions">
-        {{ if eq .Observed.State "running" }}
-          <form method="post" action="/workspaces/{{ .WorkspaceID }}/stop"><input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}"><input type="hidden" name="return_to" value="/admin/runtime"><button class="table-action state-action" type="submit">Stop</button></form>
-        {{ else }}
-          <form method="post" action="/workspaces/{{ .WorkspaceID }}/start"><input type="hidden" name="csrf_token" value="{{ $.CSRFToken }}"><input type="hidden" name="return_to" value="/admin/runtime"><button class="table-action state-action" type="submit">Start</button></form>
-        {{ end }}
-        {{ if and .RuntimePresent .Access.Terminal }}<a class="table-action access-action button-link" href="{{ accessURL .WorkspaceID "terminal" }}">Terminal</a>{{ end }}
-        {{ if and .RuntimePresent .Access.Desktop }}<a class="table-action access-action button-link" href="{{ accessURL .WorkspaceID "desktop" }}">Desktop</a>{{ end }}
-        {{ if and .RuntimePresent .Access.Files }}<a class="table-action access-action button-link" href="{{ accessURL .WorkspaceID "files" }}">Files</a>{{ end }}
-      </div>
-      {{ else }}<span class="muted">No matching COWS record</span>{{ end }}
-    </td>
-  </tr>{{ else }}<tr><td colspan="6" class="muted">No managed containers were found.</td></tr>{{ end }}
+  {{ range .RuntimeWorkspaces }}{{ template "admin-runtime-row" . }}{{ else }}<tr><td colspan="6" class="muted">No managed containers were found.</td></tr>{{ end }}
   </tbody></table></div>
 </section>
 {{ end }}
 {{ template "base-end" . }}
+{{ end }}
+
+{{ define "admin-runtime-row" }}
+<tr id="admin-runtime-row-{{ .WorkspaceID }}">
+  <td><strong>{{ .WorkspaceID }}</strong>{{ if not .Managed }}{{ template "status-dot-view" (statusDot "Orphan" "warn") }}{{ else if not .RuntimePresent }}{{ template "status-dot-view" (statusDot "Runtime missing" "warn") }}{{ end }}</td>
+  <td>{{ if .Owner }}{{ .Owner }}{{ else }}<span class="muted">Unknown</span>{{ end }}</td>
+  <td>{{ if .Template }}{{ .Template }}{{ else }}<span class="muted">Unknown</span>{{ end }}</td>
+  <td>{{ template "status-dot-view" (stateStatusDot .Observed.State) }}{{ if .RowError }}<p class="table-subtext status-disabled">{{ .RowError }}</p>{{ end }}</td>
+  <td>{{ observedTime .Observed.ObservedAt }}</td>
+  <td class="actions-column">
+    {{ if .Managed }}
+    <div class="table-actions">
+      {{ if eq .Observed.State "running" }}
+        <form method="post" action="/workspaces/{{ .WorkspaceID }}/stop" hx-post="/workspaces/{{ .WorkspaceID }}/stop" hx-target="#admin-runtime-row-{{ .WorkspaceID }}" hx-swap="outerHTML" hx-disabled-elt="find button"><input type="hidden" name="csrf_token" value="{{ .CSRFToken }}"><input type="hidden" name="return_to" value="/admin/runtime"><button class="table-action state-action" type="submit"><span class="action-label">Stop</span><span class="action-pending">Stopping&hellip;</span></button></form>
+      {{ else }}
+        <form method="post" action="/workspaces/{{ .WorkspaceID }}/start" hx-post="/workspaces/{{ .WorkspaceID }}/start" hx-target="#admin-runtime-row-{{ .WorkspaceID }}" hx-swap="outerHTML" hx-disabled-elt="find button"><input type="hidden" name="csrf_token" value="{{ .CSRFToken }}"><input type="hidden" name="return_to" value="/admin/runtime"><button class="table-action state-action" type="submit"><span class="action-label">Start</span><span class="action-pending">Starting&hellip;</span></button></form>
+      {{ end }}
+      {{ if and .RuntimePresent .Access.Terminal }}<a class="table-action access-action button-link" href="{{ accessURL .WorkspaceID "terminal" }}">Terminal</a>{{ end }}
+      {{ if and .RuntimePresent .Access.Desktop }}<a class="table-action access-action button-link" href="{{ accessURL .WorkspaceID "desktop" }}">Desktop</a>{{ end }}
+      {{ if and .RuntimePresent .Access.Files }}<a class="table-action access-action button-link" href="{{ accessURL .WorkspaceID "files" }}">Files</a>{{ end }}
+    </div>
+    {{ else }}<span class="muted">No matching COWS record</span>{{ end }}
+  </td>
+</tr>
 {{ end }}

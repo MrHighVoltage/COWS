@@ -354,6 +354,10 @@ type runtimeWorkspaceView struct {
 	Access         workspaceAccess
 	Managed        bool
 	RuntimePresent bool
+	CSRFToken      string
+	// RowError is a transient, request-scoped message shown only in the
+	// just-swapped-in row after a rejected dynamic row action.
+	RowError string
 }
 
 func New(db *sql.DB, authService *auth.Service, templateService *workspace.Service, quotaService *quota.Service, runtimeAdapter runtime.Runtime, options Options) (*Server, error) {
@@ -408,6 +412,24 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 		"relativeTime":          relativeTime,
 		"workspaceStatusBucket": workspaceStatusBucket,
 		"workspaceStatusCounts": workspaceStatusCounts,
+		"workspaceStatusDot":    workspaceStatusDot,
+		"stateStatusDot": func(state any) statusDotView {
+			if value, ok := state.(runtime.State); ok {
+				return stateStatusDot(string(value))
+			}
+			return stateStatusDot(fmt.Sprint(state))
+		},
+		"booleanStatusDot": booleanStatusDot,
+		// statusDot is a generic escape hatch for one-off status readouts
+		// that don't fit the dedicated helpers above (workspace lifecycle,
+		// a runtime state string, or a plain on/off pair): bucket is one of
+		// "ok", "warn", "bad", or "neutral".
+		"statusDot": func(label, bucket string) statusDotView {
+			return statusDotView{Label: label, Bucket: bucket}
+		},
+		"pulsingStatusDot": func(label, bucket string) statusDotView {
+			return statusDotView{Label: label, Bucket: bucket, Pulsing: true}
+		},
 		"volumeMounts": func(mounts []domain.TemplateMount) []domain.TemplateMount {
 			volumes := make([]domain.TemplateMount, 0, len(mounts))
 			for _, mount := range mounts {
@@ -538,6 +560,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /workspaces/{id}/access", s.workspaceAccessPage)
 	mux.HandleFunc("GET /workspaces/{id}/access/files", s.workspaceAccessFilesFragment)
 	mux.HandleFunc("GET /workspaces/{id}/access/logs", s.workspaceAccessLogsFragment)
+	mux.HandleFunc("GET /workspaces/{id}/access/header", s.workspaceAccessHeaderFragment)
+	mux.HandleFunc("GET /workspaces/{id}/access/sidebar", s.workspaceAccessSidebarFragment)
 	mux.HandleFunc("GET /workspaces/{id}/desktop", s.workspaceDesktopPage)
 	mux.HandleFunc("GET /workspaces/{id}/desktop/credentials", s.workspaceDesktopCredentials)
 	mux.HandleFunc("GET /workspaces/{id}/desktop/ws", s.workspaceDesktopWebSocket)
@@ -1118,11 +1142,10 @@ func (s *Server) workspaceAction(w http.ResponseWriter, r *http.Request, action 
 		case workspaceActionContextDetail:
 			s.renderWorkspaceDetailHeader(w, r, user, workspaceID, action, opErr)
 			return
+		case workspaceActionContextAdminRuntime:
+			s.renderAdminRuntimeRow(w, r, user, workspaceID, action, opErr)
+			return
 		}
-		// admin-runtime's start/stop forms are plain (no HX-Request header)
-		// and fall through to the full-page behavior below unchanged; this
-		// default case only exists so a future htmx conversion there
-		// doesn't silently fall into the wrong fragment shape.
 	}
 	if opErr != nil {
 		data, _ := s.workspacePageData(r.Context(), user)
@@ -1152,7 +1175,7 @@ func (s *Server) renderWorkspaceRow(w http.ResponseWriter, r *http.Request, user
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	value, err := s.workspace.GetWorkspace(r.Context(), user.ID, workspaceID)
+	value, err := s.workspace.GetWorkspaceWithUsage(r.Context(), user.ID, workspaceID)
 	if errors.Is(err, repository.ErrNotFound) {
 		w.WriteHeader(http.StatusOK)
 		return
@@ -1198,7 +1221,7 @@ func (s *Server) renderWorkspaceDetailHeader(w http.ResponseWriter, r *http.Requ
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	value, err := s.workspace.GetWorkspace(r.Context(), user.ID, workspaceID)
+	value, err := s.workspace.GetWorkspaceWithUsage(r.Context(), user.ID, workspaceID)
 	if errors.Is(err, repository.ErrNotFound) {
 		w.Header().Set("HX-Redirect", "/workspaces")
 		w.WriteHeader(http.StatusOK)
@@ -1315,7 +1338,7 @@ func (s *Server) workspaceAccessPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) workspaceAccessPageData(ctx context.Context, user *domain.User, workspaceID, requestedTab string) (pageData, error) {
-	value, err := s.workspace.GetWorkspace(ctx, user.ID, workspaceID)
+	value, err := s.workspace.GetWorkspaceWithUsage(ctx, user.ID, workspaceID)
 	if err != nil {
 		return pageData{}, err
 	}
@@ -1439,6 +1462,44 @@ func (s *Server) workspaceAccessLogsFragment(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	s.render(w, http.StatusOK, "workspace-logs-panel", data)
+}
+
+// workspaceAccessHeaderFragment answers the Detail page header's own
+// periodic poll (it re-fetches itself every 10s, same as
+// renderWorkspaceDetailHeader's action-triggered swap) so the status dot
+// reflects a state change from elsewhere (another tab, an administrator, a
+// timeout-triggered auto-stop) without the user reloading the page.
+func (s *Server) workspaceAccessHeaderFragment(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	s.renderWorkspaceDetailHeader(w, r, user, r.PathValue("id"), "", nil)
+}
+
+// workspaceAccessSidebarFragment answers the Detail page sidebar's own
+// periodic poll. The Resources card in particular is otherwise a one-time
+// snapshot from page load - live CPU/memory numbers would freeze at
+// whatever they were when the page was fetched (often 0% if the container
+// was idle at that instant) instead of tracking the workspace while the
+// page stays open.
+func (s *Server) workspaceAccessSidebarFragment(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireUser(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := r.PathValue("id")
+	value, err := s.workspace.GetWorkspaceWithUsage(r.Context(), user.ID, workspaceID)
+	if errors.Is(err, repository.ErrNotFound) {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to load workspace", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = s.templates.ExecuteTemplate(w, "workspace-detail-sidebar", value)
 }
 
 type terminalResizeMessage struct {
@@ -3016,9 +3077,47 @@ func (s *Server) adminRuntime(w http.ResponseWriter, r *http.Request) {
 		data.RuntimeError = "The configured container runtime is unavailable or returned invalid inspection data."
 	} else {
 		data.Inspection = &inspection
-		data.RuntimeWorkspaces = s.runtimeWorkspaceViews(r.Context(), user.ID, inspection.Workspaces)
+		csrfToken := data.CSRFToken
+		views := s.runtimeWorkspaceViews(r.Context(), user.ID, inspection.Workspaces)
+		for index := range views {
+			views[index].CSRFToken = csrfToken
+		}
+		data.RuntimeWorkspaces = views
 	}
 	s.render(w, status, "admin-runtime-page", data)
+}
+
+// renderAdminRuntimeRow answers a dynamic row action on /admin/runtime with
+// just the affected <tr>, mirroring the workspace list's row pattern. It
+// re-runs the same live runtime inspection the full page uses (this page
+// has no cheaper single-workspace path - unlike GetWorkspaceWithUsage, its
+// rows are reconciled against Podman's own managed-container list, not just
+// the stored record) and picks out the one matching row. A workspace no
+// longer present in that reconciled view (successful delete, or a
+// concurrent delete from another tab) renders as an empty response, which
+// removes the row entirely.
+func (s *Server) renderAdminRuntimeRow(w http.ResponseWriter, r *http.Request, user *domain.User, workspaceID, action string, opErr error) {
+	rowError := ""
+	if opErr != nil {
+		rowError = workspaceActionError(action, opErr)
+	}
+	inspection, err := runtime.Inspect(r.Context(), s.runtime)
+	if err != nil {
+		http.Error(w, "the container runtime is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	views := s.runtimeWorkspaceViews(r.Context(), user.ID, inspection.Workspaces)
+	for _, view := range views {
+		if view.WorkspaceID != workspaceID {
+			continue
+		}
+		view.CSRFToken = s.ensureCSRF(w, r)
+		view.RowError = rowError
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_ = s.templates.ExecuteTemplate(w, "admin-runtime-row", view)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Server) adminAudit(w http.ResponseWriter, r *http.Request) {
@@ -3592,6 +3691,61 @@ func workspaceStatusBucket(observedState string) string {
 	default:
 		return "stopped"
 	}
+}
+
+// statusDotView is the pill-and-dot status treatment (workspaces table,
+// detail header): a small colored dot next to a label, pulsing while a
+// lifecycle operation is actively in progress. This is deliberately
+// separate from the app's other signature status component, the bracketed
+// `.status-stamp` (`[ RUNNING ]`, used by admin/runtime and everywhere
+// else state is shown, see ARCHITECTURE.md) - these two pages adopt the
+// mockup's dot style specifically, the rest of the app keeps the bracket
+// convention.
+type statusDotView struct {
+	Label   string
+	Bucket  string
+	Pulsing bool
+}
+
+func workspaceStatusDot(value domain.Workspace) statusDotView {
+	if value.OperationStatus == "running" {
+		return statusDotView{Label: operationText(value.Operation) + "…", Bucket: "warn", Pulsing: true}
+	}
+	return stateStatusDot(value.ObservedState)
+}
+
+// stateStatusDot buckets a raw runtime/observed state string into the
+// status-dot component's color scheme, without the workspace-record-only
+// concept of an in-progress operation (workspaceStatusDot layers that on
+// top for pages backed by a stored workspace; admin/runtime and metrics
+// show live runtime.ObservedWorkspace state directly, including synthetic
+// values like "missing" that aren't in domain.Workspace's own vocabulary,
+// so they call this directly).
+func stateStatusDot(state string) statusDotView {
+	capitalized := state
+	if capitalized != "" {
+		capitalized = strings.ToUpper(capitalized[:1]) + capitalized[1:]
+	}
+	switch state {
+	case "running":
+		return statusDotView{Label: "Running", Bucket: "ok"}
+	case "created", "stopped":
+		return statusDotView{Label: capitalized, Bucket: "neutral"}
+	case "exited", "removed", "failed":
+		return statusDotView{Label: capitalized, Bucket: "bad"}
+	default:
+		return statusDotView{Label: capitalized, Bucket: "warn"}
+	}
+}
+
+// booleanStatusDot renders the status-dot component for simple two-state
+// concepts (enabled/disabled, present/missing, active/disabled) that don't
+// carry workspace lifecycle's richer semantics.
+func booleanStatusDot(on bool, onLabel, offLabel string) statusDotView {
+	if on {
+		return statusDotView{Label: onLabel, Bucket: "ok"}
+	}
+	return statusDotView{Label: offLabel, Bucket: "bad"}
 }
 
 func workspaceStatusCounts(workspaces []domain.Workspace) map[string]int {

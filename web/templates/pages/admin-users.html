@@ -34,20 +34,19 @@
   <td>{{ .Target.DisplayName }}</td>
   <td><span class="badge">{{ .Target.Role }}</span></td>
   <td>{{ range .Groups }}<span class="badge">{{ .Name }}</span> {{ else }}<span class="muted">None</span>{{ end }}</td>
-  <td>{{ if .RowError }}<p class="table-subtext status-disabled">{{ .RowError }}</p>{{ end }}{{ if .Target.Disabled }}<span class="status-value status-disabled">Disabled</span>{{ else }}<span class="status-value status-ok">Active</span>{{ end }}</td>
+  <td>{{ if .RowError }}<p class="table-subtext status-disabled">{{ .RowError }}</p>{{ end }}{{ template "status-dot-view" (booleanStatusDot (not .Target.Disabled) "Active" "Disabled") }}</td>
   <td><div class="table-actions">
     <a class="table-action button-link" href="/admin/users/{{ .Target.ID }}/edit">Edit user</a>
     {{ if ne .Target.ID .CurrentUserID }}
-    <form method="post" action="/admin/users/{{ .Target.ID }}/disabled" hx-post="/admin/users/{{ .Target.ID }}/disabled" hx-target="#admin-user-row-{{ .Target.ID }}" hx-swap="outerHTML" hx-disabled-elt="find button" hx-indicator="#admin-user-row-{{ .Target.ID }} .row-indicator" hx-confirm="{{ if .Target.Disabled }}Enable this user?{{ else }}Disabling this user immediately ends all sessions and stops all of their workspaces. Unsaved work may be lost. Continue?{{ end }}">
+    <form method="post" action="/admin/users/{{ .Target.ID }}/disabled" hx-post="/admin/users/{{ .Target.ID }}/disabled" hx-target="#admin-user-row-{{ .Target.ID }}" hx-swap="outerHTML" hx-disabled-elt="find button" hx-confirm="{{ if .Target.Disabled }}Enable this user?{{ else }}Disabling this user immediately ends all sessions and stops all of their workspaces. Unsaved work may be lost. Continue?{{ end }}">
       <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
       <input type="hidden" name="disabled" value="{{ if .Target.Disabled }}false{{ else }}true{{ end }}">
-      <button class="table-action" type="submit">{{ if .Target.Disabled }}Enable{{ else }}Disable{{ end }}</button>
+      <button class="table-action" type="submit">{{ if .Target.Disabled }}<span class="action-label">Enable</span><span class="action-pending">Enabling&hellip;</span>{{ else }}<span class="action-label">Disable</span><span class="action-pending">Disabling&hellip;</span>{{ end }}</button>
     </form>
-    {{ if .Target.Disabled }}<form method="post" action="/admin/users/{{ .Target.ID }}/delete" hx-post="/admin/users/{{ .Target.ID }}/delete" hx-target="#admin-user-row-{{ .Target.ID }}" hx-swap="outerHTML" hx-disabled-elt="find button" hx-indicator="#admin-user-row-{{ .Target.ID }} .row-indicator" hx-confirm="Delete this disabled user and all remaining workspaces? Managed directories will be archived and named volumes retained for administrator recovery. This cannot be undone.">
+    {{ if .Target.Disabled }}<form method="post" action="/admin/users/{{ .Target.ID }}/delete" hx-post="/admin/users/{{ .Target.ID }}/delete" hx-target="#admin-user-row-{{ .Target.ID }}" hx-swap="outerHTML" hx-disabled-elt="find button" hx-confirm="Delete this disabled user and all remaining workspaces? Managed directories will be archived and named volumes retained for administrator recovery. This cannot be undone.">
       <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
-      <button class="table-action danger-action" type="submit">Delete</button>
+      <button class="table-action danger-action" type="submit"><span class="action-label">Delete</span><span class="action-pending">Deleting&hellip;</span></button>
     </form>{{ end }}
-    <span class="row-indicator htmx-indicator" role="status">Working&hellip;</span>
     {{ else }}<span class="muted">Current account</span>{{ end }}
   </div></td>
 </tr>

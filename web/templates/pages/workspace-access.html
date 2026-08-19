@@ -19,40 +19,43 @@
       {{ if .Access.Terminal }}<div id="access-terminal-panel" class="access-panel" data-access-panel="terminal" role="tabpanel" aria-label="Terminal access" hidden>{{ template "workspace-terminal-panel" . }}</div>{{ end }}
       {{ if .Access.Desktop }}<div id="access-desktop-panel" class="access-panel" data-access-panel="desktop" role="tabpanel" aria-label="Desktop access" hidden>{{ template "workspace-desktop-panel" . }}</div>{{ end }}
       {{ if .Access.Files }}<div id="access-files-panel" class="access-panel" data-access-panel="files" role="tabpanel" aria-label="File manager access" hidden><div data-access-files>{{ if .FileListing }}{{ template "workspace-files-panel" . }}{{ else }}<p class="panel access-placeholder">Select the Files tab to load the approved workspace directories.</p>{{ end }}</div></div>{{ end }}
+      {{ if .Access.Logs }}<div id="access-logs-panel" class="access-panel" data-access-panel="logs" role="tabpanel" aria-label="Container logs" hidden><div data-access-logs>{{ if or .LogLines .LogError }}{{ template "workspace-logs-panel" . }}{{ else }}<p class="panel access-placeholder">Select the Logs tab to load recent container output.</p>{{ end }}</div></div>{{ end }}
     </div>
   </section>
-  <aside class="detail-sidebar">
-    {{ template "workspace-detail-resources-card" .ActiveWorkspace }}
-    {{ template "workspace-detail-timeout-card" .ActiveWorkspace }}
-    {{ template "workspace-detail-storage-card" .ActiveWorkspace }}
-  </aside>
+  {{ template "workspace-detail-sidebar" .ActiveWorkspace }}
 </div>
 <script type="module" src="/static/js/access.js"></script>
 {{ template "base-end" . }}
 {{ end }}
 
 {{ define "workspace-detail-header" }}
-<header class="detail-header" id="workspace-detail-header">
+<header class="detail-header" id="workspace-detail-header" hx-get="/workspaces/{{ .Workspace.ID }}/access/header" hx-trigger="every 10s" hx-target="#workspace-detail-header" hx-swap="outerHTML">
   <div class="detail-identity">
     <span class="workspace-badge workspace-badge-lg" style="--badge-hue:{{ templateHue .Workspace.TemplateID }}">{{ workspaceInitials .Workspace.Name }}</span>
     <div class="detail-identity-text">
-      <div class="detail-title-row"><h1 id="workspace-access-title">{{ .Workspace.Name }}</h1>{{ template "state-stamp" .Workspace.ObservedState }}</div>
+      <div class="detail-title-row"><h1 id="workspace-access-title">{{ .Workspace.Name }}</h1>{{ template "status-dot" .Workspace }}</div>
       <p class="detail-meta">{{ if .Workspace.TemplateName }}{{ .Workspace.TemplateName }}{{ else }}Unavailable{{ end }} &middot; created {{ relativeTime .Workspace.CreatedAt }} by {{ .OwnerName }}</p>
       {{ if .RowError }}<p class="table-subtext status-disabled">{{ .RowError }}</p>{{ end }}
     </div>
   </div>
   <div class="detail-actions" hx-select="unset">
-    <a class="primary-button button-link" href="#workspace-access-shell">Connect</a>
     {{ if eq .Workspace.ObservedState "running" }}
-    <form method="post" action="/workspaces/{{ .Workspace.ID }}/stop" hx-post="/workspaces/{{ .Workspace.ID }}/stop" hx-target="#workspace-detail-header" hx-swap="outerHTML" hx-disabled-elt="find button" hx-indicator="#workspace-detail-header .row-indicator"><input type="hidden" name="csrf_token" value="{{ .CSRFToken }}"><input type="hidden" name="context" value="detail"><button class="table-action state-action" type="submit">Stop</button></form>
-    <form method="post" action="/workspaces/{{ .Workspace.ID }}/restart" hx-post="/workspaces/{{ .Workspace.ID }}/restart" hx-target="#workspace-detail-header" hx-swap="outerHTML" hx-disabled-elt="find button" hx-indicator="#workspace-detail-header .row-indicator"><input type="hidden" name="csrf_token" value="{{ .CSRFToken }}"><input type="hidden" name="context" value="detail"><button class="table-action state-action" type="submit">Restart</button></form>
+    <form method="post" action="/workspaces/{{ .Workspace.ID }}/stop" hx-post="/workspaces/{{ .Workspace.ID }}/stop" hx-target="#workspace-detail-header" hx-swap="outerHTML" hx-disabled-elt="find button"><input type="hidden" name="csrf_token" value="{{ .CSRFToken }}"><input type="hidden" name="context" value="detail"><button class="table-action state-action" type="submit"><span class="action-label">Stop</span><span class="action-pending">Stopping&hellip;</span></button></form>
+    <form method="post" action="/workspaces/{{ .Workspace.ID }}/restart" hx-post="/workspaces/{{ .Workspace.ID }}/restart" hx-target="#workspace-detail-header" hx-swap="outerHTML" hx-disabled-elt="find button"><input type="hidden" name="csrf_token" value="{{ .CSRFToken }}"><input type="hidden" name="context" value="detail"><button class="table-action state-action" type="submit"><span class="action-label">Restart</span><span class="action-pending">Restarting&hellip;</span></button></form>
     {{ else }}
-    <form method="post" action="/workspaces/{{ .Workspace.ID }}/start" hx-post="/workspaces/{{ .Workspace.ID }}/start" hx-target="#workspace-detail-header" hx-swap="outerHTML" hx-disabled-elt="find button" hx-indicator="#workspace-detail-header .row-indicator"><input type="hidden" name="csrf_token" value="{{ .CSRFToken }}"><input type="hidden" name="context" value="detail"><button class="table-action state-action" type="submit">Start</button></form>
+    <form method="post" action="/workspaces/{{ .Workspace.ID }}/start" hx-post="/workspaces/{{ .Workspace.ID }}/start" hx-target="#workspace-detail-header" hx-swap="outerHTML" hx-disabled-elt="find button"><input type="hidden" name="csrf_token" value="{{ .CSRFToken }}"><input type="hidden" name="context" value="detail"><button class="table-action state-action" type="submit"><span class="action-label">Start</span><span class="action-pending">Starting&hellip;</span></button></form>
     {{ end }}
-    <form method="post" action="/workspaces/{{ .Workspace.ID }}/delete" hx-post="/workspaces/{{ .Workspace.ID }}/delete" hx-target="#workspace-detail-header" hx-swap="outerHTML" hx-disabled-elt="find button" hx-indicator="#workspace-detail-header .row-indicator" hx-confirm="Delete this workspace and its container? Managed directory files will be moved to the COWS archive, and named volumes will be retained for administrator recovery. The workspace record and container will be removed. This cannot be undone."><input type="hidden" name="csrf_token" value="{{ .CSRFToken }}"><input type="hidden" name="context" value="detail"><button class="table-action danger-action" type="submit">Delete</button></form>
-    <span class="row-indicator htmx-indicator" role="status">Working&hellip;</span>
+    <form method="post" action="/workspaces/{{ .Workspace.ID }}/delete" hx-post="/workspaces/{{ .Workspace.ID }}/delete" hx-target="#workspace-detail-header" hx-swap="outerHTML" hx-disabled-elt="find button" hx-confirm="Delete this workspace and its container? Managed directory files will be moved to the COWS archive, and named volumes will be retained for administrator recovery. The workspace record and container will be removed. This cannot be undone."><input type="hidden" name="csrf_token" value="{{ .CSRFToken }}"><input type="hidden" name="context" value="detail"><button class="table-action danger-action" type="submit"><span class="action-label">Delete</span><span class="action-pending">Deleting&hellip;</span></button></form>
   </div>
 </header>
+{{ end }}
+
+{{ define "workspace-detail-sidebar" }}
+<aside class="detail-sidebar" id="detail-sidebar" hx-get="/workspaces/{{ .ID }}/access/sidebar" hx-trigger="every 10s" hx-target="#detail-sidebar" hx-swap="outerHTML">
+  {{ template "workspace-detail-resources-card" . }}
+  {{ template "workspace-detail-timeout-card" . }}
+  {{ template "workspace-detail-storage-card" . }}
+</aside>
 {{ end }}
 
 {{ define "workspace-detail-resources-card" }}
@@ -66,8 +69,7 @@
     {{ if and (eq .ObservedState "running") .ResourceUsageKnown }}<progress class="detail-resource-progress" value="{{ .MemoryUsageBytes }}" max="{{ .AllocatedMemoryBytes }}" aria-label="Memory in use"></progress>{{ end }}
   </div>
   <div class="detail-resource-row">
-    <div class="detail-resource-label"><span>Storage</span><span class="table-subtext">{{ if .StorageUsageKnown }}{{ fileSize .StorageUsageBytes }}{{ else }}unavailable{{ end }}</span></div>
-    {{ if .StorageUsageKnown }}<progress class="detail-resource-progress" value="{{ .StorageUsageBytes }}" max="{{ .AllocatedStorageBytes }}" aria-label="Storage in use"></progress>{{ end }}
+    <div class="detail-resource-label"><span>Storage</span><span class="table-subtext">{{ if .StorageUsageKnown }}{{ fileSize .StorageUsageBytes }} used{{ else }}unavailable{{ end }}</span></div>
   </div>
 </section>
 {{ end }}
