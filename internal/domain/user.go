@@ -72,10 +72,11 @@ const (
 	AccessTerminal AccessMethod = "terminal"
 	AccessDesktop  AccessMethod = "desktop"
 	AccessFiles    AccessMethod = "files"
+	AccessLogs     AccessMethod = "logs"
 )
 
 func (m AccessMethod) Valid() bool {
-	return m == AccessTerminal || m == AccessDesktop || m == AccessFiles
+	return m == AccessTerminal || m == AccessDesktop || m == AccessFiles || m == AccessLogs
 }
 
 type WorkspaceTemplate struct {

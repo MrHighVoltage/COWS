@@ -1,0 +1,11 @@
+{{ define "workspace-logs-panel" }}
+<div class="logs-panel">
+  <div class="logs-toolbar">
+    <span class="table-subtext">Most recent container output &middot; refreshed on demand, not live.</span>
+    <button class="secondary-button" type="button" hx-get="{{ .AccessLogsURL }}" hx-target="closest .logs-panel" hx-swap="outerHTML"><span class="action-label">Refresh</span><span class="action-pending">Refreshing&hellip;</span></button>
+  </div>
+  {{ if .LogError }}<p class="alert alert-error" role="alert">{{ .LogError }}</p>
+  {{ else if not .LogLines }}<p class="panel access-placeholder">No log output yet.</p>
+  {{ else }}<div class="logs-output">{{ range .LogLines }}<div class="logs-line">{{ if not .Timestamp.IsZero }}<span class="logs-timestamp">{{ .Timestamp.Format "15:04:05" }}</span>{{ end }}<span class="logs-text">{{ .Text }}</span></div>{{ end }}</div>{{ end }}
+</div>
+{{ end }}
