@@ -414,3 +414,79 @@ func TestReconcilePersistsManualRuntimeStop(t *testing.T) {
 		t.Fatal("missing runtime was incorrectly marked deleted")
 	}
 }
+
+type failingDeleteStore struct {
+	repository.Store
+	failRetainingStorage bool
+}
+
+func (s *failingDeleteStore) DeleteWorkspaceRetainingStorage(ctx context.Context, id string, volumes []domain.RetainedWorkspaceVolume, directory *domain.RetainedWorkspaceDirectory) error {
+	if s.failRetainingStorage {
+		return errors.New("injected failure")
+	}
+	return s.Store.DeleteWorkspaceRetainingStorage(ctx, id, volumes, directory)
+}
+
+func TestDeleteWorkspaceSurvivesRetainingStorageFailureAndSelfHealsOnRetry(t *testing.T) {
+	ctx := context.Background()
+	_, authService, adminID, sqliteStore := testService(t)
+	failing := &failingDeleteStore{Store: sqliteStore}
+	mountRoot, archiveRoot := t.TempDir(), t.TempDir()
+	fake := &lifecycleRuntime{}
+	service := NewWithRuntimeAndMountRoots(failing, fake, mountRoot, archiveRoot)
+
+	template, err := service.CreateTemplate(ctx, adminID, directoryTemplateInput("Delete Survival Template", "designs"))
+	if err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+	owner := newReattachUser(t, authService, adminID, "delete-survival-owner")
+	value, err := service.CreateWorkspace(ctx, owner.ID, CreateWorkspaceInput{Name: "delete survival workspace", TemplateID: template.ID})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := sqliteStore.UpdateWorkspaceObservedState(ctx, value.ID, "stopped", "runtime-delete-survival", "", "", value.CreatedAt, value.CreatedAt); err != nil {
+		t.Fatalf("set stopped state: %v", err)
+	}
+	mountDir := filepath.Join(mountRoot, "cows-"+value.ID, "designs")
+	if err := os.WriteFile(filepath.Join(mountDir, "notes.txt"), []byte("data that must survive"), 0o600); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+
+	failing.failRetainingStorage = true
+	if err := service.DeleteWorkspace(ctx, owner.ID, value.ID); err == nil {
+		t.Fatalf("expected DeleteWorkspace to fail when DeleteWorkspaceRetainingStorage is injected to fail")
+	}
+
+	// The workspace row must still exist (nothing rolled it back), and the
+	// archived file must be sitting at the archive path (archiveMountDirectories
+	// already ran and is not undone), not lost.
+	if _, err := service.GetWorkspace(ctx, owner.ID, value.ID); err != nil {
+		t.Fatalf("workspace row should still exist after the failed delete for a retry: %v", err)
+	}
+	archivedFile := filepath.Join(archiveRoot, "cows-"+value.ID, "designs", "notes.txt")
+	content, err := os.ReadFile(archivedFile)
+	if err != nil {
+		t.Fatalf("archived file should exist after the failed delete: %v", err)
+	}
+	if string(content) != "data that must survive" {
+		t.Fatalf("archived content = %q, want original content", content)
+	}
+
+	// Retrying must succeed and produce the expected tombstone: proves the
+	// partial failure self-heals rather than wedging the workspace.
+	failing.failRetainingStorage = false
+	if err := service.DeleteWorkspace(ctx, owner.ID, value.ID); err != nil {
+		t.Fatalf("retry delete: %v", err)
+	}
+	if _, err := service.GetWorkspace(ctx, owner.ID, value.ID); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("workspace should be gone after the successful retry, err = %v", err)
+	}
+	directories, err := sqliteStore.ListRetainedWorkspaceDirectoriesForOwner(ctx, owner.ID)
+	if err != nil || len(directories) != 1 {
+		t.Fatalf("retained directories after successful retry = %d, err=%v, want 1", len(directories), err)
+	}
+	restoredContent, err := os.ReadFile(filepath.Join(directories[0].ArchivePath, "designs", "notes.txt"))
+	if err != nil || string(restoredContent) != "data that must survive" {
+		t.Fatalf("final archived content = %q, err=%v, want original content", restoredContent, err)
+	}
+}
