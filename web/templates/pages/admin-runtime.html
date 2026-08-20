@@ -28,7 +28,7 @@
 </section>
 <section class="panel table-panel" aria-labelledby="managed-title">
   <h2 id="managed-title">Managed containers</h2>
-  <div class="table-scroll"><table class="runtime-table"><thead><tr><th>Workspace</th><th>Owner</th><th>Template</th><th>State</th><th>Allocated</th><th>In use</th><th>Observed</th><th class="actions-column">Access and controls</th></tr></thead><tbody>
+  <div class="table-scroll"><table class="runtime-table"><thead><tr><th>Workspace</th><th>Owner</th><th>Template</th><th>State</th><th>Allocated</th><th>In use</th><th>Observed</th><th class="actions-column">Controls</th></tr></thead><tbody>
   {{ range .RuntimeWorkspaces }}{{ template "admin-runtime-row" . }}{{ else }}<tr><td colspan="8" class="muted">No managed containers were found.</td></tr>{{ end }}
   </tbody></table></div>
 </section>
@@ -77,7 +77,10 @@
 
 {{ define "admin-runtime-row" }}
 <tr id="admin-runtime-row-{{ .WorkspaceID }}">
-  <td><strong>{{ .WorkspaceID }}</strong>{{ if not .Managed }}{{ template "status-dot-view" (statusDot "Orphan" "warn") }}{{ else if not .RuntimePresent }}{{ template "status-dot-view" (statusDot "Runtime missing" "warn") }}{{ end }}</td>
+  <td class="runtime-workspace-cell">
+    {{ if .Managed }}<a class="runtime-workspace-link" href="/workspaces/{{ .WorkspaceID }}/access"><strong>{{ if .Name }}{{ .Name }}{{ else }}Unnamed workspace{{ end }}</strong><code>{{ .WorkspaceID }}</code></a>{{ else }}<code>{{ .WorkspaceID }}</code>{{ end }}
+    {{ if not .Managed }}{{ template "status-dot-view" (statusDot "Orphan" "warn") }}{{ else if not .RuntimePresent }}{{ template "status-dot-view" (statusDot "Runtime missing" "warn") }}{{ end }}
+  </td>
   <td>{{ if .Owner }}{{ .Owner }}{{ else }}<span class="muted">Unknown</span>{{ end }}</td>
   <td>{{ if .Template }}{{ .Template }}{{ else }}<span class="muted">Unknown</span>{{ end }}</td>
   <td>{{ template "status-dot-view" (stateStatusDot .Observed.State) }}{{ if .RowError }}<p class="table-subtext status-disabled">{{ .RowError }}</p>{{ end }}</td>
@@ -92,9 +95,6 @@
       {{ else }}
         <form method="post" action="/workspaces/{{ .WorkspaceID }}/start" hx-post="/workspaces/{{ .WorkspaceID }}/start" hx-target="#admin-runtime-row-{{ .WorkspaceID }}" hx-swap="outerHTML" hx-disabled-elt="find button"><input type="hidden" name="csrf_token" value="{{ .CSRFToken }}"><input type="hidden" name="return_to" value="/admin/runtime"><button class="table-action state-action" type="submit"><span class="action-label">Start</span><span class="action-pending">Starting&hellip;</span></button></form>
       {{ end }}
-      {{ if and .RuntimePresent .Access.Terminal }}<a class="table-action access-action button-link" href="{{ accessURL .WorkspaceID "terminal" }}">Terminal</a>{{ end }}
-      {{ if and .RuntimePresent .Access.Desktop }}<a class="table-action access-action button-link" href="{{ accessURL .WorkspaceID "desktop" }}">Desktop</a>{{ end }}
-      {{ if and .RuntimePresent .Access.Files }}<a class="table-action access-action button-link" href="{{ accessURL .WorkspaceID "files" }}">Files</a>{{ end }}
     </div>
     {{ else }}<span class="muted">No matching COWS record</span>{{ end }}
   </td>
