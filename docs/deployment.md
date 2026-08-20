@@ -87,7 +87,34 @@ service account's restrictive permissions, and start COWS. Check
 workspace before returning the service to users. Do not restore only the SQLite
 file while leaving its managed data roots from another point in time. Do not
 manually edit account password hashes or workspace rows as a credential-recovery
-procedure; offline administrator recovery is not implemented yet.
+procedure; use the administrator recovery command below.
+
+## Administrator credential recovery
+
+When every administrator password is lost, recover one account offline from the
+host holding the database file:
+
+```sh
+./bin/cows recover-admin -database /var/lib/cows/cows.db admin
+```
+
+The command reads `COWS_DATABASE_PATH` when `-database` is omitted, and falls
+back to `./data/cows.db`. It starts no HTTP listener and no Podman runtime, so
+it works while the service is stopped or the runtime is broken. It prints a
+temporary password once — it is stored only as a bcrypt hash and appears in no
+log or audit record. Log in with it immediately; COWS requires a new password at
+that first login. Every existing session for the recovered account is
+invalidated, and an `administrator.recovered` audit event is written.
+
+The command refuses an unknown username, a non-administrator account, and a
+disabled administrator. Re-enable a disabled account deliberately through the
+administrative interface first; recovery will not do it as a side effect.
+
+Running it against a live server's database is safe — SQLite is in WAL mode and
+this is a single write — but the recovered account's sessions are dropped
+immediately. Access to the database file is the only credential this path
+requires, so protect it with the COWS service account's restrictive
+permissions and treat it as administrator-equivalent. See decision 0026.
 
 ## Reverse-proxy rules
 

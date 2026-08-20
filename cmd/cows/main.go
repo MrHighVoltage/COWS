@@ -35,6 +35,14 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	if len(os.Args) > 1 && os.Args[1] == "recover-admin" {
+		if err := runRecoverAdmin(ctx, os.Args[2:], os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintf(os.Stderr, "cows recover-admin: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if err := run(ctx, os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "cows: %v\n", err)
 		os.Exit(1)
