@@ -24,6 +24,11 @@ file_hash() {
 tree_hash() {
   (
     cd "$1"
+    # LC_ALL=C keeps the file order byte-collated. Without it, a UTF-8
+    # collation locale reorders the names and the same tree hashes
+    # differently, so verify fails against a lock recorded elsewhere.
+    LC_ALL=C
+    export LC_ALL
     find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}'
   )
 }
