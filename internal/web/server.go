@@ -152,6 +152,16 @@ type allocationView struct {
 	StorageKnown  bool
 }
 
+// resourceStripData is the "." context for the shared
+// "workspaces-resource-strip" template. OOB marks the render as an
+// out-of-band update piggybacked on a row-action response, so a start or
+// stop moves the strip at the same moment it moves the row instead of
+// waiting for the list's next poll.
+type resourceStripData struct {
+	Allocation *allocationView
+	OOB        bool
+}
+
 type templateFormData struct {
 	ID                     string
 	Editing                bool
@@ -390,6 +400,9 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 		"quotaExceeded": quotaExceeded,
 		"timeoutPhase": func(value domain.Workspace) workspace.TimeoutStatus {
 			return workspace.EvaluateTimeouts(value, time.Now())
+		},
+		"resourceStrip": func(data pageData) resourceStripData {
+			return resourceStripData{Allocation: data.Allocation}
 		},
 		"workspaceRow": func(data pageData, value domain.Workspace) workspaceRowData {
 			return workspaceRowData{Workspace: value, Access: data.WorkspaceAccess[value.ID], CSRFToken: data.CSRFToken}
@@ -945,11 +958,11 @@ func (s *Server) workspacePageData(ctx context.Context, user *domain.User) (page
 	if err != nil {
 		return pageData{}, err
 	}
-	allocation, storageKnown, err := s.workspace.AllocationSummaryForWorkspaces(ctx, user.ID, workspaces)
+	allocation, err := s.allocationViewForWorkspaces(ctx, user.ID, workspaces)
 	if err != nil {
 		return pageData{}, err
 	}
-	data := pageData{Workspaces: workspaces, Allocation: &allocationView{Summary: allocation, StorageKnown: storageKnown}, WorkspaceAccess: make(map[string]workspaceAccess, len(workspaces))}
+	data := pageData{Workspaces: workspaces, Allocation: allocation, WorkspaceAccess: make(map[string]workspaceAccess, len(workspaces))}
 	methodsByWorkspace, err := s.workspace.WorkspaceAccessMethodsForWorkspaces(ctx, user.ID, workspaces)
 	if err != nil {
 		return pageData{}, err
@@ -971,16 +984,44 @@ func (s *Server) workspacePageData(ctx context.Context, user *domain.User) (page
 		}
 		data.WorkspaceAccess[value.ID] = access
 	}
+	return data, nil
+}
+
+// allocationViewForWorkspaces builds the resource strip's view over an
+// already-loaded workspace list, so the page, the list fragment and
+// row actions all report the same numbers.
+func (s *Server) allocationViewForWorkspaces(ctx context.Context, userID string, workspaces []domain.Workspace) (*allocationView, error) {
+	summary, storageKnown, err := s.workspace.AllocationSummaryForWorkspaces(ctx, userID, workspaces)
+	if err != nil {
+		return nil, err
+	}
+	view := &allocationView{Summary: summary, StorageKnown: storageKnown}
 	if s.quota != nil {
-		assigned, quotaErr := s.quota.GetForUser(ctx, user.ID)
+		assigned, quotaErr := s.quota.GetForUser(ctx, userID)
 		if quotaErr == nil {
-			data.Allocation.Quota = assigned
-			data.Allocation.QuotaAssigned = true
+			view.Quota = assigned
+			view.QuotaAssigned = true
 		} else if !errors.Is(quotaErr, repository.ErrNotFound) {
-			return pageData{}, quotaErr
+			return nil, quotaErr
 		}
 	}
-	return data, nil
+	return view, nil
+}
+
+// writeResourceStripOOB appends an out-of-band resource strip to a
+// row-action response so the totals move with the row. It is best-effort:
+// a failure here leaves the strip untouched until the list's next poll
+// rather than failing the action the user actually asked for.
+func (s *Server) writeResourceStripOOB(ctx context.Context, w http.ResponseWriter, userID string) {
+	workspaces, err := s.workspace.ListWorkspaces(ctx, userID)
+	if err != nil {
+		return
+	}
+	allocation, err := s.allocationViewForWorkspaces(ctx, userID, workspaces)
+	if err != nil {
+		return
+	}
+	_ = s.templates.ExecuteTemplate(w, "workspaces-resource-strip", resourceStripData{Allocation: allocation, OOB: true})
 }
 
 func (s *Server) workspacesNew(w http.ResponseWriter, r *http.Request) {
@@ -1184,12 +1225,12 @@ func isHTMXRequest(r *http.Request) bool {
 // tab) renders as an empty response, which removes the row entirely.
 func (s *Server) renderWorkspaceRow(w http.ResponseWriter, r *http.Request, user *domain.User, workspaceID, action string, opErr error) {
 	if opErr != nil && errors.Is(opErr, repository.ErrNotFound) {
-		w.WriteHeader(http.StatusOK)
+		s.writeRemovedWorkspaceRow(r.Context(), w, user.ID)
 		return
 	}
 	value, err := s.workspace.GetWorkspaceWithUsage(r.Context(), user.ID, workspaceID)
 	if errors.Is(err, repository.ErrNotFound) {
-		w.WriteHeader(http.StatusOK)
+		s.writeRemovedWorkspaceRow(r.Context(), w, user.ID)
 		return
 	}
 	if err != nil {
@@ -1218,6 +1259,17 @@ func (s *Server) renderWorkspaceRow(w http.ResponseWriter, r *http.Request, user
 	row := workspaceRowData{Workspace: value, Access: access, CSRFToken: s.ensureCSRF(w, r), RowError: rowError}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.templates.ExecuteTemplate(w, "workspace-row", row)
+	s.writeResourceStripOOB(r.Context(), w, user.ID)
+}
+
+// writeRemovedWorkspaceRow answers a row action whose workspace is gone
+// (successful delete, or a concurrent delete from another tab). The empty
+// row content removes the row; the out-of-band strip still ships, because
+// a delete changes the totals it reports.
+func (s *Server) writeRemovedWorkspaceRow(ctx context.Context, w http.ResponseWriter, userID string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	s.writeResourceStripOOB(ctx, w, userID)
 }
 
 // renderWorkspaceDetailHeader answers a Detail-page lifecycle action with

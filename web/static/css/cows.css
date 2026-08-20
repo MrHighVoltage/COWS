@@ -382,6 +382,7 @@ code { color: var(--text-mute); font-family: var(--font-mono); font-size: .82rem
 .resource-strip-progress.quota-progress-warning { accent-color: var(--warn); }
 .resource-strip-progress.quota-progress-danger { accent-color: var(--bad); }
 .resource-strip-warning { color: var(--bad); font-size: .82rem; font-weight: 700; }
+.resource-strip-empty { display: none; }
 .panel-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; margin: 1.25rem 0 1rem; }
 .filter-pills { display: flex; gap: .3rem; padding: .25rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--surface); }
 .filter-pill { min-height: 2.1rem; padding: .35rem .75rem; border: none; border-radius: .35rem; color: var(--text-mute); background: transparent; font: inherit; font-size: .85rem; font-weight: 600; cursor: pointer; }

@@ -218,15 +218,25 @@ func TestWorkspaceActionHTMXRequestSwapsRowInPlace(t *testing.T) {
 	if !strings.Contains(stopBody, "status-dot-neutral") {
 		t.Fatalf("stop response should show the stopped state stamp, body = %q", stopBody)
 	}
+	// The strip rides along out of band, so the running count and resource
+	// totals move at the same moment the row does.
+	if !strings.Contains(stopBody, `id="workspace-resource-strip"`) || !strings.Contains(stopBody, `hx-swap-oob="true"`) {
+		t.Fatalf("stop response should carry the out-of-band resource strip, body = %q", stopBody)
+	}
 
-	// Delete now succeeds (workspace is stopped): the response is empty so
-	// htmx removes the row, and the workspace is actually gone.
+	// Delete now succeeds (workspace is stopped): the response carries no
+	// row so htmx removes it, only the out-of-band resource strip whose
+	// totals the delete changed, and the workspace is actually gone.
 	finalDeleteRecorder := postRowAction("delete")
 	if finalDeleteRecorder.Code != http.StatusOK {
 		t.Fatalf("final delete status = %d, want 200", finalDeleteRecorder.Code)
 	}
-	if body := finalDeleteRecorder.Body.String(); body != "" {
-		t.Fatalf("final delete response should be empty (row removed), got %q", body)
+	finalDeleteBody := finalDeleteRecorder.Body.String()
+	if strings.Contains(finalDeleteBody, "<tr") {
+		t.Fatalf("final delete response should carry no row (row removed), got %q", finalDeleteBody)
+	}
+	if !strings.Contains(finalDeleteBody, `id="workspace-resource-strip"`) || !strings.Contains(finalDeleteBody, `hx-swap-oob="true"`) {
+		t.Fatalf("final delete response should carry the out-of-band resource strip, got %q", finalDeleteBody)
 	}
 	if _, err := service.GetWorkspace(ctx, user.ID, value.ID); !errors.Is(err, repository.ErrNotFound) {
 		t.Fatalf("workspace should be gone after delete, err = %v", err)
