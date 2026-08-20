@@ -489,8 +489,8 @@ func (s *Scheduler) hostAvailable(ctx context.Context) (domain.ResourceRequest, 
 		return domain.ResourceRequest{}, err
 	}
 	available := domain.ResourceRequest{
-		CPUMillis:   scaleCapacity(host.CPUMillis, settings.CPUOverbookingFactor) - allAllocations.Resources.CPUMillis,
-		MemoryBytes: scaleCapacity(host.MemoryBytes, settings.MemoryOverbookingFactor) - allAllocations.Resources.MemoryBytes,
+		CPUMillis:   ScaleCapacity(host.CPUMillis, settings.CPUOverbookingFactor) - allAllocations.Resources.CPUMillis,
+		MemoryBytes: ScaleCapacity(host.MemoryBytes, settings.MemoryOverbookingFactor) - allAllocations.Resources.MemoryBytes,
 	}
 	if available.CPUMillis < 0 {
 		available.CPUMillis = 0
@@ -524,7 +524,9 @@ func validOverbookingFactor(value float64) bool {
 	return value >= MinOverbookingFactor && value <= MaxOverbookingFactor && !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
-func scaleCapacity(value int64, factor float64) int64 {
+// ScaleCapacity applies an overbooking factor to a raw host capacity,
+// yielding the allocatable ceiling COWS admits workspaces against.
+func ScaleCapacity(value int64, factor float64) int64 {
 	if value <= 0 || factor <= 0 {
 		return 0
 	}
