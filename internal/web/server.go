@@ -261,7 +261,7 @@ type pageData struct {
 	UserImport                  *userImportPageData
 	AuditEvents                 []domain.AuditRecord
 	AuditEventFilter            string
-	Metrics                     *metricsView
+	RuntimeCapacity             *runtimeCapacityView
 	RetainedVolumes             []retainedVolumeView
 	MyRetainedVolumes           []retainedVolumeView
 	MyRetainedDirectories       []domain.RetainedWorkspaceDirectory
@@ -307,19 +307,28 @@ type reattachDirectoryChoice struct {
 	MountNames    string
 }
 
-type metricsWorkspaceView struct {
-	Workspace domain.Workspace
-	Usage     runtime.ResourceUsage
-	Known     bool
-}
-
-type metricsView struct {
-	Capacity        runtime.HostCapacity
-	Allocated       domain.AllocationSummary
-	Workspaces      []metricsWorkspaceView
-	ObservedAt      time.Time
-	CapacityError   string
-	AllocationError string
+// runtimeCapacityView reports, for the whole host: its raw capacity, the
+// allocatable ceiling the configured overbooking factors raise that to,
+// how much of the ceiling COWS has committed, and how much the running
+// containers are actually consuming right now. "Used" is the sum over
+// COWS-managed containers, so it excludes any non-COWS load on the box.
+type runtimeCapacityView struct {
+	HostCPUMillis           int64
+	HostMemoryBytes         int64
+	CPUOverbookingFactor    float64
+	MemoryOverbookingFactor float64
+	AllocatableCPUMillis    int64
+	AllocatableMemoryBytes  int64
+	AllocatedCPUMillis      int64
+	AllocatedMemoryBytes    int64
+	UsedCPUMillis           int64
+	UsedMemoryBytes         int64
+	UsageKnown              bool
+	WorkspaceCount          int64
+	RunningWorkspaceCount   int64
+	ObservedAt              time.Time
+	CapacityError           string
+	AllocationError         string
 }
 
 type workspaceAccess struct {
@@ -365,15 +374,19 @@ type workspaceDetailHeaderData struct {
 }
 
 type runtimeWorkspaceView struct {
-	Observed       runtime.ObservedWorkspace
-	Owner          string
-	OwnerID        string
-	Template       string
-	WorkspaceID    string
-	Access         workspaceAccess
-	Managed        bool
-	RuntimePresent bool
-	CSRFToken      string
+	Observed             runtime.ObservedWorkspace
+	Owner                string
+	OwnerID              string
+	Template             string
+	WorkspaceID          string
+	AllocatedCPUMillis   int64
+	AllocatedMemoryBytes int64
+	Usage                runtime.ResourceUsage
+	UsageKnown           bool
+	Access               workspaceAccess
+	Managed              bool
+	RuntimePresent       bool
+	CSRFToken            string
 	// RowError is a transient, request-scoped message shown only in the
 	// just-swapped-in row after a rejected dynamic row action.
 	RowError string
@@ -469,6 +482,15 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 			return observedErrorText(value)
 		},
 		"fileSize": formatFileSize,
+		// CPUPercentMilli counts thousandths of one percent of a single
+		// CPU, so 100000 (100.000%) is one core, or 1000 mCPU.
+		"cpuMillisUsed": func(value int64) int64 { return value / 100 },
+		"percentOf": func(value, total int64) string {
+			if total <= 0 {
+				return "n/a"
+			}
+			return fmt.Sprintf("%.0f%%", float64(value)/float64(total)*100)
+		},
 		"cpuPercent": func(value int64) string {
 			return fmt.Sprintf("%.1f%%", float64(value)/1000)
 		},
@@ -631,7 +653,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/templates/{id}/image/status", s.adminTemplateImageStatus)
 	mux.HandleFunc("GET /admin/runtime", s.adminRuntime)
 	mux.HandleFunc("GET /admin/audit", s.adminAudit)
-	mux.HandleFunc("GET /admin/metrics", s.adminMetrics)
+	mux.HandleFunc("GET /admin/runtime/capacity", s.adminRuntimeCapacity)
 	mux.HandleFunc("GET /admin/volumes", s.adminVolumes)
 	mux.HandleFunc("GET /admin/volumes/{workspace_id}/{mount_name}/download.zip", s.adminVolumeDownload)
 	mux.HandleFunc("POST /admin/volumes/{workspace_id}/{mount_name}/delete", s.adminVolumeDelete)
@@ -3148,6 +3170,7 @@ func (s *Server) adminRuntime(w http.ResponseWriter, r *http.Request) {
 		}
 		data.RuntimeWorkspaces = views
 	}
+	data.RuntimeCapacity = s.buildRuntimeCapacityView(r.Context(), user.ID)
 	s.render(w, status, "admin-runtime-page", data)
 }
 
@@ -3202,39 +3225,85 @@ func (s *Server) adminAudit(w http.ResponseWriter, r *http.Request) {
 	s.render(w, http.StatusOK, "admin-audit-page", pageData{Title: "Audit | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), AuditEvents: events, AuditEventFilter: eventType})
 }
 
-func (s *Server) adminMetrics(w http.ResponseWriter, r *http.Request) {
+// buildRuntimeCapacityView assembles the host capacity panel shown on
+// /admin/runtime. Every part degrades independently: an unreachable
+// runtime, missing host settings and unreadable allocations each blank
+// out only their own numbers, because an admin looking at this page is
+// often looking precisely because something is broken.
+func (s *Server) buildRuntimeCapacityView(ctx context.Context, actorID string) *runtimeCapacityView {
+	view := &runtimeCapacityView{ObservedAt: time.Now().UTC(), CPUOverbookingFactor: 1, MemoryOverbookingFactor: 1}
+	if s.quota != nil {
+		if settings, err := s.quota.GetHostSettings(ctx, actorID); err == nil {
+			if settings.CPUOverbookingFactor > 0 {
+				view.CPUOverbookingFactor = settings.CPUOverbookingFactor
+			}
+			if settings.MemoryOverbookingFactor > 0 {
+				view.MemoryOverbookingFactor = settings.MemoryOverbookingFactor
+			}
+		}
+	}
+	if capacity, err := runtimeCapacity(ctx, s.runtime); err != nil {
+		view.CapacityError = "Host capacity is unavailable."
+	} else {
+		view.HostCPUMillis = capacity.CPUMillis
+		view.HostMemoryBytes = capacity.MemoryBytes
+		view.AllocatableCPUMillis = quota.ScaleCapacity(capacity.CPUMillis, view.CPUOverbookingFactor)
+		view.AllocatableMemoryBytes = quota.ScaleCapacity(capacity.MemoryBytes, view.MemoryOverbookingFactor)
+	}
+	if s.options.Store == nil {
+		view.AllocationError = "Workspace allocation data is unavailable."
+	} else if allocated, err := s.options.Store.AllWorkspaceAllocations(ctx); err != nil {
+		view.AllocationError = "Workspace allocation data is unavailable."
+	} else {
+		view.AllocatedCPUMillis = allocated.Resources.CPUMillis
+		view.AllocatedMemoryBytes = allocated.Resources.MemoryBytes
+		view.WorkspaceCount = allocated.WorkspaceCount
+		view.RunningWorkspaceCount = allocated.RunningWorkspaceCount
+	}
+	values, err := s.workspace.ListWorkspacesForRuntimeOverview(ctx, actorID)
+	if err == nil {
+		usage := s.workspaceUsageByID(ctx, values)
+		view.UsageKnown = true
+		for _, sample := range usage {
+			// CPUPercentMilli counts thousandths of one percent of a
+			// single CPU, so 100000 (100.000%) is one core, or 1000 mCPU.
+			view.UsedCPUMillis += sample.CPUPercentMilli / 100
+			view.UsedMemoryBytes += sample.MemoryBytes
+		}
+	}
+	return view
+}
+
+// workspaceUsageByID samples live consumption for every running workspace
+// container, keyed by workspace ID. Workspaces whose sample fails are
+// simply absent, so one unhappy container cannot blank the whole table.
+func (s *Server) workspaceUsageByID(ctx context.Context, values []domain.Workspace) map[string]runtime.ResourceUsage {
+	usageRuntime, ok := s.runtime.(runtime.ResourceUsageRuntime)
+	if !ok {
+		return nil
+	}
+	samples := make(map[string]runtime.ResourceUsage, len(values))
+	for _, value := range values {
+		if value.RuntimeID == "" || value.ObservedState != string(runtime.StateRunning) {
+			continue
+		}
+		if usage, err := usageRuntime.WorkspaceResourceUsage(ctx, value.RuntimeID); err == nil {
+			samples[value.ID] = usage
+		}
+	}
+	return samples
+}
+
+// adminRuntimeCapacity answers the capacity panel's own poll, so the host
+// numbers stay live without re-running the far heavier container
+// reconciliation the full page performs.
+func (s *Server) adminRuntimeCapacity(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAdministrator(w, r)
 	if !ok {
 		return
 	}
-	view := &metricsView{ObservedAt: time.Now().UTC()}
-	if capacity, err := runtimeCapacity(r.Context(), s.runtime); err != nil {
-		view.CapacityError = "Host capacity is unavailable."
-	} else {
-		view.Capacity = capacity
-	}
-	if s.options.Store != nil {
-		if allocated, err := s.options.Store.AllWorkspaceAllocations(r.Context()); err != nil {
-			view.AllocationError = "Workspace allocation data is unavailable."
-		} else {
-			view.Allocated = allocated
-		}
-	}
-	values, err := s.workspace.ListWorkspacesForRuntimeOverview(r.Context(), user.ID)
-	if err == nil {
-		view.Workspaces = make([]metricsWorkspaceView, 0, len(values))
-		usageRuntime, _ := s.runtime.(runtime.ResourceUsageRuntime)
-		for _, value := range values {
-			item := metricsWorkspaceView{Workspace: value}
-			if usageRuntime != nil && value.RuntimeID != "" && value.ObservedState == string(runtime.StateRunning) {
-				if usage, usageErr := usageRuntime.WorkspaceResourceUsage(r.Context(), value.RuntimeID); usageErr == nil {
-					item.Usage, item.Known = usage, true
-				}
-			}
-			view.Workspaces = append(view.Workspaces, item)
-		}
-	}
-	s.render(w, http.StatusOK, "admin-metrics-page", pageData{Title: "Metrics | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), Metrics: view})
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = s.templates.ExecuteTemplate(w, "admin-runtime-capacity", s.buildRuntimeCapacityView(r.Context(), user.ID))
 }
 
 func runtimeCapacity(ctx context.Context, adapter runtime.Runtime) (runtime.HostCapacity, error) {
@@ -3507,6 +3576,7 @@ func (s *Server) runtimeWorkspaceViews(ctx context.Context, actorID string, obse
 	for _, value := range templates {
 		templateByID[value.ID] = value
 	}
+	usage := s.workspaceUsageByID(ctx, values)
 	observedByWorkspace := make(map[string]runtime.ObservedWorkspace, len(observations))
 	for _, observed := range observations {
 		observedByWorkspace[observed.WorkspaceID] = observed
@@ -3527,6 +3597,9 @@ func (s *Server) runtimeWorkspaceViews(ctx context.Context, actorID string, obse
 			}
 		}
 		view := runtimeWorkspaceView{Observed: observed, WorkspaceID: value.ID, Managed: true, RuntimePresent: present}
+		view.AllocatedCPUMillis = value.AllocatedCPUMillis
+		view.AllocatedMemoryBytes = value.AllocatedMemoryBytes
+		view.Usage, view.UsageKnown = usage[value.ID]
 		view.OwnerID = value.OwnerUserID
 		if owner, exists := userByID[value.OwnerUserID]; exists {
 			view.Owner = owner.Username

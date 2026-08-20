@@ -3,8 +3,10 @@
 <section class="intro" aria-labelledby="runtime-title">
   <p class="eyebrow">Administration</p>
   <h1 id="runtime-title">Container runtime</h1>
-  <p class="lede">Inspect configured runtime capabilities and COWS-managed containers.</p>
+  <p class="lede">Inspect configured runtime capabilities, host capacity and COWS-managed containers.</p>
 </section>
+
+{{ with .RuntimeCapacity }}{{ template "admin-runtime-capacity" . }}{{ end }}
 
 {{ if .RuntimeError }}
 <section class="panel" aria-labelledby="runtime-error-title">
@@ -26,12 +28,51 @@
 </section>
 <section class="panel table-panel" aria-labelledby="managed-title">
   <h2 id="managed-title">Managed containers</h2>
-  <div class="table-scroll"><table class="runtime-table"><thead><tr><th>Workspace</th><th>Owner</th><th>Template</th><th>State</th><th>Observed</th><th class="actions-column">Access and controls</th></tr></thead><tbody>
-  {{ range .RuntimeWorkspaces }}{{ template "admin-runtime-row" . }}{{ else }}<tr><td colspan="6" class="muted">No managed containers were found.</td></tr>{{ end }}
+  <div class="table-scroll"><table class="runtime-table"><thead><tr><th>Workspace</th><th>Owner</th><th>Template</th><th>State</th><th>Allocated</th><th>In use</th><th>Observed</th><th class="actions-column">Access and controls</th></tr></thead><tbody>
+  {{ range .RuntimeWorkspaces }}{{ template "admin-runtime-row" . }}{{ else }}<tr><td colspan="8" class="muted">No managed containers were found.</td></tr>{{ end }}
   </tbody></table></div>
 </section>
 {{ end }}
 {{ template "base-end" . }}
+{{ end }}
+
+{{ define "admin-runtime-capacity" }}
+<section id="admin-runtime-capacity" class="panel" aria-labelledby="capacity-title" hx-get="/admin/runtime/capacity" hx-trigger="every 5s" hx-swap="outerHTML">
+  <div class="panel-heading"><div><p class="eyebrow">Host</p><h2 id="capacity-title">Capacity, allocation and use</h2></div><span class="muted">{{ .ObservedAt.Format "15:04:05 UTC" }}</span></div>
+  {{ if .CapacityError }}<p class="alert alert-error">{{ .CapacityError }}</p>{{ end }}
+  {{ if .AllocationError }}<p class="alert alert-error">{{ .AllocationError }}</p>{{ end }}
+  <div class="capacity-meters">
+    <div class="capacity-meter">
+      <div class="capacity-meter-head"><span class="status-label">CPU</span><strong class="capacity-meter-headline">{{ .AllocatedCPUMillis }} / {{ .AllocatableCPUMillis }} mCPU allocated</strong></div>
+      <progress class="capacity-progress {{ quotaClass .AllocatedCPUMillis .AllocatableCPUMillis }}" max="{{ .AllocatableCPUMillis }}" value="{{ .AllocatedCPUMillis }}" aria-label="CPU allocated against allocatable capacity"></progress>
+      <dl class="capacity-facts">
+        <div><dt>Host</dt><dd>{{ .HostCPUMillis }} mCPU</dd></div>
+        <div><dt>Allocatable</dt><dd>{{ .AllocatableCPUMillis }} mCPU <span class="muted">(&times;{{ printf "%.2g" .CPUOverbookingFactor }})</span></dd></div>
+        <div><dt>Allocated</dt><dd>{{ .AllocatedCPUMillis }} mCPU <span class="muted">({{ percentOf .AllocatedCPUMillis .AllocatableCPUMillis }} of allocatable)</span></dd></div>
+        <div><dt>In use</dt><dd>{{ if .UsageKnown }}{{ .UsedCPUMillis }} mCPU <span class="muted">({{ percentOf .UsedCPUMillis .HostCPUMillis }} of host)</span>{{ else }}<span class="muted">Not available</span>{{ end }}</dd></div>
+      </dl>
+      {{ if .UsageKnown }}<progress class="capacity-progress capacity-progress-use" max="{{ .HostCPUMillis }}" value="{{ .UsedCPUMillis }}" aria-label="CPU in use against host capacity"></progress>{{ end }}
+    </div>
+    <div class="capacity-meter">
+      <div class="capacity-meter-head"><span class="status-label">Memory</span><strong class="capacity-meter-headline">{{ fileSize .AllocatedMemoryBytes }} / {{ fileSize .AllocatableMemoryBytes }} allocated</strong></div>
+      <progress class="capacity-progress {{ quotaClass .AllocatedMemoryBytes .AllocatableMemoryBytes }}" max="{{ .AllocatableMemoryBytes }}" value="{{ .AllocatedMemoryBytes }}" aria-label="Memory allocated against allocatable capacity"></progress>
+      <dl class="capacity-facts">
+        <div><dt>Host</dt><dd>{{ fileSize .HostMemoryBytes }}</dd></div>
+        <div><dt>Allocatable</dt><dd>{{ fileSize .AllocatableMemoryBytes }} <span class="muted">(&times;{{ printf "%.2g" .MemoryOverbookingFactor }})</span></dd></div>
+        <div><dt>Allocated</dt><dd>{{ fileSize .AllocatedMemoryBytes }} <span class="muted">({{ percentOf .AllocatedMemoryBytes .AllocatableMemoryBytes }} of allocatable)</span></dd></div>
+        <div><dt>In use</dt><dd>{{ if .UsageKnown }}{{ fileSize .UsedMemoryBytes }} <span class="muted">({{ percentOf .UsedMemoryBytes .HostMemoryBytes }} of host)</span>{{ else }}<span class="muted">Not available</span>{{ end }}</dd></div>
+      </dl>
+      {{ if .UsageKnown }}<progress class="capacity-progress capacity-progress-use" max="{{ .HostMemoryBytes }}" value="{{ .UsedMemoryBytes }}" aria-label="Memory in use against host capacity"></progress>{{ end }}
+    </div>
+    <div class="capacity-meter capacity-meter-counts">
+      <div class="capacity-meter-head"><span class="status-label">Workspaces</span><strong class="capacity-meter-headline">{{ .RunningWorkspaceCount }} running</strong></div>
+      <dl class="capacity-facts">
+        <div><dt>Total</dt><dd>{{ .WorkspaceCount }}</dd></div>
+        <div><dt>Running</dt><dd>{{ .RunningWorkspaceCount }}</dd></div>
+      </dl>
+    </div>
+  </div>
+</section>
 {{ end }}
 
 {{ define "admin-runtime-row" }}
@@ -40,6 +81,8 @@
   <td>{{ if .Owner }}{{ .Owner }}{{ else }}<span class="muted">Unknown</span>{{ end }}</td>
   <td>{{ if .Template }}{{ .Template }}{{ else }}<span class="muted">Unknown</span>{{ end }}</td>
   <td>{{ template "status-dot-view" (stateStatusDot .Observed.State) }}{{ if .RowError }}<p class="table-subtext status-disabled">{{ .RowError }}</p>{{ end }}</td>
+  <td>{{ if .Managed }}<span class="table-subtext">{{ .AllocatedCPUMillis }} mCPU &middot; {{ mib .AllocatedMemoryBytes }} MiB</span>{{ else }}<span class="muted">&mdash;</span>{{ end }}</td>
+  <td>{{ if .UsageKnown }}<span class="table-subtext">{{ cpuMillisUsed .Usage.CPUPercentMilli }} mCPU &middot; {{ mib .Usage.MemoryBytes }} MiB &middot; {{ .Usage.PIDs }} PIDs</span>{{ else }}<span class="muted">&mdash;</span>{{ end }}</td>
   <td>{{ observedTime .Observed.ObservedAt }}</td>
   <td class="actions-column">
     {{ if .Managed }}

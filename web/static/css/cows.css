@@ -333,6 +333,18 @@ code { color: var(--text-mute); font-family: var(--font-mono); font-size: .82rem
 }
 .runtime-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; padding-top: 1rem; border-top: 1px solid var(--line); }
 .runtime-facts strong { display: block; margin-top: .15rem; font-family: var(--font-mono); }
+.capacity-meters { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+.capacity-meter { display: flex; flex-direction: column; gap: .5rem; }
+.capacity-meter-head { display: flex; flex-direction: column; gap: .15rem; }
+.capacity-meter-headline { font-family: var(--font-mono); font-size: .9rem; }
+.capacity-progress { width: 100%; height: .45rem; accent-color: var(--accent); }
+.capacity-progress.quota-progress-warning { accent-color: var(--warn); }
+.capacity-progress.quota-progress-danger { accent-color: var(--bad); }
+.capacity-progress-use { height: .3rem; accent-color: var(--text-mute); }
+.capacity-facts { display: flex; flex-direction: column; gap: .2rem; margin: 0; font-size: .82rem; }
+.capacity-facts > div { display: flex; justify-content: space-between; gap: .75rem; }
+.capacity-facts dt { color: var(--text-mute); }
+.capacity-facts dd { margin: 0; font-family: var(--font-mono); text-align: right; }
 .table-action {
   display: inline-flex;
   align-items: center;

@@ -213,8 +213,12 @@ data, but messages never contain passwords, terminal output, runtime IDs, host
 paths, or internal addresses. A mail failure cannot prevent a stop or delete.
 
 Administrators can query bounded audit history, inspect live host/workspace
-metrics, and recover retained named volumes. Metrics are sampled from Podman
-and not persisted per sample; retained-volume actions are download/remove only.
+metrics on the container runtime view, and recover retained named volumes.
+That view reports host capacity, the allocatable ceiling the configured
+overbooking factors raise it to, what COWS has allocated against that ceiling,
+and what the running containers actually consume. Metrics are sampled from
+Podman and not persisted per sample; retained-volume actions are
+download/remove only.
 
 ## Request and state flow
 
