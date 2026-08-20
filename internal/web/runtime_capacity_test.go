@@ -165,6 +165,31 @@ func TestAdminRuntimeCapacityRejectsNonAdministrators(t *testing.T) {
 	}
 }
 
+// TestAdminRuntimeTableLinksWorkspaceAndKeepsOnlyControls covers the table
+// changes: the identity cell is the way into the workspace, and the actions
+// column no longer duplicates the access methods that detail view already
+// offers.
+func TestAdminRuntimeTableLinksWorkspaceAndKeepsOnlyControls(t *testing.T) {
+	fixture := newCapacityFixture(t)
+	recorder := fixture.get(t, "/admin/runtime", fixture.adminSession)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("runtime page status = %d, want 200", recorder.Code)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, `href="/workspaces/`+fixture.workspaceID+`/access"`) {
+		t.Fatalf("runtime row should link the workspace to its detail view, body = %q", body)
+	}
+	if !strings.Contains(body, "Capacity workspace") {
+		t.Fatalf("runtime row should name the workspace, body = %q", body)
+	}
+	if strings.Contains(body, "?tab=") {
+		t.Fatalf("runtime row should no longer carry access buttons, body = %q", body)
+	}
+	if !strings.Contains(body, "1500 mCPU") {
+		t.Fatalf("runtime row should report live consumption, body = %q", body)
+	}
+}
+
 func TestAdminMetricsPageIsGone(t *testing.T) {
 	fixture := newCapacityFixture(t)
 	recorder := fixture.get(t, "/admin/metrics", fixture.adminSession)

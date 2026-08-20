@@ -379,11 +379,11 @@ type runtimeWorkspaceView struct {
 	OwnerID              string
 	Template             string
 	WorkspaceID          string
+	Name                 string
 	AllocatedCPUMillis   int64
 	AllocatedMemoryBytes int64
 	Usage                runtime.ResourceUsage
 	UsageKnown           bool
-	Access               workspaceAccess
 	Managed              bool
 	RuntimePresent       bool
 	CSRFToken            string
@@ -3596,7 +3596,7 @@ func (s *Server) runtimeWorkspaceViews(ctx context.Context, actorID string, obse
 				}
 			}
 		}
-		view := runtimeWorkspaceView{Observed: observed, WorkspaceID: value.ID, Managed: true, RuntimePresent: present}
+		view := runtimeWorkspaceView{Observed: observed, WorkspaceID: value.ID, Name: value.Name, Managed: true, RuntimePresent: present}
 		view.AllocatedCPUMillis = value.AllocatedCPUMillis
 		view.AllocatedMemoryBytes = value.AllocatedMemoryBytes
 		view.Usage, view.UsageKnown = usage[value.ID]
@@ -3606,20 +3606,6 @@ func (s *Server) runtimeWorkspaceViews(ctx context.Context, actorID string, obse
 		}
 		if template, exists := templateByID[value.TemplateID]; exists {
 			view.Template = template.Name
-		}
-		if template, exists := templateByID[value.TemplateID]; exists {
-			for _, method := range template.AccessMethods {
-				switch method {
-				case domain.AccessTerminal:
-					view.Access.Terminal = true
-				case domain.AccessDesktop:
-					view.Access.Desktop = true
-				case domain.AccessFiles:
-					view.Access.Files = true
-				case domain.AccessLogs:
-					view.Access.Logs = true
-				}
-			}
 		}
 		views = append(views, view)
 		seen[value.ID] = struct{}{}
