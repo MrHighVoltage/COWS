@@ -38,13 +38,13 @@ Implemented today:
 - local HTMX, Alpine.js, xterm.js, noVNC, and Nerd Font assets embedded in the
   binary, plus optional lifecycle warning and password-reset email delivery;
 - administrator audit and live metrics views, retained named-volume recovery,
-  and optional per-workspace internal Podman network isolation.
+  offline administrator credential recovery (`cows recover-admin`), and
+  optional per-workspace internal Podman network isolation.
 
 The implementation is not production-ready. Remaining high-impact gaps include
-administrator credential recovery, documented SQLite and data-root backup and
-restore, runtime-aware readiness reporting, restart-safe recovery of partial
-lifecycle operations, rootless-Podman integration coverage, historical metrics,
-volume restore, and deployment hardening. Generic web-application proxying and
+a tested SQLite and data-root backup and restore drill, restart-safe recovery
+of partial lifecycle operations, rootless-Podman integration coverage,
+historical metrics, volume restore, and deployment hardening. Generic web-application proxying and
 other public service exposure are intentionally out of scope. See
 [ROADMAP.md](ROADMAP.md) for the complete status and
 [docs/implementation/audit-findings.md](docs/implementation/audit-findings.md)

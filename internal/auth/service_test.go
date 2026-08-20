@@ -392,3 +392,84 @@ func TestDeleteUserRejectsWhenWorkspacesStillOwned(t *testing.T) {
 		t.Fatalf("target user should still exist after rejected deletion: %v", err)
 	}
 }
+
+func TestRecoverAdministratorResetsOnlyTheNamedAccount(t *testing.T) {
+	service := testService(t)
+	ctx := context.Background()
+	if _, err := service.BootstrapAdministrator(ctx, CreateUserInput{Username: "admin", Password: "correct horse battery staple"}); err != nil {
+		t.Fatalf("bootstrap administrator: %v", err)
+	}
+	admin, adminToken, err := service.Authenticate(ctx, "admin", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate administrator: %v", err)
+	}
+	if err := service.ChangePassword(ctx, admin.ID, "correct horse battery staple", "settled administrator password"); err != nil {
+		t.Fatalf("clear first-login flag: %v", err)
+	}
+	second, err := service.CreateUser(ctx, admin.ID, CreateUserInput{Username: "other", Password: "another long password", Role: domain.RoleAdministrator})
+	if err != nil {
+		t.Fatalf("create second administrator: %v", err)
+	}
+	_, secondToken, err := service.Authenticate(ctx, "other", "another long password")
+	if err != nil {
+		t.Fatalf("authenticate second administrator: %v", err)
+	}
+
+	// Mixed case, to confirm the username is normalized like every other lookup.
+	temporary, err := service.RecoverAdministrator(ctx, "ADMIN")
+	if err != nil {
+		t.Fatalf("recover administrator: %v", err)
+	}
+
+	recovered, _, err := service.Authenticate(ctx, "admin", temporary)
+	if err != nil {
+		t.Fatalf("authenticate with temporary password: %v", err)
+	}
+	if !recovered.MustChangePassword {
+		t.Fatal("recovered administrator should be required to change the password")
+	}
+	if _, _, err := service.Authenticate(ctx, "admin", "settled administrator password"); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("previous password error = %v, want ErrInvalidCredentials", err)
+	}
+	if _, err := service.UserForSession(ctx, adminToken); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("recovered administrator session error = %v, want ErrNotFound", err)
+	}
+	if user, err := service.UserForSession(ctx, secondToken); err != nil || user.ID != second.ID {
+		t.Fatalf("other administrator session = %+v %v, want it left intact", user, err)
+	}
+}
+
+func TestRecoverAdministratorRefusesInvalidTargets(t *testing.T) {
+	service := testService(t)
+	ctx := context.Background()
+	if _, err := service.BootstrapAdministrator(ctx, CreateUserInput{Username: "admin", Password: "correct horse battery staple"}); err != nil {
+		t.Fatalf("bootstrap administrator: %v", err)
+	}
+	admin, _, err := service.Authenticate(ctx, "admin", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate administrator: %v", err)
+	}
+	if err := service.ChangePassword(ctx, admin.ID, "correct horse battery staple", "settled administrator password"); err != nil {
+		t.Fatalf("clear first-login flag: %v", err)
+	}
+	if _, err := service.CreateUser(ctx, admin.ID, CreateUserInput{Username: "ordinary", Password: "an ordinary password", Role: domain.RoleUser}); err != nil {
+		t.Fatalf("create ordinary user: %v", err)
+	}
+	disabled, err := service.CreateUser(ctx, admin.ID, CreateUserInput{Username: "retired", Password: "a retired password", Role: domain.RoleAdministrator})
+	if err != nil {
+		t.Fatalf("create retired administrator: %v", err)
+	}
+	if err := service.SetUserDisabled(ctx, admin.ID, disabled.ID, true); err != nil {
+		t.Fatalf("disable retired administrator: %v", err)
+	}
+
+	for _, username := range []string{"absent", "ordinary", "retired", ""} {
+		if _, err := service.RecoverAdministrator(ctx, username); !errors.Is(err, ErrRecoveryTargetInvalid) {
+			t.Fatalf("recover %q error = %v, want ErrRecoveryTargetInvalid", username, err)
+		}
+	}
+	// The refusals must not have touched the ordinary user's password.
+	if _, _, err := service.Authenticate(ctx, "ordinary", "an ordinary password"); err != nil {
+		t.Fatalf("ordinary user password changed by a refused recovery: %v", err)
+	}
+}

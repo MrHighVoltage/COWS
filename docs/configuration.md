@@ -29,6 +29,12 @@ export COWS_BOOTSTRAP_ADMIN_PASSWORD='replace-this-with-a-long-password'
 ./bin/cows
 ```
 
+The bootstrap variables only create the first administrator on an empty
+database; they do not reset an existing one. If every administrator password is
+later lost, use `./bin/cows recover-admin USERNAME` from the host holding the
+database file — see "Administrator credential recovery" in
+[deployment.md](deployment.md) and decision 0026.
+
 For local rootless-Podman testing, keep the live database and mapped mount
 directories in the ignored `.cows-test/` directory. This prevents `go test
 ./...` from traversing runtime-owned directories:

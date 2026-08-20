@@ -23,7 +23,7 @@ to them.
 - `ROADMAP.md` exit criteria are the acceptance bar. When you close a finding,
   update `ROADMAP.md` and, if a boundary or data flow changed,
   `ARCHITECTURE.md` / `SECURITY.md` in the same commit. Add a decision record
-  (`docs/decisions/NNNN-*.md`, next number: 0024) when behavior or policy
+  (`docs/decisions/NNNN-*.md`, next number: 0027) when behavior or policy
   changes.
 - Standard checks after any change:
 
@@ -41,9 +41,24 @@ to them.
 
 ## A. Fix-first findings (operational risk)
 
-### A1. No administrator credential-recovery mechanism or procedure
+### A1. No administrator credential-recovery mechanism or procedure — RESOLVED
 
-- **ROADMAP M1 exit criterion** ("define recovery procedures for the first
+- **Update (2026-08-20):** added `auth.Service.RecoverAdministrator`
+  (`internal/auth/service.go`) and the `cows recover-admin` subcommand
+  (`cmd/cows/recover.go`, dispatched from `main()` alongside `file-helper`).
+  It resets a named administrator to a `GenerateTemporaryPassword` value, sets
+  `MustChangePassword`, calls `DeleteSessionsForUser`, records an
+  `administrator.recovered` audit event, and prints the password once. Unknown,
+  disabled, and non-administrator targets are refused with
+  `ErrRecoveryTargetInvalid`. It opens only SQLite — no HTTP server, no Podman.
+  Tests: `TestRecoverAdministratorResetsOnlyTheNamedAccount`,
+  `TestRecoverAdministratorRefusesInvalidTargets`
+  (`internal/auth/service_test.go`),
+  `TestRecoverAdminPrintsAWorkingTemporaryPassword`,
+  `TestRecoverAdminRejectsBadInvocations` (`cmd/cows/recover_test.go`).
+  See decision 0026; `docs/deployment.md`, `docs/configuration.md`,
+  `ROADMAP.md`, and `README.md` were updated in the same change.
+- Original finding: **ROADMAP M1 exit criterion** ("define recovery procedures for the first
   administrator and lost credentials") is currently **unsatisfiable**: there
   is no recovery mechanism to document.
 - Evidence: `cmd/cows/main.go` registers no recovery flag or subcommand (no
@@ -250,6 +265,18 @@ decision record first:
   tree, not just trusted.
 
 ## Since the audit (updates, not a re-audit)
+
+**2026-08-20.** A1 above is resolved (see its update). Separately, `main` was
+found **red**: commit `2f270b3` rebased the idle-stop timeout from
+`Workspace.StartedAt` onto `Workspace.IdleSince`
+(`internal/workspace/timeouts.go`) without updating the
+`internal/notifications` test fixtures, so both notification tests failed on a
+clean checkout. The fixtures now set `IdleSince`. That trace also found a real
+upgrade-path gap: migration `0026` added `idle_since` with `DEFAULT 0`, which
+made every workspace running at upgrade time permanently exempt from the idle
+stop. Migration `0027_backfill_idle_since.sql` seeds those rows from
+`started_at`, covered by
+`TestBackfillMigrationSeedsIdleSinceFromStartedAt`.
 
 Findings A2 and C3 above were updated 2026-08-11 to reflect commits made
 after the 2026-08-04 audit (`a6549c5`, `3ed253a`, `95ecb05`, `5876ec8`,

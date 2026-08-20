@@ -25,6 +25,9 @@ Implemented now:
 - optional persisted lifecycle-warning email delivery;
 - a bounded, runtime-aware readiness endpoint (`GET /readyz`) separate from
   the liveness-only `GET /healthz`;
+- offline administrator credential recovery via the `cows recover-admin`
+  subcommand, with a documented lost-credential procedure
+  (`docs/deployment.md`, decision 0026);
 - a token-based console design system (`ARCHITECTURE.md` frontend
   architecture) with a shared status-stamp component for workspace, runtime,
   and connection state;
@@ -38,8 +41,6 @@ Implemented now:
 
 Not implemented or incomplete:
 
-- offline administrator credential recovery and a documented lost-credential
-  procedure;
 - a tested SQLite, managed-directory, and archive backup/restore procedure;
   `docs/deployment.md` documents a manual backup and restore procedure, but it
   has not been exercised as a restore drill and has no scripted tooling.
@@ -69,18 +70,13 @@ Not implemented or incomplete:
 
 These are the next pre-production tasks, ordered by operational risk:
 
-1. Add an operator-invoked local administrator recovery command that targets a
-   named administrator, invalidates sessions, generates a temporary password,
-   and requires a first-login password change. Refuse unknown, disabled, and
-   non-administrator targets. Document local-process and database-file access
-   requirements.
-2. Exercise and script the documented SQLite, managed-directory, and archive
+1. Exercise and script the documented SQLite, managed-directory, and archive
    backup/restore procedure (`docs/deployment.md`) as a tested restore drill.
    Keep named-volume backup separate from the control-plane backup until a
    supported export path exists.
-3. Define restart recovery and non-destructive repair policy for every lifecycle
+2. Define restart recovery and non-destructive repair policy for every lifecycle
    partial failure before adding automatic repair actions.
-4. Add opt-in rootless-Podman integration tests for labels, lifecycle state,
+3. Add opt-in rootless-Podman integration tests for labels, lifecycle state,
    terminal cleanup, desktop loopback mapping, private-network setup, and
    rooted file access. Keep them out of the ordinary unit-test suite.
 
@@ -99,15 +95,14 @@ Implemented: administrator bootstrap, bcrypt passwords, login/logout, opaque
 sessions, CSRF protection, mandatory first-login password changes, user email
 addresses, password changes, local self-registration with server defaults,
 registration rate limiting, bounded CSV import with preview and credential
-export, roles, groups, quotas, disable/delete safety, group lifecycle, and
-basic audit persistence.
+export, roles, groups, quotas, disable/delete safety, group lifecycle, basic
+audit persistence, and offline administrator credential recovery
+(`cows recover-admin`, decision 0026).
 
 Remaining exit criteria:
 
 - review every state-changing route and access session for independent
   authorization coverage;
-- implement and document local recovery for the first administrator and lost
-  credentials;
 - add broader abuse, session invalidation, and import failure tests;
 - replace process-local rate limits before supporting multiple active instances;
 - add email verification only after a separate identity design.
@@ -207,8 +202,8 @@ bulk operations, and archive extraction only after a dedicated security design.
 Local password-reset email with hashed single-use tokens, a retryable email
 outbox, a bounded administrator audit view, live runtime metrics, and
 administrator retained-volume recovery/download/removal. Institutional
-authentication is deliberately excluded from the current plan. This does not
-provide offline administrator credential recovery; that remains in Milestone 1.
+authentication is deliberately excluded from the current plan. Offline
+administrator credential recovery is covered separately in Milestone 1.
 
 ## Milestone 9: Optional network isolation — implemented
 

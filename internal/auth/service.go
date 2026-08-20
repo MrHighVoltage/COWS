@@ -32,14 +32,16 @@ var (
 	ErrRegistrationDisabled    = errors.New("registration is disabled")
 	ErrRegistrationUnavailable = errors.New("registration is unavailable")
 	ErrInvalidResetToken       = errors.New("invalid or expired password reset token")
+	ErrRecoveryTargetInvalid   = errors.New("recovery target must be an existing, enabled administrator")
 )
 
 const (
-	auditLoginSuccess = "login.success"
-	auditLoginFailure = "login.failure"
-	auditUserCreated  = "user.created"
-	auditUserDisabled = "user.disabled"
-	auditUserEnabled  = "user.enabled"
+	auditLoginSuccess   = "login.success"
+	auditLoginFailure   = "login.failure"
+	auditUserCreated    = "user.created"
+	auditUserDisabled   = "user.disabled"
+	auditUserEnabled    = "user.enabled"
+	auditAdminRecovered = "administrator.recovered"
 )
 
 type Service struct {
@@ -245,6 +247,48 @@ func (s *Service) ResetPassword(ctx context.Context, rawToken, newPassword strin
 	}
 	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: user.ID, EventType: "password.reset.completed", TargetType: "user", TargetID: user.ID})
 	return nil
+}
+
+// RecoverAdministrator resets a named administrator's password to a generated
+// temporary one, requires a change at the next login, and invalidates every
+// session for the account. It is the offline recovery path for lost
+// administrator credentials and is reachable only from the `cows recover-admin`
+// subcommand, so its trust boundary is local access to the database file rather
+// than any credential. That is also why it names the exact reason it refused,
+// unlike RequestPasswordReset, whose deliberately vague response protects the
+// unauthenticated web endpoint from account enumeration.
+//
+// A disabled administrator is refused: re-enabling an account is a separate,
+// audited decision and must not happen as a side effect of a password reset.
+// The plaintext password is returned to the caller to be shown once and is
+// never stored or logged.
+func (s *Service) RecoverAdministrator(ctx context.Context, username string) (string, error) {
+	record, err := s.store.FindUserByUsername(ctx, normalizeUsername(username))
+	if errors.Is(err, repository.ErrNotFound) {
+		return "", ErrRecoveryTargetInvalid
+	}
+	if err != nil {
+		return "", err
+	}
+	if record.User.Disabled || record.User.Role != domain.RoleAdministrator {
+		return "", ErrRecoveryTargetInvalid
+	}
+	password, err := GenerateTemporaryPassword(20)
+	if err != nil {
+		return "", fmt.Errorf("generate temporary password: %w", err)
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return "", fmt.Errorf("hash password: %w", err)
+	}
+	if err := s.store.UpdateUserPassword(ctx, record.User.ID, string(hash), true); err != nil {
+		return "", err
+	}
+	if err := s.store.DeleteSessionsForUser(ctx, record.User.ID); err != nil {
+		return "", err
+	}
+	s.recordAudit(ctx, domain.AuditEvent{EventType: auditAdminRecovered, TargetType: "user", TargetID: record.User.ID})
+	return password, nil
 }
 
 func (s *Service) Register(ctx context.Context, input RegisterUserInput) (domain.User, error) {
