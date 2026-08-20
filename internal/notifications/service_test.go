@@ -49,7 +49,7 @@ func notificationTestStore(t *testing.T, workspace domain.Workspace) (*sqlite.St
 
 func TestTimeoutWarningsAreDeduplicatedAndDelivered(t *testing.T) {
 	base := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
-	store, _ := notificationTestStore(t, domain.Workspace{ID: "workspace-1", OwnerUserID: "owner-1", TemplateID: "template-1", Name: "Research workspace", DesiredState: domain.DesiredWorkspaceRunning, ObservedState: string(runtime.StateRunning), RuntimeID: "runtime-1", InitialConnectionTimeoutSeconds: 3600, StartedAt: base, CreatedAt: base, UpdatedAt: base})
+	store, _ := notificationTestStore(t, domain.Workspace{ID: "workspace-1", OwnerUserID: "owner-1", TemplateID: "template-1", Name: "Research workspace", DesiredState: domain.DesiredWorkspaceRunning, ObservedState: string(runtime.StateRunning), RuntimeID: "runtime-1", InitialConnectionTimeoutSeconds: 3600, StartedAt: base, IdleSince: base, CreatedAt: base, UpdatedAt: base})
 	sender := &fakeSender{}
 	service, err := New(store, sender, time.Hour, time.Minute)
 	if err != nil {
@@ -81,7 +81,7 @@ func TestTimeoutWarningsAreDeduplicatedAndDelivered(t *testing.T) {
 
 func TestFailedEmailDeliveryStopsAfterBoundedAttempts(t *testing.T) {
 	base := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
-	store, _ := notificationTestStore(t, domain.Workspace{ID: "workspace-1", OwnerUserID: "owner-1", TemplateID: "template-1", Name: "Research workspace", DesiredState: domain.DesiredWorkspaceRunning, ObservedState: string(runtime.StateRunning), RuntimeID: "runtime-1", InitialConnectionTimeoutSeconds: 3600, StartedAt: base, CreatedAt: base, UpdatedAt: base})
+	store, _ := notificationTestStore(t, domain.Workspace{ID: "workspace-1", OwnerUserID: "owner-1", TemplateID: "template-1", Name: "Research workspace", DesiredState: domain.DesiredWorkspaceRunning, ObservedState: string(runtime.StateRunning), RuntimeID: "runtime-1", InitialConnectionTimeoutSeconds: 3600, StartedAt: base, IdleSince: base, CreatedAt: base, UpdatedAt: base})
 	sender := &fakeSender{error: errors.New("relay unavailable")}
 	service, err := New(store, sender, time.Hour, time.Minute)
 	if err != nil {
