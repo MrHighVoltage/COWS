@@ -446,6 +446,7 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 		"templateHue":           templateHue,
 		"relativeTime":          relativeTime,
 		"workspaceStatusBucket": workspaceStatusBucket,
+		"runtimeStatusBucket":   runtimeStatusBucket,
 		"workspaceStatusCounts": workspaceStatusCounts,
 		"workspaceStatusDot":    workspaceStatusDot,
 		"stateStatusDot": func(state any) statusDotView {
@@ -3910,6 +3911,25 @@ func workspaceStatusBucket(observedState string) string {
 	case "running":
 		return "running"
 	case "failed":
+		return "error"
+	default:
+		return "stopped"
+	}
+}
+
+// runtimeStatusBucket is admin/runtime's equivalent of workspaceStatusBucket:
+// it collapses a runtime row into the buckets its filter pills offer,
+// adding "orphan" for containers with no matching COWS workspace record -
+// a distinction that matters to an admin but has no analog on the
+// per-user Overview.
+func runtimeStatusBucket(view runtimeWorkspaceView) string {
+	if !view.Managed {
+		return "orphan"
+	}
+	switch view.Observed.State {
+	case "running":
+		return "running"
+	case "exited", "removed", "failed":
 		return "error"
 	default:
 		return "stopped"

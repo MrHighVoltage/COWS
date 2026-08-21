@@ -26,12 +26,24 @@
     <div><span class="status-label">Managed workspaces</span><strong>{{ len .Inspection.Workspaces }}</strong></div>
   </div>
 </section>
-<section class="panel table-panel" aria-labelledby="managed-title">
+<section class="panel-toolbar" data-table-controls data-panel="admin-runtime-list-panel" data-page-size="20" aria-label="Filter and search managed containers">
+  <div class="filter-pills" role="group" aria-label="Filter by status">
+    <button type="button" class="filter-pill active" data-filter="all">All <span class="filter-count" data-count="all">0</span></button>
+    <button type="button" class="filter-pill" data-filter="running">Running <span class="filter-count" data-count="running">0</span></button>
+    <button type="button" class="filter-pill" data-filter="stopped">Stopped <span class="filter-count" data-count="stopped">0</span></button>
+    <button type="button" class="filter-pill" data-filter="error">Error <span class="filter-count" data-count="error">0</span></button>
+    <button type="button" class="filter-pill" data-filter="orphan">Orphan <span class="filter-count" data-count="orphan">0</span></button>
+  </div>
+  <input type="search" class="table-search" data-table-search placeholder="Search containers&hellip;" aria-label="Search containers">
+</section>
+<section id="admin-runtime-list-panel" class="panel table-panel" aria-labelledby="managed-title">
   <h2 id="managed-title">Managed containers</h2>
   <div class="table-scroll"><table class="runtime-table"><thead><tr><th>Workspace</th><th>Owner</th><th>Template</th><th>State</th><th>Allocated</th><th>In use</th><th>Observed</th><th class="actions-column">Controls</th></tr></thead><tbody>
   {{ range .RuntimeWorkspaces }}{{ template "admin-runtime-row" . }}{{ else }}<tr><td colspan="8" class="muted">No managed containers were found.</td></tr>{{ end }}
   </tbody></table></div>
 </section>
+{{ template "table-pager" "admin-runtime-list-panel" }}
+<script src="/static/js/table-controls.js" defer></script>
 {{ end }}
 {{ template "base-end" . }}
 {{ end }}
@@ -76,7 +88,7 @@
 {{ end }}
 
 {{ define "admin-runtime-row" }}
-<tr id="admin-runtime-row-{{ .WorkspaceID }}">
+{{ $status := runtimeStatusBucket . }}<tr id="admin-runtime-row-{{ .WorkspaceID }}" data-status="{{ $status }}" data-name="{{ .Name }} {{ .Owner }} {{ .Template }} {{ .WorkspaceID }}">
   <td class="runtime-workspace-cell">
     {{ if .Managed }}<a class="runtime-workspace-link" href="/workspaces/{{ .WorkspaceID }}/access"><strong>{{ if .Name }}{{ .Name }}{{ else }}Unnamed workspace{{ end }}</strong><code>{{ .WorkspaceID }}</code></a>{{ else }}<code>{{ .WorkspaceID }}</code>{{ end }}
     {{ if not .Managed }}{{ template "status-dot-view" (statusDot "Orphan" "warn") }}{{ else if not .RuntimePresent }}{{ template "status-dot-view" (statusDot "Runtime missing" "warn") }}{{ end }}
