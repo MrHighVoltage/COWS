@@ -12,18 +12,27 @@
 </section>
 {{ if .Error }}<p class="alert alert-error" role="alert">{{ .Error }}</p>{{ end }}
 {{ template "workspaces-resource-strip" (resourceStrip .) }}
-<section class="panel-toolbar" aria-label="Filter and search workspaces">
-  <div class="filter-pills" data-workspace-filters role="group" aria-label="Filter by status">
+<section class="panel-toolbar" data-table-controls data-panel="workspace-list-panel" data-page-size="20" aria-label="Filter and search workspaces">
+  <div class="filter-pills" role="group" aria-label="Filter by status">
     <button type="button" class="filter-pill active" data-filter="all">All <span class="filter-count" data-count="all">{{ index $counts "all" }}</span></button>
     <button type="button" class="filter-pill" data-filter="running">Running <span class="filter-count" data-count="running">{{ index $counts "running" }}</span></button>
     <button type="button" class="filter-pill" data-filter="stopped">Stopped <span class="filter-count" data-count="stopped">{{ index $counts "stopped" }}</span></button>
     <button type="button" class="filter-pill" data-filter="error">Error <span class="filter-count" data-count="error">{{ index $counts "error" }}</span></button>
   </div>
-  <input type="search" class="workspace-search" data-workspace-search placeholder="Search workspaces&hellip;" aria-label="Search workspaces">
+  <input type="search" class="table-search" data-table-search placeholder="Search workspaces&hellip;" aria-label="Search workspaces">
 </section>
 {{ template "workspaces-list-panel" . }}
-<script src="/static/js/workspaces.js" defer></script>
+{{ template "table-pager" "workspace-list-panel" }}
+<script src="/static/js/table-controls.js" defer></script>
 {{ template "base-end" . }}
+{{ end }}
+
+{{ define "table-pager" }}
+<nav class="table-pager" data-table-pager="{{ . }}" aria-label="Pagination" hidden>
+  <button type="button" class="table-pager-button" data-pager-prev>Previous</button>
+  <span class="table-pager-status" data-pager-status>Page 1 of 1</span>
+  <button type="button" class="table-pager-button" data-pager-next>Next</button>
+</nav>
 {{ end }}
 
 {{ define "workspaces-list-fragment" }}
