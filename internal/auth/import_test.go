@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/cows-project/cows/internal/domain"
 )
@@ -54,5 +55,58 @@ func TestUserImportPreviewsAndCommitsNewAndExistingUsers(t *testing.T) {
 	}
 	if _, _, err := service.Authenticate(ctx, "new-user", results[1].Password); err != nil {
 		t.Fatalf("authenticate imported user: %v", err)
+	}
+}
+
+func TestImportIssuesInvitationsWhenAvailable(t *testing.T) {
+	ctx := context.Background()
+	service, _, adminID := invitationTestService(t)
+	service.SetInvitationPolicy(true, 24*time.Hour)
+
+	results, err := service.ImportUsers(ctx, adminID, []ImportUserInput{
+		{Username: "rowone", Email: "rowone@example.test", DisplayName: "Row One"},
+		{Username: "rowtwo", DisplayName: "Row Two"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("import users: %v", err)
+	}
+	if results[0].Invitation.Token == "" {
+		t.Fatal("a row with an address must get an invitation")
+	}
+	if results[0].Password != "" {
+		t.Fatal("an invited row must not also carry a temporary password")
+	}
+	// A row without an address cannot be invited and keeps the temporary
+	// password an administrator has to relay.
+	if results[1].Invitation.Token != "" || results[1].Password == "" {
+		t.Fatal("a row without an address must fall back to a temporary password")
+	}
+	// The invited account must not be openable with anything but its link.
+	if _, _, err := service.Authenticate(ctx, "rowone", results[1].Password); err == nil {
+		t.Fatal("an invited account accepted another row's password")
+	}
+	if _, err := service.AcceptInvitation(ctx, results[0].Invitation.Token, "chosen-password-1", "chosen-password-1"); err != nil {
+		t.Fatalf("accept the imported invitation: %v", err)
+	}
+	if _, _, err := service.Authenticate(ctx, "rowone", "chosen-password-1"); err != nil {
+		t.Fatalf("authenticate after accepting: %v", err)
+	}
+}
+
+func TestImportFallsBackToPasswordsWhenInvitationsAreUnavailable(t *testing.T) {
+	ctx := context.Background()
+	service, _, adminID := invitationTestService(t)
+
+	results, err := service.ImportUsers(ctx, adminID, []ImportUserInput{
+		{Username: "rowone", Email: "rowone@example.test", DisplayName: "Row One"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("import users: %v", err)
+	}
+	if results[0].Invitation.Token != "" || results[0].Password == "" {
+		t.Fatal("without invitations the import must keep issuing temporary passwords")
+	}
+	if _, _, err := service.Authenticate(ctx, "rowone", results[0].Password); err != nil {
+		t.Fatalf("the temporary password must work: %v", err)
 	}
 }

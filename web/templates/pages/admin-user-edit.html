@@ -5,6 +5,7 @@
   <h1 id="edit-user-title">Edit user</h1>
   <p class="lede"><strong>{{ .EditUser.DisplayName }}</strong> · {{ .EditUser.Username }}</p>
   {{ if .Error }}<p class="alert alert-error" role="alert">{{ .Error }}</p>{{ end }}
+  {{ if .Notice }}<p class="alert" role="status">{{ .Notice }}</p>{{ end }}
   <form class="form-panel" method="post" action="/admin/users/{{ .EditUser.ID }}/groups">
     <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
     <fieldset>
@@ -48,6 +49,28 @@
       </form>
     {{ end }}
   </section>
+  {{ if .EditUser.Email }}
+    {{ if or .InvitationsEnabled .PasswordResetEnabled }}
+  <section class="form-panel" aria-labelledby="user-credentials-title">
+    <h2 id="user-credentials-title">Account credentials</h2>
+    <p class="muted">Send a single-use link to {{ .EditUser.Email }} instead of relaying a password.</p>
+    <div class="form-actions">
+      {{ if .InvitationsEnabled }}
+      <form method="post" action="/admin/users/{{ .EditUser.ID }}/invitation">
+        <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
+        <button class="secondary-button" type="submit">Send invitation</button>
+      </form>
+      {{ end }}
+      {{ if .PasswordResetEnabled }}
+      <form method="post" action="/admin/users/{{ .EditUser.ID }}/password-reset">
+        <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
+        <button class="secondary-button" type="submit">Send password reset link</button>
+      </form>
+      {{ end }}
+    </div>
+  </section>
+    {{ end }}
+  {{ end }}
 </section>
 {{ template "base-end" . }}
 {{ end }}

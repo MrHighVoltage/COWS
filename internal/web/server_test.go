@@ -1200,3 +1200,69 @@ func TestAdminDirectoriesRecoversStorageAfterOwnerDeleted(t *testing.T) {
 		t.Fatalf("retained directories after admin delete = %d, err=%v, want 0", len(directories), err)
 	}
 }
+
+// testServerWithOptions mirrors testServer but lets a test choose the flags
+// that gate the credential-link routes.
+func testServerWithOptions(t *testing.T, options Options) *Server {
+	t.Helper()
+	db, err := database.Open(context.Background(), filepath.Join(t.TempDir(), "cows.db"))
+	if err != nil {
+		t.Fatalf("open test database: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store := sqlite.New(db)
+	authService, err := auth.New(store, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth service: %v", err)
+	}
+	options.SessionLifetime = time.Hour
+	server, err := New(db, authService, workspace.New(store), quota.New(store), nil, options)
+	if err != nil {
+		t.Fatalf("create web server: %v", err)
+	}
+	return server
+}
+
+func TestInvitationRoutesAreHiddenUntilInvitationsAreEnabled(t *testing.T) {
+	disabled := testServerWithOptions(t, Options{InvitationsEnabled: false})
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		recorder := httptest.NewRecorder()
+		disabled.Handler().ServeHTTP(recorder, httptest.NewRequest(method, "/invitation/accept?token=abc", nil))
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("%s /invitation/accept with invitations disabled = %d, want 404", method, recorder.Code)
+		}
+	}
+
+	enabled := testServerWithOptions(t, Options{InvitationsEnabled: true})
+	recorder := httptest.NewRecorder()
+	enabled.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/invitation/accept?token=abc", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET /invitation/accept with invitations enabled = %d, want 200", recorder.Code)
+	}
+}
+
+func TestInvitationAcceptRequiresCSRF(t *testing.T) {
+	server := testServerWithOptions(t, Options{InvitationsEnabled: true})
+	request := httptest.NewRequest(http.MethodPost, "/invitation/accept", strings.NewReader("token=abc&new_password=chosen-password-1&confirm_password=chosen-password-1"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("POST /invitation/accept without a CSRF token = %d, want 403", recorder.Code)
+	}
+}
+
+func TestLoginPageLinksPasswordResetOnlyWhenItIsUsable(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		server := testServerWithOptions(t, Options{PasswordResetEnabled: enabled})
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/login", nil))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("GET /login = %d", recorder.Code)
+		}
+		linked := strings.Contains(recorder.Body.String(), `href="/password/reset"`)
+		if linked != enabled {
+			t.Fatalf("password reset link present = %v, want %v", linked, enabled)
+		}
+	}
+}

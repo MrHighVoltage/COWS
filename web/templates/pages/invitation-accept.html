@@ -1,0 +1,19 @@
+{{ define "invitation-accept-page" }}
+{{ template "base-start" . }}
+<section class="narrow-section" aria-labelledby="invitation-accept-title">
+  <p class="eyebrow">Account setup</p>
+  <h1 id="invitation-accept-title">Set your password</h1>
+  <p class="form-note">Choose a password to finish setting up your COWS account. This link can be used once.</p>
+  {{ if .PasswordReset.Error }}<p class="alert alert-error" role="alert">{{ .PasswordReset.Error }}</p>{{ end }}
+  <form class="form-panel" method="post" action="/invitation/accept">
+    <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
+    <input type="hidden" name="token" value="{{ .PasswordReset.Token }}">
+    <label for="invitation-new-password">Password</label>
+    <input id="invitation-new-password" name="new_password" type="password" minlength="12" maxlength="72" autocomplete="new-password" required autofocus>
+    <label for="invitation-confirm-password">Confirm password</label>
+    <input id="invitation-confirm-password" name="confirm_password" type="password" minlength="12" maxlength="72" autocomplete="new-password" required>
+    <button class="primary-button" type="submit">Set password</button>
+  </form>
+</section>
+{{ template "base-end" . }}
+{{ end }}
