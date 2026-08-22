@@ -25,6 +25,9 @@ Template image availability and explicit pull changes must follow
 `docs/decisions/0019-template-image-availability-and-pulls.md`.
 Local password reset and email outbox changes must follow
 `docs/decisions/0020-password-reset-and-email-outbox.md`.
+Adaptive lifecycle warning, workspace deletion notice, account invitation,
+and unified email outbox changes must follow
+`docs/decisions/0027-adaptive-lifecycle-warnings-and-account-invitations.md`.
 Audit and live metrics changes must follow
 `docs/decisions/0021-audit-and-live-metrics.md`.
 Named-volume recovery changes must follow
@@ -119,9 +122,20 @@ the dedicated hashed-token/email-outbox design; do not add email verification
 or institutional auth incidentally.
 
 Email delivery is optional and must not block workspace lifecycle operations.
-Use a persisted, deduplicated notification boundary with retries, never log
-SMTP credentials or message contents, and keep warning delivery separate from
-the authoritative timeout worker.
+Use the single persisted, deduplicated outbox with retries, never log SMTP
+credentials or message contents, and keep warning delivery separate from the
+authoritative timeout worker. Lifecycle warning lead times are derived from
+each workspace's own timeout window and are suppressed below a floor; do not
+reintroduce a single configured lead time. A deletion notice is sent only for
+a deletion the owner did not perform, and never names a volume, host path,
+runtime identifier, or archive location.
+
+An account created without a password stores an unusable bcrypt hash, never an
+empty or sentinel value, and is opened only through a mailed single-use
+invitation. Invitation and reset tokens are purpose-scoped and must never be
+interchangeable. Reset requests are throttled per account without changing the
+response, so the endpoint stays non-enumerating. Invitation and reset links
+require both email delivery and a configured external base URL.
 
 Project code is intended to remain under `AGPL-3.0-or-later`; consult
 `docs/decisions/0018-project-license.md` before changing licensing or

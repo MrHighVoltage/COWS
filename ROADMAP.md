@@ -22,7 +22,8 @@ Implemented now:
   archival;
 - authenticated terminal, noVNC desktop, restricted file manager, bounded
   uploads, and streamed directory ZIP downloads;
-- optional persisted lifecycle-warning email delivery;
+- optional persisted email delivery for lifecycle warnings, deletion notices,
+  password resets, and account invitations;
 - local HTMX, Alpine.js, xterm.js, noVNC, and Nerd Font assets vendored and
   embedded in the binary, so no Node.js or npm toolchain and no third-party CDN
   is required at build or run time;
@@ -180,12 +181,14 @@ desktop-enabled workspaces.
 
 Implemented: live Podman CPU, memory, and PID observations, host overbooking
 settings, user-visible allocation bars, timeout warning events, optional SMTP
-delivery, persisted deduplication, bounded retries, and separate notification
-processing.
+delivery, persisted deduplication, bounded retries, separate notification
+processing, a single unified outbox, warning lead times derived from each
+workspace's own timeout window, workspace deletion notices, account
+invitations, registration welcome messages, and per-account reset throttling.
 
 Remaining work: richer capacity views, historical metrics only if justified,
-operational alerting, and additional warning policies. Email must remain
-advisory and must never decide or block lifecycle actions.
+and operational alerting. Email must remain advisory and must never decide or
+block lifecycle actions.
 
 ## Milestone 7: Restricted file manager — initial implementation
 
@@ -202,8 +205,9 @@ bulk operations, and archive extraction only after a dedicated security design.
 
 ## Milestone 8: Local password reset and operations visibility — initial implementation
 
-Local password-reset email with hashed single-use tokens, a retryable email
-outbox, a bounded administrator audit view, live runtime metrics, and
+Local password-reset email with hashed single-use, purpose-scoped tokens, a
+retryable unified email outbox, administrator-triggered reset and invitation
+links, a bounded administrator audit view, live runtime metrics, and
 administrator retained-volume recovery/download/removal. Institutional
 authentication is deliberately excluded from the current plan. Offline
 administrator credential recovery is covered separately in Milestone 1.

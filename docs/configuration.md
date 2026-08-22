@@ -100,8 +100,45 @@ Podman service if it must run without an interactive login.
 | `COWS_SMTP_USERNAME` | empty | Optional SMTP username. |
 | `COWS_SMTP_PASSWORD` | empty | Optional SMTP password. |
 | `COWS_SMTP_REQUIRE_TLS` | `true` | Require STARTTLS unless using a trusted local relay. |
-| `COWS_EMAIL_WARNING_LEAD_TIME` | `24h` | Lead time for timeout warning messages. |
-| `COWS_EMAIL_RETRY_INTERVAL` | `15m` | Retry interval for failed warning delivery. |
+| `COWS_EMAIL_WARNING_LEAD_DIVISOR` | `3` | Fraction of a workspace's timeout window used as the warning lead time. |
+| `COWS_EMAIL_WARNING_LEAD_MAX` | `24h` | Upper bound on the warning lead time. |
+| `COWS_EMAIL_WARNING_LEAD_MIN` | `1h` | Lower bound. A window whose lead falls below this sends no warning at all. |
+| `COWS_EMAIL_RETRY_INTERVAL` | `15m` | Retry interval for failed delivery. |
+| `COWS_INVITATION_LIFETIME` | `24h` | How long an account invitation link stays valid. |
+| `COWS_PASSWORD_RESET_LIFETIME` | `2h` | How long a password reset link stays valid. |
+| `COWS_PASSWORD_RESET_MIN_INTERVAL` | `5m` | Minimum interval between reset messages for one account. |
+
+### Warning lead times
+
+The lead time for a lifecycle warning is derived from the workspace's own
+timeout window rather than configured directly:
+
+```
+lead = min(window / COWS_EMAIL_WARNING_LEAD_DIVISOR, COWS_EMAIL_WARNING_LEAD_MAX)
+```
+
+No warning is sent when that lead falls below `COWS_EMAIL_WARNING_LEAD_MIN`. At
+`MAX * DIVISOR` the two bounds meet, so with the defaults a three-day window
+yields exactly 24 hours from either direction and the function is continuous.
+
+With the defaults, a one-hour no-connection stop window sends nothing — an
+automatic stop is reversible, and a twenty-minute notice is noise. A six-hour
+window warns two hours ahead; any retention window of three days or more warns
+24 hours ahead.
+
+`COWS_EMAIL_WARNING_LEAD_TIME` was removed and is now **rejected at startup**.
+A deployment that sets it will not start until the key is replaced by the three
+above. This is deliberate: silently changing warning behavior under a key that
+still looks like it works would be worse than a failed start.
+
+### Account invitations
+
+An administrator can create a user without a password, in which case COWS
+mails a single-use invitation link that sets the first password. This requires
+both `COWS_EMAIL_ENABLED` and `COWS_EXTERNAL_BASE_URL`; without them the
+password field stays mandatory and the temporary-password paths are unchanged.
+The same condition gates the password-reset link on the login page and the
+administrator's send-invitation and send-reset-link actions.
 
 Startup host settings seed the persistent Settings row only when it does not
 exist. Administrators can change host storage, reserved storage, and CPU and

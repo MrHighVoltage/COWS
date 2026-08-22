@@ -205,12 +205,27 @@ group, avoiding stale access-policy interpretation.
 ## Email notification boundary
 
 Timeout evaluation and reconciliation remain authoritative. A separate
-notification worker observes upcoming stop and deletion deadlines, creates a
-deduplicated SQLite event, and attempts delivery through an optional standard
-library SMTP sender. The same worker delivers local password-reset messages
-from a separate outbox. Delivery status and retry timing are control-plane
-data, but messages never contain passwords, terminal output, runtime IDs, host
-paths, or internal addresses. A mail failure cannot prevent a stop or delete.
+notification worker observes upcoming stop and deletion deadlines and attempts
+delivery through an optional standard library SMTP sender. Every outbound
+message — lifecycle warnings, deletion notices, password resets, account
+invitations, and registration welcomes — lives in one `email_messages` outbox
+and is delivered by one retrying loop. A nullable dedupe key under a partial
+unique index gives lifecycle warnings their per-workspace deduplication while
+leaving one-shot mail unconstrained.
+
+Warning lead times are not configured directly. Each is derived from the
+workspace's own timeout window as `min(window / divisor, max)` and suppressed
+below a floor, so a short no-connection stop window sends nothing while a long
+retention window warns a bounded time ahead. Only the two lifecycle warning
+kinds are re-validated against live state immediately before sending; every
+other kind describes something that already happened and is always current.
+
+Delivery status and retry timing are control-plane data, but messages never
+contain passwords, tokens beyond their own link, terminal output, runtime IDs,
+volume names, host paths, or internal addresses. A mail failure cannot prevent
+a stop or delete, and enqueueing is best-effort at every call site: a deletion
+that has already happened is never reported as failed because its advisory
+notice could not be queued.
 
 Administrators can query bounded audit history, inspect live host/workspace
 metrics on the container runtime view, and recover retained named volumes.
