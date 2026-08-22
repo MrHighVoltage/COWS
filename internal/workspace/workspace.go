@@ -573,8 +573,8 @@ func (s *Service) GetWorkspace(ctx context.Context, actorID, workspaceID string)
 	return workspace, nil
 }
 
-// GetWorkspaceWithUsage is GetWorkspace plus the same live storage/resource
-// enrichment ListWorkspaces applies to every row. GetWorkspace itself stays
+// GetWorkspaceWithUsage is GetWorkspace plus the same template-name and live
+// storage/resource enrichment ListWorkspaces applies to every row. GetWorkspace itself stays
 // bare because it's also called from many internal lifecycle paths
 // (start/stop/delete/mounts) that only need the stored record and shouldn't
 // pay for a storage measurement or a runtime stats call on every use; this
@@ -586,7 +586,11 @@ func (s *Service) GetWorkspaceWithUsage(ctx context.Context, actorID, workspaceI
 	if err != nil {
 		return domain.Workspace{}, err
 	}
-	values, err := s.withStorageUsage(ctx, []domain.Workspace{value})
+	values, err := s.withTemplateNames(ctx, []domain.Workspace{value})
+	if err != nil {
+		return domain.Workspace{}, err
+	}
+	values, err = s.withStorageUsage(ctx, values)
 	if err != nil {
 		return domain.Workspace{}, err
 	}
