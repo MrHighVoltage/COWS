@@ -668,13 +668,9 @@ code { color: var(--text-mute); font-family: var(--font-mono); font-size: .82rem
   .access-control-bar .badge { margin-right: 0; }
   .file-actions, .file-actions form { align-items: stretch; flex-direction: column; }
   .file-actions form > * { width: 100%; }
-  .actions-column { position: sticky; right: 0; z-index: 1; background: var(--surface); box-shadow: -.65rem 0 .8rem rgb(16 22 29 / 7%); }
-  tbody tr:hover .actions-column { background: var(--surface-sunk); }
-  /* The workspace table's actions column now holds at most two small
-     buttons (Start, or Stop+Restart) - freezing it in place while
+  /* Both actions columns now hold at most two small buttons (the runtime
+     table holds exactly one: Start or Stop) - freezing them in place while
      scrolling is no longer pulling its weight the way it did with the
      larger button set, and reads as buttons visually detaching from
-     their row instead. Let it scroll like every other column. */
-  .workspace-table .actions-column { position: static; min-width: 9rem; background: transparent; box-shadow: none; }
-  .workspace-table tbody tr:hover .actions-column { background: transparent; }
+     their row instead. Let them scroll like every other column. */
 }
