@@ -858,6 +858,11 @@ func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID stri
 			return err
 		}
 		s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "workspace.deleted", TargetType: "workspace", TargetID: value.ID, Metadata: map[string]string{"runtime_id": value.RuntimeID, "archive_path": archivePath}})
+		// Someone deleting their own workspace just saw it happen; only tell
+		// an owner about a deletion they did not perform.
+		if actorID != value.OwnerUserID {
+			_ = s.enqueueDeletionNotice(ctx, value, "an administrator deleted it", retainedDirectory != nil)
+		}
 		return nil
 	}
 	if value.ObservedState == string(runtime.StateRunning) {
@@ -926,6 +931,9 @@ func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID stri
 		return err
 	}
 	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "workspace.deleted", TargetType: "workspace", TargetID: value.ID, Metadata: map[string]string{"retained_volume_count": fmt.Sprintf("%d", len(retainedVolumes)), "runtime_id": value.RuntimeID, "archive_path": archivePath}})
+	if actorID != value.OwnerUserID {
+		_ = s.enqueueDeletionNotice(ctx, value, "an administrator deleted it", len(retainedVolumes) > 0 || retainedDirectory != nil)
+	}
 	return nil
 }
 
@@ -1298,6 +1306,10 @@ func (s *Service) RunTimeouts(ctx context.Context) error {
 					return
 				}
 				s.recordAudit(ctx, domain.AuditEvent{EventType: "workspace.timeout_container_deleted", TargetType: "workspace", TargetID: value.ID})
+				// Queued after the cancellation above, which sweeps every
+				// pending message for this workspace. Best-effort: the
+				// deletion has already happened.
+				_ = s.enqueueDeletionNotice(ctx, value, "the stopped-workspace retention period expired", false)
 			}
 		}()
 		release()

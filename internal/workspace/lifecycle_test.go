@@ -490,3 +490,107 @@ func TestDeleteWorkspaceSurvivesRetainingStorageFailureAndSelfHealsOnRetry(t *te
 		t.Fatalf("final archived content = %q, err=%v, want original content", restoredContent, err)
 	}
 }
+
+// deletionNoticeFixture builds a stopped workspace whose owner has a mailbox,
+// so the notice paths have somewhere to deliver to.
+func deletionNoticeFixture(t *testing.T, username string) (*Service, repository.Store, string, string, string) {
+	t.Helper()
+	base := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	service, authService, adminID, store := testService(t)
+	mountRoot := t.TempDir()
+	service = NewWithRuntimeAndMountRoot(store, nil, mountRoot)
+	input := validTemplateInput()
+	input.InitialConnectionTimeoutSeconds = 1
+	input.StoppedRetentionSeconds = 1
+	template, err := service.CreateTemplate(context.Background(), adminID, input)
+	if err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+	if _, err := authService.CreateUser(context.Background(), adminID, auth.CreateUserInput{Username: username, Email: username + "@example.test", Password: "another correct password", Role: domain.RoleUser}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	user, _, err := authService.Authenticate(context.Background(), username, "another correct password")
+	if err != nil {
+		t.Fatalf("authenticate user: %v", err)
+	}
+	if err := authService.ChangePassword(context.Background(), user.ID, "another correct password", "changed notice password"); err != nil {
+		t.Fatalf("change password: %v", err)
+	}
+	value, err := service.CreateWorkspace(context.Background(), user.ID, CreateWorkspaceInput{Name: "Notice workspace", TemplateID: template.ID})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	fake := &lifecycleRuntime{}
+	service = NewWithRuntimeAndMountRoot(store, fake, mountRoot)
+	service.now = func() time.Time { return base }
+	if err := service.StartWorkspace(context.Background(), user.ID, value.ID); err != nil {
+		t.Fatalf("start workspace: %v", err)
+	}
+	service.now = func() time.Time { return base.Add(2 * time.Second) }
+	if err := service.RunTimeouts(context.Background()); err != nil {
+		t.Fatalf("run stop timeout: %v", err)
+	}
+	service.now = func() time.Time { return base.Add(4 * time.Second) }
+	return service, store, user.ID, adminID, value.ID
+}
+
+func deletionNotices(t *testing.T, store repository.Store) []domain.EmailMessage {
+	t.Helper()
+	pending, err := store.ListPendingEmailMessages(context.Background(), time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC), 50)
+	if err != nil {
+		t.Fatalf("list pending messages: %v", err)
+	}
+	notices := make([]domain.EmailMessage, 0)
+	for _, message := range pending {
+		if message.Kind == domain.EmailKindWorkspaceDeleted {
+			notices = append(notices, message)
+		}
+	}
+	return notices
+}
+
+func TestTimeoutDeletionQueuesAnOwnerNotice(t *testing.T) {
+	service, store, _, _, workspaceID := deletionNoticeFixture(t, "timeout-notice-user")
+	if err := service.RunTimeouts(context.Background()); err != nil {
+		t.Fatalf("run delete timeout: %v", err)
+	}
+	notices := deletionNotices(t, store)
+	if len(notices) != 1 {
+		t.Fatalf("expected one deletion notice, got %d", len(notices))
+	}
+	if notices[0].Recipient != "timeout-notice-user@example.test" {
+		t.Fatalf("notice recipient = %q", notices[0].Recipient)
+	}
+	// The notice must survive the cancellation sweep that runs in the same
+	// deletion path.
+	if notices[0].DedupeKey != "workspace:"+workspaceID+":workspace_deleted" {
+		t.Fatalf("notice dedupe key = %q", notices[0].DedupeKey)
+	}
+	for _, leak := range []string{"runtime-123", "/", "cows-"} {
+		if strings.Contains(notices[0].Body, leak) {
+			t.Fatalf("deletion notice leaked %q: %s", leak, notices[0].Body)
+		}
+	}
+}
+
+func TestAdministratorDeletionQueuesANoticeButOwnerDeletionDoesNot(t *testing.T) {
+	service, store, ownerID, _, workspaceID := deletionNoticeFixture(t, "owner-notice-user")
+	if err := service.DeleteWorkspace(context.Background(), ownerID, workspaceID); err != nil {
+		t.Fatalf("owner delete: %v", err)
+	}
+	if notices := deletionNotices(t, store); len(notices) != 0 {
+		t.Fatalf("an owner deleting their own workspace must not be mailed about it: %+v", notices)
+	}
+
+	service, store, _, adminID, workspaceID := deletionNoticeFixture(t, "admin-notice-user")
+	if err := service.DeleteWorkspace(context.Background(), adminID, workspaceID); err != nil {
+		t.Fatalf("administrator delete: %v", err)
+	}
+	notices := deletionNotices(t, store)
+	if len(notices) != 1 {
+		t.Fatalf("expected one administrator deletion notice, got %d", len(notices))
+	}
+	if !strings.Contains(notices[0].Body, "administrator") {
+		t.Fatalf("notice does not name the reason: %s", notices[0].Body)
+	}
+}
