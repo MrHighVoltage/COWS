@@ -45,8 +45,13 @@ type Config struct {
 	SMTPUsername                string
 	SMTPPassword                string
 	SMTPRequireTLS              bool
-	EmailWarningLeadTime        time.Duration
+	EmailWarningLeadDivisor     int
+	EmailWarningLeadMax         time.Duration
+	EmailWarningLeadMin         time.Duration
 	EmailRetryInterval          time.Duration
+	InvitationLifetime          time.Duration
+	PasswordResetLifetime       time.Duration
+	PasswordResetMinInterval    time.Duration
 }
 
 func Load(args []string) (Config, error) {
@@ -85,8 +90,13 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	smtpUsername := envOr(lookup, "COWS_SMTP_USERNAME", "")
 	smtpPassword := envOr(lookup, "COWS_SMTP_PASSWORD", "")
 	smtpRequireTLSValue := envOr(lookup, "COWS_SMTP_REQUIRE_TLS", "true")
-	emailWarningLeadValue := envOr(lookup, "COWS_EMAIL_WARNING_LEAD_TIME", "24h")
+	emailWarningDivisorValue := envOr(lookup, "COWS_EMAIL_WARNING_LEAD_DIVISOR", "3")
+	emailWarningMaxValue := envOr(lookup, "COWS_EMAIL_WARNING_LEAD_MAX", "24h")
+	emailWarningMinValue := envOr(lookup, "COWS_EMAIL_WARNING_LEAD_MIN", "1h")
 	emailRetryIntervalValue := envOr(lookup, "COWS_EMAIL_RETRY_INTERVAL", "15m")
+	invitationLifetimeValue := envOr(lookup, "COWS_INVITATION_LIFETIME", "24h")
+	passwordResetLifetimeValue := envOr(lookup, "COWS_PASSWORD_RESET_LIFETIME", "2h")
+	passwordResetMinIntervalValue := envOr(lookup, "COWS_PASSWORD_RESET_MIN_INTERVAL", "5m")
 	cookieSecure, err := strconv.ParseBool(cookieSecureValue)
 	if err != nil {
 		return Config{}, fmt.Errorf("cookie secure must be true or false: %q", cookieSecureValue)
@@ -140,8 +150,13 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	flags.StringVar(&smtpUsername, "smtp-username", smtpUsername, "SMTP username")
 	flags.StringVar(&smtpPassword, "smtp-password", smtpPassword, "SMTP password")
 	flags.BoolVar(&smtpRequireTLS, "smtp-require-tls", smtpRequireTLS, "require STARTTLS for email delivery")
-	flags.StringVar(&emailWarningLeadValue, "email-warning-lead-time", emailWarningLeadValue, "lead time for lifecycle warning emails")
+	flags.StringVar(&emailWarningDivisorValue, "email-warning-lead-divisor", emailWarningDivisorValue, "fraction of the timeout window used as warning lead time")
+	flags.StringVar(&emailWarningMaxValue, "email-warning-lead-max", emailWarningMaxValue, "maximum lead time for lifecycle warning emails")
+	flags.StringVar(&emailWarningMinValue, "email-warning-lead-min", emailWarningMinValue, "minimum lead time below which no lifecycle warning is sent")
 	flags.StringVar(&emailRetryIntervalValue, "email-retry-interval", emailRetryIntervalValue, "retry interval for failed warning emails")
+	flags.StringVar(&invitationLifetimeValue, "invitation-lifetime", invitationLifetimeValue, "how long an account invitation link stays valid")
+	flags.StringVar(&passwordResetLifetimeValue, "password-reset-lifetime", passwordResetLifetimeValue, "how long a password reset link stays valid")
+	flags.StringVar(&passwordResetMinIntervalValue, "password-reset-min-interval", passwordResetMinIntervalValue, "minimum interval between password reset messages for one account")
 	if err := flags.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -214,9 +229,38 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	if err != nil || smtpPort < 1 || smtpPort > 65535 {
 		return Config{}, fmt.Errorf("SMTP port must be between 1 and 65535: %q", smtpPortValue)
 	}
-	emailWarningLeadTime, err := time.ParseDuration(emailWarningLeadValue)
-	if err != nil || emailWarningLeadTime <= 0 {
-		return Config{}, fmt.Errorf("email warning lead time must be positive: %q", emailWarningLeadValue)
+	emailWarningLeadDivisor, err := strconv.Atoi(strings.TrimSpace(emailWarningDivisorValue))
+	if err != nil || emailWarningLeadDivisor < 1 {
+		return Config{}, fmt.Errorf("email warning lead divisor must be at least 1: %q", emailWarningDivisorValue)
+	}
+	emailWarningLeadMax, err := time.ParseDuration(emailWarningMaxValue)
+	if err != nil || emailWarningLeadMax <= 0 {
+		return Config{}, fmt.Errorf("email warning lead maximum must be positive: %q", emailWarningMaxValue)
+	}
+	emailWarningLeadMin, err := time.ParseDuration(emailWarningMinValue)
+	if err != nil || emailWarningLeadMin <= 0 {
+		return Config{}, fmt.Errorf("email warning lead minimum must be positive: %q", emailWarningMinValue)
+	}
+	if emailWarningLeadMin > emailWarningLeadMax {
+		return Config{}, fmt.Errorf("email warning lead minimum %q must not exceed the maximum %q", emailWarningMinValue, emailWarningMaxValue)
+	}
+	// COWS_EMAIL_WARNING_LEAD_TIME was replaced by a window-relative policy in
+	// decision 0027. Fail rather than silently changing warning behavior under
+	// a key that still looks like it works.
+	if _, ok := lookup("COWS_EMAIL_WARNING_LEAD_TIME"); ok {
+		return Config{}, errors.New("COWS_EMAIL_WARNING_LEAD_TIME was removed; use COWS_EMAIL_WARNING_LEAD_DIVISOR, COWS_EMAIL_WARNING_LEAD_MAX, and COWS_EMAIL_WARNING_LEAD_MIN")
+	}
+	invitationLifetime, err := time.ParseDuration(invitationLifetimeValue)
+	if err != nil || invitationLifetime <= 0 {
+		return Config{}, fmt.Errorf("invitation lifetime must be positive: %q", invitationLifetimeValue)
+	}
+	passwordResetLifetime, err := time.ParseDuration(passwordResetLifetimeValue)
+	if err != nil || passwordResetLifetime <= 0 {
+		return Config{}, fmt.Errorf("password reset lifetime must be positive: %q", passwordResetLifetimeValue)
+	}
+	passwordResetMinInterval, err := time.ParseDuration(passwordResetMinIntervalValue)
+	if err != nil || passwordResetMinInterval <= 0 {
+		return Config{}, fmt.Errorf("password reset minimum interval must be positive: %q", passwordResetMinIntervalValue)
 	}
 	emailRetryInterval, err := time.ParseDuration(emailRetryIntervalValue)
 	if err != nil || emailRetryInterval <= 0 {
@@ -273,8 +317,13 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 		SMTPUsername:                smtpUsername,
 		SMTPPassword:                smtpPassword,
 		SMTPRequireTLS:              smtpRequireTLS,
-		EmailWarningLeadTime:        emailWarningLeadTime,
+		EmailWarningLeadDivisor:     emailWarningLeadDivisor,
+		EmailWarningLeadMax:         emailWarningLeadMax,
+		EmailWarningLeadMin:         emailWarningLeadMin,
 		EmailRetryInterval:          emailRetryInterval,
+		InvitationLifetime:          invitationLifetime,
+		PasswordResetLifetime:       passwordResetLifetime,
+		PasswordResetMinInterval:    passwordResetMinInterval,
 	}, nil
 }
 

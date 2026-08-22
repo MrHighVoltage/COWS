@@ -108,7 +108,11 @@ func run(ctx context.Context, args []string) error {
 		if err != nil {
 			return fmt.Errorf("initialize email sender: %w", err)
 		}
-		notificationService, err = notifications.New(store, sender, cfg.EmailWarningLeadTime, cfg.EmailRetryInterval)
+		notificationService, err = notifications.New(store, sender, notifications.LeadPolicy{
+			Divisor: cfg.EmailWarningLeadDivisor,
+			Max:     cfg.EmailWarningLeadMax,
+			Min:     cfg.EmailWarningLeadMin,
+		}, cfg.EmailRetryInterval)
 		if err != nil {
 			return fmt.Errorf("initialize notification service: %w", err)
 		}

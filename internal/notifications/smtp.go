@@ -11,8 +11,6 @@ import (
 	"net/smtp"
 	"strconv"
 	"time"
-
-	"github.com/cows-project/cows/internal/domain"
 )
 
 type SMTPConfig struct {
@@ -42,15 +40,7 @@ func NewSMTPSender(config SMTPConfig) (*SMTPSender, error) {
 	return &SMTPSender{config: config}, nil
 }
 
-func (s *SMTPSender) Send(ctx context.Context, notification domain.EmailNotification) error {
-	return s.sendMessage(ctx, notification.Recipient, notification.Subject, notification.Body)
-}
-
-func (s *SMTPSender) SendMessage(ctx context.Context, recipient, subject, body string) error {
-	return s.sendMessage(ctx, recipient, subject, body)
-}
-
-func (s *SMTPSender) sendMessage(ctx context.Context, recipient, subject, body string) error {
+func (s *SMTPSender) Send(ctx context.Context, recipient, subject, body string) error {
 	dialer := &net.Dialer{Timeout: 15 * time.Second}
 	connection, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(s.config.Host, strconv.Itoa(s.config.Port)))
 	if err != nil {

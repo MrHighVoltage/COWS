@@ -72,22 +72,19 @@ type PasswordResetRepository interface {
 	CreatePasswordResetToken(ctx context.Context, token domain.PasswordResetToken) error
 }
 
-type PasswordResetEmailRepository interface {
-	UpsertPasswordResetEmail(ctx context.Context, email domain.PasswordResetEmail) error
-	ListPendingPasswordResetEmails(ctx context.Context, now time.Time, limit int) ([]domain.PasswordResetEmail, error)
-	MarkPasswordResetEmailSent(ctx context.Context, id int64, sentAt time.Time) error
-	MarkPasswordResetEmailFailed(ctx context.Context, id int64, attempts int, nextAttemptAt time.Time, errorCode string) error
-	MarkPasswordResetEmailCanceled(ctx context.Context, id int64) error
-}
-
-type NotificationRepository interface {
-	UpsertEmailNotification(ctx context.Context, notification domain.EmailNotification) error
-	ListPendingEmailNotifications(ctx context.Context, now time.Time, limit int) ([]domain.EmailNotification, error)
-	MarkEmailNotificationSent(ctx context.Context, id int64, sentAt time.Time) error
-	MarkEmailNotificationFailed(ctx context.Context, id int64, attempts int, nextAttemptAt time.Time, errorCode string) error
-	MarkEmailNotificationCanceled(ctx context.Context, id int64) error
-	CancelEmailNotificationsForWorkspace(ctx context.Context, workspaceID string) error
-	CancelEmailNotificationsForUser(ctx context.Context, userID string) error
+type EmailOutboxRepository interface {
+	// UpsertEmailMessage queues a message. A non-empty DedupeKey updates any
+	// existing row with that key instead of inserting a second one.
+	UpsertEmailMessage(ctx context.Context, message domain.EmailMessage) error
+	ListPendingEmailMessages(ctx context.Context, now time.Time, limit int) ([]domain.EmailMessage, error)
+	MarkEmailMessageSent(ctx context.Context, id int64, sentAt time.Time) error
+	MarkEmailMessageFailed(ctx context.Context, id int64, attempts int, nextAttemptAt time.Time, errorCode string) error
+	MarkEmailMessageCanceled(ctx context.Context, id int64) error
+	CancelEmailMessagesForWorkspace(ctx context.Context, workspaceID string) error
+	CancelEmailMessagesForUser(ctx context.Context, userID string) error
+	// CountRecentEmailMessages counts messages of one kind queued for a user at
+	// or after `since`, regardless of status. It backs reset throttling.
+	CountRecentEmailMessages(ctx context.Context, userID, kind string, since time.Time) (int, error)
 }
 
 type TemplateRepository interface {
@@ -188,7 +185,6 @@ type Store interface {
 	WorkspaceRepository
 	QuotaRepository
 	HostSettingsRepository
-	NotificationRepository
 	PasswordResetRepository
-	PasswordResetEmailRepository
+	EmailOutboxRepository
 }

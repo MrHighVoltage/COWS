@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,17 +14,27 @@ import (
 	"github.com/cows-project/cows/internal/runtime"
 )
 
-type fakeSender struct {
-	error error
-	sent  []domain.EmailNotification
+type sentMessage struct {
+	recipient string
+	subject   string
+	body      string
 }
 
-func (s *fakeSender) Send(_ context.Context, notification domain.EmailNotification) error {
+type fakeSender struct {
+	error error
+	sent  []sentMessage
+}
+
+func (s *fakeSender) Send(_ context.Context, recipient, subject, body string) error {
 	if s.error != nil {
 		return s.error
 	}
-	s.sent = append(s.sent, notification)
+	s.sent = append(s.sent, sentMessage{recipient: recipient, subject: subject, body: body})
 	return nil
+}
+
+func testLeadPolicy() LeadPolicy {
+	return LeadPolicy{Divisor: 3, Max: 24 * time.Hour, Min: time.Hour}
 }
 
 func notificationTestStore(t *testing.T, workspace domain.Workspace) (*sqlite.Store, time.Time) {
@@ -49,13 +60,13 @@ func notificationTestStore(t *testing.T, workspace domain.Workspace) (*sqlite.St
 
 func TestTimeoutWarningsAreDeduplicatedAndDelivered(t *testing.T) {
 	base := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
-	store, _ := notificationTestStore(t, domain.Workspace{ID: "workspace-1", OwnerUserID: "owner-1", TemplateID: "template-1", Name: "Research workspace", DesiredState: domain.DesiredWorkspaceRunning, ObservedState: string(runtime.StateRunning), RuntimeID: "runtime-1", InitialConnectionTimeoutSeconds: 3600, StartedAt: base, IdleSince: base, CreatedAt: base, UpdatedAt: base})
+	store, _ := notificationTestStore(t, domain.Workspace{ID: "workspace-1", OwnerUserID: "owner-1", TemplateID: "template-1", Name: "Research workspace", DesiredState: domain.DesiredWorkspaceRunning, ObservedState: string(runtime.StateRunning), RuntimeID: "runtime-1", InitialConnectionTimeoutSeconds: 6 * 3600, StartedAt: base, IdleSince: base, CreatedAt: base, UpdatedAt: base})
 	sender := &fakeSender{}
-	service, err := New(store, sender, time.Hour, time.Minute)
+	service, err := New(store, sender, testLeadPolicy(), time.Minute)
 	if err != nil {
 		t.Fatalf("create notification service: %v", err)
 	}
-	service.now = func() time.Time { return base.Add(30 * time.Minute) }
+	service.now = func() time.Time { return base.Add(5 * time.Hour) }
 	if err := service.EnqueueTimeoutWarnings(context.Background()); err != nil {
 		t.Fatalf("enqueue warning: %v", err)
 	}
@@ -65,7 +76,7 @@ func TestTimeoutWarningsAreDeduplicatedAndDelivered(t *testing.T) {
 	if err := service.Deliver(context.Background()); err != nil {
 		t.Fatalf("deliver warning: %v", err)
 	}
-	if len(sender.sent) != 1 || sender.sent[0].Kind != domain.NotificationTimeoutStop || sender.sent[0].Deadline != base.Add(time.Hour) {
+	if len(sender.sent) != 1 || sender.sent[0].recipient != "owner@example.test" || !strings.Contains(sender.sent[0].body, "stopped") {
 		t.Fatalf("sent notifications = %+v", sender.sent)
 	}
 	if err := service.EnqueueTimeoutWarnings(context.Background()); err != nil {
@@ -81,23 +92,23 @@ func TestTimeoutWarningsAreDeduplicatedAndDelivered(t *testing.T) {
 
 func TestFailedEmailDeliveryStopsAfterBoundedAttempts(t *testing.T) {
 	base := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
-	store, _ := notificationTestStore(t, domain.Workspace{ID: "workspace-1", OwnerUserID: "owner-1", TemplateID: "template-1", Name: "Research workspace", DesiredState: domain.DesiredWorkspaceRunning, ObservedState: string(runtime.StateRunning), RuntimeID: "runtime-1", InitialConnectionTimeoutSeconds: 3600, StartedAt: base, IdleSince: base, CreatedAt: base, UpdatedAt: base})
+	store, _ := notificationTestStore(t, domain.Workspace{ID: "workspace-1", OwnerUserID: "owner-1", TemplateID: "template-1", Name: "Research workspace", DesiredState: domain.DesiredWorkspaceRunning, ObservedState: string(runtime.StateRunning), RuntimeID: "runtime-1", InitialConnectionTimeoutSeconds: 6 * 3600, StartedAt: base, IdleSince: base, CreatedAt: base, UpdatedAt: base})
 	sender := &fakeSender{error: errors.New("relay unavailable")}
-	service, err := New(store, sender, time.Hour, time.Minute)
+	service, err := New(store, sender, testLeadPolicy(), time.Minute)
 	if err != nil {
 		t.Fatalf("create notification service: %v", err)
 	}
-	service.now = func() time.Time { return base.Add(30 * time.Minute) }
+	service.now = func() time.Time { return base.Add(5 * time.Hour) }
 	if err := service.EnqueueTimeoutWarnings(context.Background()); err != nil {
 		t.Fatalf("enqueue warning: %v", err)
 	}
 	for attempt := 1; attempt <= maxDeliveryAttempts; attempt++ {
-		service.now = func() time.Time { return base.Add(30*time.Minute + time.Duration(attempt)*time.Minute) }
+		service.now = func() time.Time { return base.Add(5*time.Hour + time.Duration(attempt)*time.Minute) }
 		if err := service.Deliver(context.Background()); !errors.Is(err, ErrDeliveryFailed) {
 			t.Fatalf("delivery attempt %d error = %v", attempt, err)
 		}
 	}
-	pending, err := store.ListPendingEmailNotifications(context.Background(), base.Add(2*time.Hour), 20)
+	pending, err := store.ListPendingEmailMessages(context.Background(), base.Add(7*time.Hour), 20)
 	if err != nil {
 		t.Fatalf("list exhausted notifications: %v", err)
 	}
