@@ -40,7 +40,7 @@ type UserRepository interface {
 	RegisterUser(ctx context.Context, user domain.User, passwordHash string, groupIDs []string, userQuota domain.UserQuota) error
 	DeleteUser(ctx context.Context, id string) error
 	UpdateUserPassword(ctx context.Context, id, passwordHash string, mustChangePassword bool) error
-	ResetPasswordUsingToken(ctx context.Context, tokenHash, passwordHash string, now time.Time) (domain.User, error)
+	ResetPasswordUsingToken(ctx context.Context, tokenHash, purpose, passwordHash string, now time.Time) (domain.User, error)
 	SetUserDisabled(ctx context.Context, id string, disabled bool) error
 	ListUserGroupIDs(ctx context.Context, userID string) ([]string, error)
 	SetUserGroups(ctx context.Context, userID string, groupIDs []string) error

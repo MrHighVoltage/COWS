@@ -185,7 +185,7 @@ func (s *Store) UpdateUserPassword(ctx context.Context, id, passwordHash string,
 	return nil
 }
 
-func (s *Store) ResetPasswordUsingToken(ctx context.Context, tokenHash, passwordHash string, now time.Time) (domain.User, error) {
+func (s *Store) ResetPasswordUsingToken(ctx context.Context, tokenHash, purpose, passwordHash string, now time.Time) (domain.User, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return domain.User{}, fmt.Errorf("begin password reset: %w", err)
@@ -194,7 +194,7 @@ func (s *Store) ResetPasswordUsingToken(ctx context.Context, tokenHash, password
 	row := tx.QueryRowContext(ctx, `SELECT u.id, u.username, u.email, u.display_name, u.password_hash, u.role,
 		u.disabled, u.must_change_password, u.created_at, u.updated_at
 		FROM password_reset_tokens t JOIN users u ON u.id = t.user_id
-		WHERE t.token_hash = ? AND t.used_at IS NULL AND t.expires_at > ?`, tokenHash, now.Unix())
+		WHERE t.token_hash = ? AND t.purpose = ? AND t.used_at IS NULL AND t.expires_at > ?`, tokenHash, purpose, now.Unix())
 	record, err := scanUserRecord(row)
 	if err != nil {
 		return domain.User{}, err
@@ -1061,15 +1061,19 @@ func (s *Store) CreatePasswordResetToken(ctx context.Context, token domain.Passw
 		return fmt.Errorf("begin password reset token: %w", err)
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, "DELETE FROM password_reset_tokens WHERE user_id = ?", token.UserID); err != nil {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM password_reset_tokens WHERE user_id = ? AND purpose = ?", token.UserID, token.Purpose); err != nil {
 		return fmt.Errorf("replace password reset token: %w", err)
 	}
 	// A new token supersedes the old link, so any message still carrying it
-	// must not go out.
-	if _, err := tx.ExecContext(ctx, "UPDATE email_messages SET status = 'canceled' WHERE user_id = ? AND kind = ? AND status = 'pending'", token.UserID, domain.EmailKindPasswordReset); err != nil {
-		return fmt.Errorf("cancel superseded password reset emails: %w", err)
+	// must not go out. Only mail of the matching purpose is affected.
+	supersededKind := domain.EmailKindPasswordReset
+	if token.Purpose == domain.TokenPurposeInvitation {
+		supersededKind = domain.EmailKindInvitation
 	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO password_reset_tokens (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)", token.TokenHash, token.UserID, token.ExpiresAt.Unix(), token.CreatedAt.Unix()); err != nil {
+	if _, err := tx.ExecContext(ctx, "UPDATE email_messages SET status = 'canceled' WHERE user_id = ? AND kind = ? AND status = 'pending'", token.UserID, supersededKind); err != nil {
+		return fmt.Errorf("cancel superseded credential emails: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "INSERT INTO password_reset_tokens (token_hash, user_id, purpose, expires_at, created_at) VALUES (?, ?, ?, ?, ?)", token.TokenHash, token.UserID, token.Purpose, token.ExpiresAt.Unix(), token.CreatedAt.Unix()); err != nil {
 		return fmt.Errorf("store password reset token: %w", err)
 	}
 	if err := tx.Commit(); err != nil {

@@ -45,10 +45,36 @@ const (
 )
 
 type Service struct {
-	store           repository.Store
-	sessionLifetime time.Duration
-	registration    RegistrationPolicy
-	now             func() time.Time
+	store                    repository.Store
+	sessionLifetime          time.Duration
+	registration             RegistrationPolicy
+	invitationsAvailable     bool
+	invitationLifetime       time.Duration
+	passwordResetLifetime    time.Duration
+	passwordResetMinInterval time.Duration
+	now                      func() time.Time
+}
+
+// SetInvitationPolicy enables password-less account creation. It stays off
+// until the caller confirms email delivery and an external base URL are
+// configured, because an account with no usable password and no way to reach
+// its owner cannot be opened by anyone.
+func (s *Service) SetInvitationPolicy(available bool, lifetime time.Duration) {
+	s.invitationsAvailable = available
+	if lifetime > 0 {
+		s.invitationLifetime = lifetime
+	}
+}
+
+// SetPasswordResetPolicy sets how long a reset link lives and how rarely one
+// account can have a reset message queued.
+func (s *Service) SetPasswordResetPolicy(lifetime, minInterval time.Duration) {
+	if lifetime > 0 {
+		s.passwordResetLifetime = lifetime
+	}
+	if minInterval > 0 {
+		s.passwordResetMinInterval = minInterval
+	}
 }
 
 type RegistrationPolicy struct {
@@ -79,7 +105,12 @@ type PasswordResetRequest struct {
 	ExpiresAt time.Time
 }
 
-const passwordResetLifetime = time.Hour
+// Bounds a caller that never sets an explicit policy still gets.
+const (
+	defaultInvitationLifetime       = 24 * time.Hour
+	defaultPasswordResetLifetime    = 2 * time.Hour
+	defaultPasswordResetMinInterval = 5 * time.Minute
+)
 
 func New(store repository.Store, sessionLifetime time.Duration, policies ...RegistrationPolicy) (*Service, error) {
 	if sessionLifetime <= 0 {
@@ -107,7 +138,13 @@ func New(store repository.Store, sessionLifetime time.Duration, policies ...Regi
 		normalizedGroups = append(normalizedGroups, name)
 	}
 	policy.DefaultGroupNames = normalizedGroups
-	return &Service{store: store, sessionLifetime: sessionLifetime, registration: policy, now: time.Now}, nil
+	return &Service{
+		store: store, sessionLifetime: sessionLifetime, registration: policy,
+		invitationLifetime:       defaultInvitationLifetime,
+		passwordResetLifetime:    defaultPasswordResetLifetime,
+		passwordResetMinInterval: defaultPasswordResetMinInterval,
+		now:                      time.Now,
+	}, nil
 }
 
 func (s *Service) BootstrapAdministrator(ctx context.Context, input CreateUserInput) (bool, error) {
@@ -214,13 +251,22 @@ func (s *Service) RequestPasswordReset(ctx context.Context, identifier string) (
 		}
 		return PasswordResetRequest{}, nil
 	}
+	now := s.now().UTC()
+	// Throttle per account. The caller's response is identical either way, so
+	// this cannot become an account-existence oracle.
+	recent, err := s.store.CountRecentEmailMessages(ctx, record.User.ID, domain.EmailKindPasswordReset, now.Add(-s.passwordResetMinInterval))
+	if err != nil {
+		return PasswordResetRequest{}, err
+	}
+	if recent > 0 {
+		return PasswordResetRequest{}, nil
+	}
 	rawToken, err := randomToken()
 	if err != nil {
 		return PasswordResetRequest{}, fmt.Errorf("create password reset token: %w", err)
 	}
-	now := s.now().UTC()
-	expiresAt := now.Add(passwordResetLifetime)
-	if err := s.store.CreatePasswordResetToken(ctx, domain.PasswordResetToken{TokenHash: hashToken(rawToken), UserID: record.User.ID, ExpiresAt: expiresAt, CreatedAt: now}); err != nil {
+	expiresAt := now.Add(s.passwordResetLifetime)
+	if err := s.store.CreatePasswordResetToken(ctx, domain.PasswordResetToken{TokenHash: hashToken(rawToken), UserID: record.User.ID, Purpose: domain.TokenPurposeReset, ExpiresAt: expiresAt, CreatedAt: now}); err != nil {
 		return PasswordResetRequest{}, err
 	}
 	s.recordAudit(ctx, domain.AuditEvent{EventType: "password.reset.requested", TargetType: "user", TargetID: record.User.ID})
@@ -238,7 +284,7 @@ func (s *Service) ResetPassword(ctx context.Context, rawToken, newPassword strin
 	if err != nil {
 		return fmt.Errorf("hash reset password: %w", err)
 	}
-	user, err := s.store.ResetPasswordUsingToken(ctx, hashToken(rawToken), string(hash), s.now().UTC())
+	user, err := s.store.ResetPasswordUsingToken(ctx, hashToken(rawToken), domain.TokenPurposeReset, string(hash), s.now().UTC())
 	if errors.Is(err, repository.ErrNotFound) {
 		return ErrInvalidResetToken
 	}
@@ -675,4 +721,37 @@ func randomToken() (string, error) {
 func hashToken(raw string) string {
 	hash := sha256.Sum256([]byte(raw))
 	return base64.RawURLEncoding.EncodeToString(hash[:])
+}
+
+// SendPasswordResetFor issues a reset token on an administrator's behalf, so
+// no secret has to be relayed out of band. Unlike RequestPasswordReset it names
+// the exact reason it refused: the caller is an authenticated administrator
+// acting on a user they can already see, so there is nothing to protect from
+// enumeration here, and it is deliberately not throttled for the same reason.
+// RecoverAdministrator remains for deployments without email.
+func (s *Service) SendPasswordResetFor(ctx context.Context, actorID, targetUserID string) (PasswordResetRequest, error) {
+	if _, err := s.requireAdministrator(ctx, actorID); err != nil {
+		return PasswordResetRequest{}, err
+	}
+	target, err := s.store.FindUserByID(ctx, targetUserID)
+	if err != nil {
+		return PasswordResetRequest{}, err
+	}
+	if target.Disabled || strings.TrimSpace(target.Email) == "" {
+		return PasswordResetRequest{}, ErrRecoveryTargetInvalid
+	}
+	rawToken, err := randomToken()
+	if err != nil {
+		return PasswordResetRequest{}, fmt.Errorf("create password reset token: %w", err)
+	}
+	now := s.now().UTC()
+	expiresAt := now.Add(s.passwordResetLifetime)
+	if err := s.store.CreatePasswordResetToken(ctx, domain.PasswordResetToken{
+		TokenHash: hashToken(rawToken), UserID: target.ID, Purpose: domain.TokenPurposeReset,
+		ExpiresAt: expiresAt, CreatedAt: now,
+	}); err != nil {
+		return PasswordResetRequest{}, err
+	}
+	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "user.password_reset_sent", TargetType: "user", TargetID: target.ID})
+	return PasswordResetRequest{User: target, Token: rawToken, ExpiresAt: expiresAt}, nil
 }
