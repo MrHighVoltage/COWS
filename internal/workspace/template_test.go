@@ -243,3 +243,33 @@ func TestTemplateConfigurationRejectsUnknownPlaceholder(t *testing.T) {
 		t.Fatalf("unknown placeholder error = %v, want invalid template", err)
 	}
 }
+
+func TestGetWorkspaceWithUsageResolvesTemplateName(t *testing.T) {
+	service, authService, adminID, _ := testService(t)
+	ctx := context.Background()
+	template, err := service.CreateTemplate(ctx, adminID, validTemplateInput())
+	if err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+	if _, err := authService.CreateUser(ctx, adminID, auth.CreateUserInput{Username: "student", Password: "another correct password", Role: domain.RoleUser}); err != nil {
+		t.Fatalf("create student: %v", err)
+	}
+	student, _, err := authService.Authenticate(ctx, "student", "another correct password")
+	if err != nil {
+		t.Fatalf("authenticate student: %v", err)
+	}
+	if err := authService.ChangePassword(ctx, student.ID, "another correct password", "changed student password"); err != nil {
+		t.Fatalf("change student password: %v", err)
+	}
+	created, err := service.CreateWorkspace(ctx, student.ID, CreateWorkspaceInput{Name: "My research environment", TemplateID: template.ID})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	value, err := service.GetWorkspaceWithUsage(ctx, student.ID, created.ID)
+	if err != nil {
+		t.Fatalf("get workspace with usage: %v", err)
+	}
+	if value.TemplateName != template.Name {
+		t.Fatalf("template name: got %q want %q", value.TemplateName, template.Name)
+	}
+}
