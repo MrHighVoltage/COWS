@@ -269,6 +269,11 @@ func (s *Server) adminUsersImportCommit(w http.ResponseWriter, r *http.Request) 
 		s.renderUserImportError(w, r, user, "The import could not be committed. No changes were applied.")
 		return
 	}
+	// The outbox delivers a bounded batch per pass, so a large import drains
+	// over successive ticks rather than in one burst.
+	for _, result := range results {
+		s.enqueueInvitation(r, domain.User{ID: result.UserID, Email: result.Email, DisplayName: result.DisplayName}, result.Invitation)
+	}
 	data, err := userImportCSV(results)
 	if err != nil {
 		s.renderUserImportError(w, r, user, "The import completed, but the credential export could not be prepared.")
@@ -334,8 +339,12 @@ func userImportCSV(results []auth.ImportedUserResult) ([]byte, error) {
 	}
 	for _, result := range results {
 		status := "created"
-		if result.Existing {
+		switch {
+		case result.Existing:
 			status = "existing / updated"
+		case result.Invitation.Token != "":
+			// An invited row deliberately has no password to export.
+			status = "invited by email"
 		}
 		if err := writer.Write([]string{result.Username, result.Email, result.DisplayName, status, result.Password}); err != nil {
 			return nil, err

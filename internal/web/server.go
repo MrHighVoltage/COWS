@@ -55,6 +55,7 @@ type Options struct {
 	Notifications        *notifications.Service
 	ExternalBaseURL      string
 	PasswordResetEnabled bool
+	InvitationsEnabled   bool
 	Store                repository.Store
 }
 
@@ -223,6 +224,7 @@ type pageData struct {
 	Password                    passwordFormData
 	PasswordReset               passwordResetFormData
 	PasswordResetEnabled        bool
+	InvitationsEnabled          bool
 	Registration                registrationFormData
 	RegistrationEnabled         bool
 	Inspection                  *runtime.Inspection
@@ -587,6 +589,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /password/reset/request", s.passwordResetRequestPost)
 	mux.HandleFunc("GET /password/reset/confirm", s.passwordResetConfirmGet)
 	mux.HandleFunc("POST /password/reset/confirm", s.passwordResetConfirmPost)
+	mux.HandleFunc("GET /invitation/accept", s.invitationAcceptGet)
+	mux.HandleFunc("POST /invitation/accept", s.invitationAcceptPost)
 	mux.HandleFunc("GET /register", s.registerGet)
 	mux.HandleFunc("POST /register", s.registerPost)
 	mux.HandleFunc("POST /logout", s.logoutPost)
@@ -633,6 +637,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/users/{id}/disabled", s.adminUserDisabled)
 	mux.HandleFunc("POST /admin/users/{id}/delete", s.adminUserDelete)
 	mux.HandleFunc("POST /admin/users/{id}/groups", s.adminUserGroups)
+	mux.HandleFunc("POST /admin/users/{id}/invitation", s.adminUserInvitation)
+	mux.HandleFunc("POST /admin/users/{id}/password-reset", s.adminUserPasswordReset)
 	mux.HandleFunc("GET /admin/groups", s.adminGroups)
 	mux.HandleFunc("POST /admin/groups", s.adminGroupsCreate)
 	mux.HandleFunc("POST /admin/users/{id}/quota", s.adminQuotaUpdate)
@@ -799,6 +805,49 @@ func (s *Server) passwordResetConfirmPost(w http.ResponseWriter, r *http.Request
 	s.render(w, http.StatusOK, "login-page", pageData{Title: "Sign in | COWS", CSRFToken: s.ensureCSRF(w, r), RegistrationEnabled: s.options.RegistrationEnabled, PasswordResetEnabled: s.options.PasswordResetEnabled, Notice: "Your password was changed. You can now sign in."})
 }
 
+func (s *Server) invitationAcceptGet(w http.ResponseWriter, r *http.Request) {
+	if !s.options.InvitationsEnabled {
+		http.NotFound(w, r)
+		return
+	}
+	token := strings.TrimSpace(r.URL.Query().Get("token"))
+	if token == "" || len(token) > 256 {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	s.render(w, http.StatusOK, "invitation-accept-page", pageData{Title: "Set your password | COWS", CSRFToken: s.ensureCSRF(w, r), InvitationsEnabled: true, PasswordReset: passwordResetFormData{Token: token}})
+}
+
+func (s *Server) invitationAcceptPost(w http.ResponseWriter, r *http.Request) {
+	if !s.options.InvitationsEnabled {
+		http.NotFound(w, r)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if !s.validCSRF(r) {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	data := pageData{Title: "Set your password | COWS", CSRFToken: s.ensureCSRF(w, r), InvitationsEnabled: true, PasswordReset: passwordResetFormData{Token: r.FormValue("token")}}
+	_, err := s.auth.AcceptInvitation(r.Context(), r.FormValue("token"), r.FormValue("new_password"), r.FormValue("confirm_password"))
+	if err != nil {
+		// An invalid, expired, and already-used invitation are deliberately
+		// indistinguishable here.
+		if errors.Is(err, auth.ErrInvalidInput) {
+			data.PasswordReset.Error = "The passwords must match and be between 12 and 72 characters."
+		} else {
+			data.PasswordReset.Error = "This invitation link is invalid or expired. Ask an administrator to send a new one."
+		}
+		s.render(w, http.StatusBadRequest, "invitation-accept-page", data)
+		return
+	}
+	s.render(w, http.StatusOK, "login-page", pageData{Title: "Sign in | COWS", CSRFToken: s.ensureCSRF(w, r), RegistrationEnabled: s.options.RegistrationEnabled, PasswordResetEnabled: s.options.PasswordResetEnabled, Notice: "Your password is set. You can now sign in."})
+}
+
 func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if !s.validCSRF(r) {
@@ -882,7 +931,7 @@ func (s *Server) registerPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	form := registrationFormData{Username: r.FormValue("username"), Email: r.FormValue("email"), DisplayName: r.FormValue("display_name")}
-	_, err := s.auth.Register(r.Context(), auth.RegisterUserInput{Username: form.Username, Email: form.Email, DisplayName: form.DisplayName, Password: r.FormValue("password"), PasswordConfirmation: r.FormValue("confirm_password")})
+	registered, err := s.auth.Register(r.Context(), auth.RegisterUserInput{Username: form.Username, Email: form.Email, DisplayName: form.DisplayName, Password: r.FormValue("password"), PasswordConfirmation: r.FormValue("confirm_password")})
 	if err != nil {
 		s.options.RegistrationLimiter.Failure(key)
 		form.Error = registrationFormError(err)
@@ -890,6 +939,13 @@ func (s *Server) registerPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.options.RegistrationLimiter.Success(key)
+	// Informational only: the account already has the password its owner
+	// chose, so this carries no token and is not address verification.
+	if s.options.Notifications != nil && registered.Email != "" {
+		if err := s.options.Notifications.EnqueueWelcome(r.Context(), registered.ID, registered.Email, registered.DisplayName, s.options.ExternalBaseURL); err != nil {
+			s.logger.Warn("queue welcome message failed", "user_id", registered.ID, "error", err)
+		}
+	}
 	s.render(w, http.StatusOK, "login-page", pageData{Title: "Sign in | COWS", CSRFToken: s.ensureCSRF(w, r), RegistrationEnabled: true, Notice: "Your account was created. You can now sign in."})
 }
 
@@ -2282,6 +2338,20 @@ func (s *Server) adminUserEdit(w http.ResponseWriter, r *http.Request) {
 	data.Title = "Edit user | COWS"
 	data.User = &user
 	data.CSRFToken = s.ensureCSRF(w, r)
+	data.InvitationsEnabled = s.options.InvitationsEnabled
+	data.PasswordResetEnabled = s.options.PasswordResetEnabled
+	switch r.URL.Query().Get("notice") {
+	case "invitation":
+		data.Notice = "An invitation message was queued."
+	case "reset":
+		data.Notice = "A password reset message was queued."
+	}
+	switch r.URL.Query().Get("error") {
+	case "invitation":
+		data.Error = "The invitation could not be sent. The account needs an email address and must not be disabled."
+	case "reset":
+		data.Error = "The reset link could not be sent. The account needs an email address and must not be disabled."
+	}
 	s.render(w, http.StatusOK, "admin-user-edit-page", data)
 }
 
@@ -2295,6 +2365,8 @@ func (s *Server) adminUsersNew(w http.ResponseWriter, r *http.Request) {
 		User:      &user,
 		CSRFToken: s.ensureCSRF(w, r),
 		Form:      userFormData{Role: string(domain.RoleUser)},
+
+		InvitationsEnabled: s.options.InvitationsEnabled,
 	})
 }
 
@@ -2313,7 +2385,7 @@ func (s *Server) adminUsersCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	form := userFormData{Username: r.FormValue("username"), Email: r.FormValue("email"), DisplayName: r.FormValue("display_name"), Role: r.FormValue("role")}
-	_, err := s.auth.CreateUser(r.Context(), user.ID, auth.CreateUserInput{
+	created, invitation, err := s.auth.CreateUserWithInvitation(r.Context(), user.ID, auth.CreateUserInput{
 		Username:    form.Username,
 		Email:       form.Email,
 		DisplayName: form.DisplayName,
@@ -2322,10 +2394,67 @@ func (s *Server) adminUsersCreate(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		form.Error = userFormError(err)
-		s.render(w, http.StatusBadRequest, "admin-users-new-page", pageData{Title: "Create user | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), Form: form})
+		s.render(w, http.StatusBadRequest, "admin-users-new-page", pageData{Title: "Create user | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), Form: form, InvitationsEnabled: s.options.InvitationsEnabled})
 		return
 	}
+	s.enqueueInvitation(r, created, invitation)
 	http.Redirect(w, r, "/admin/users", http.StatusSeeOther)
+}
+
+// enqueueInvitation mails an invitation link when one was issued. It is
+// best-effort: the account exists either way and an administrator can resend,
+// so a delivery problem must not be reported as a creation failure.
+func (s *Server) enqueueInvitation(r *http.Request, user domain.User, invitation auth.InvitationRequest) {
+	if invitation.Token == "" || s.options.Notifications == nil {
+		return
+	}
+	if err := s.options.Notifications.EnqueueInvitation(r.Context(), user.ID, user.Email, user.DisplayName, invitation.Token, s.options.ExternalBaseURL, invitation.ExpiresAt); err != nil {
+		s.logger.Warn("queue account invitation failed", "user_id", user.ID, "error", err)
+	}
+}
+
+func (s *Server) adminUserInvitation(w http.ResponseWriter, r *http.Request) {
+	actor, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if !s.validCSRF(r) {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return
+	}
+	targetID := r.PathValue("id")
+	invitation, err := s.auth.ResendInvitation(r.Context(), actor.ID, targetID)
+	if err != nil {
+		http.Redirect(w, r, "/admin/users/"+url.PathEscape(targetID)+"?error=invitation", http.StatusSeeOther)
+		return
+	}
+	s.enqueueInvitation(r, invitation.User, invitation)
+	http.Redirect(w, r, "/admin/users/"+url.PathEscape(targetID)+"?notice=invitation", http.StatusSeeOther)
+}
+
+func (s *Server) adminUserPasswordReset(w http.ResponseWriter, r *http.Request) {
+	actor, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if !s.validCSRF(r) {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return
+	}
+	targetID := r.PathValue("id")
+	request, err := s.auth.SendPasswordResetFor(r.Context(), actor.ID, targetID)
+	if err != nil {
+		http.Redirect(w, r, "/admin/users/"+url.PathEscape(targetID)+"?error=reset", http.StatusSeeOther)
+		return
+	}
+	if s.options.Notifications != nil {
+		if err := s.options.Notifications.EnqueuePasswordReset(r.Context(), request.User.ID, request.User.Email, request.Token, s.options.ExternalBaseURL, request.ExpiresAt); err != nil {
+			s.logger.Warn("queue administrator password reset failed", "user_id", request.User.ID, "error", err)
+		}
+	}
+	http.Redirect(w, r, "/admin/users/"+url.PathEscape(targetID)+"?notice=reset", http.StatusSeeOther)
 }
 
 func (s *Server) adminUserDisabled(w http.ResponseWriter, r *http.Request) {
@@ -4308,6 +4437,8 @@ func userFormError(err error) string {
 		return "Use a valid username, email address, display name, supported role, and password between 12 and 72 characters."
 	case errors.Is(err, repository.ErrConflict):
 		return "A user with that username already exists."
+	case errors.Is(err, auth.ErrInvitationUnavailable):
+		return "Set a temporary password, or add an email address so an invitation can be sent."
 	default:
 		return "The user could not be created."
 	}

@@ -119,3 +119,51 @@ func TestFailedEmailDeliveryStopsAfterBoundedAttempts(t *testing.T) {
 		t.Fatalf("failed sender recorded successful messages: %d", len(sender.sent))
 	}
 }
+
+func TestOneShotMessagesCarryNoTokenBeyondTheirOwnLink(t *testing.T) {
+	ctx := context.Background()
+	base := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	store, _ := notificationTestStore(t, domain.Workspace{ID: "workspace-1", OwnerUserID: "owner-1", TemplateID: "template-1", Name: "Research workspace", DesiredState: domain.DesiredWorkspaceStopped, CreatedAt: base, UpdatedAt: base})
+	sender := &fakeSender{}
+	service, err := New(store, sender, testLeadPolicy(), time.Minute)
+	if err != nil {
+		t.Fatalf("create notification service: %v", err)
+	}
+	service.now = func() time.Time { return base }
+
+	if err := service.EnqueueWelcome(ctx, "owner-1", "owner@example.test", "Owner", "https://cows.example.test"); err != nil {
+		t.Fatalf("enqueue welcome: %v", err)
+	}
+	if err := service.EnqueueInvitation(ctx, "owner-1", "owner@example.test", "Owner", "raw-invitation-token", "https://cows.example.test", base.Add(24*time.Hour)); err != nil {
+		t.Fatalf("enqueue invitation: %v", err)
+	}
+	if err := service.Deliver(ctx); err != nil {
+		t.Fatalf("deliver: %v", err)
+	}
+	if len(sender.sent) != 2 {
+		t.Fatalf("expected both one-shot messages in one delivery pass, got %d", len(sender.sent))
+	}
+
+	welcome, invitation := sender.sent[0], sender.sent[1]
+	if strings.Contains(welcome.body, "token=") {
+		t.Fatalf("a welcome message must carry no token; registration already chose a password: %s", welcome.body)
+	}
+	if !strings.Contains(invitation.body, "https://cows.example.test/invitation/accept?token=raw-invitation-token") {
+		t.Fatalf("invitation link missing or malformed: %s", invitation.body)
+	}
+}
+
+func TestATokenLinkRefusesAnUntrustworthyBaseURL(t *testing.T) {
+	ctx := context.Background()
+	base := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	store, _ := notificationTestStore(t, domain.Workspace{ID: "workspace-1", OwnerUserID: "owner-1", TemplateID: "template-1", Name: "Research workspace", DesiredState: domain.DesiredWorkspaceStopped, CreatedAt: base, UpdatedAt: base})
+	service, err := New(store, &fakeSender{}, testLeadPolicy(), time.Minute)
+	if err != nil {
+		t.Fatalf("create notification service: %v", err)
+	}
+	for _, baseURL := range []string{"", "/relative", "https://cows.example.test/?next=x", "https://cows.example.test/#fragment"} {
+		if err := service.EnqueueInvitation(ctx, "owner-1", "owner@example.test", "Owner", "raw", baseURL, base); err == nil {
+			t.Fatalf("base URL %q should have been refused", baseURL)
+		}
+	}
+}

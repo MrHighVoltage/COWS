@@ -33,7 +33,10 @@ type ImportedUserResult struct {
 	ImportUserInput
 	UserID   string
 	Existing bool
-	Password string
+	// Password is set only for a row that could not be invited. An invited
+	// row carries no usable password, so nothing has to be relayed by hand.
+	Password   string
+	Invitation InvitationRequest
 }
 
 func (s *Service) PreviewUserImport(ctx context.Context, actorID string, inputs []ImportUserInput, groupIDs []string) ([]ImportUserPreview, error) {
@@ -88,6 +91,10 @@ func (s *Service) ImportUsers(ctx context.Context, actorID string, inputs []Impo
 	}
 	entries := make([]repository.UserImportEntry, 0, len(inputs))
 	results := make([]ImportedUserResult, 0, len(inputs))
+	// Indexes into results whose accounts need an invitation token. Tokens are
+	// issued only after the import commits, so a failed import leaves none
+	// behind.
+	invited := make([]int, 0, len(inputs))
 	for _, input := range inputs {
 		input.Username = normalizeUsername(input.Username)
 		record, err := s.store.FindUserByUsername(ctx, input.Username)
@@ -120,19 +127,41 @@ func (s *Service) ImportUsers(ctx context.Context, actorID string, inputs []Impo
 		if passwordErr != nil {
 			return nil, passwordErr
 		}
-		hash, hashErr := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-		if hashErr != nil {
-			return nil, hashErr
-		}
 		user, _, prepareErr := s.prepareUser(ctx, CreateUserInput{Username: input.Username, Email: input.Email, DisplayName: input.DisplayName, Password: password, Role: domain.RoleUser}, true)
 		if prepareErr != nil {
 			return nil, prepareErr
 		}
-		entries = append(entries, repository.UserImportEntry{User: user, PasswordHash: string(hash), GroupIDs: append([]string(nil), groupIDs...)})
-		results = append(results, ImportedUserResult{ImportUserInput: input, UserID: user.ID, Password: password})
+		hash := ""
+		result := ImportedUserResult{ImportUserInput: input, UserID: user.ID}
+		if s.invitationsAvailable && strings.TrimSpace(input.Email) != "" {
+			placeholder, hashErr := unusablePasswordHash()
+			if hashErr != nil {
+				return nil, hashErr
+			}
+			hash = placeholder
+			result.Invitation = InvitationRequest{User: user}
+			invited = append(invited, len(results))
+		} else {
+			generated, hashErr := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+			if hashErr != nil {
+				return nil, hashErr
+			}
+			hash = string(generated)
+			result.Password = password
+		}
+		entries = append(entries, repository.UserImportEntry{User: user, PasswordHash: hash, GroupIDs: append([]string(nil), groupIDs...)})
+		results = append(results, result)
 	}
 	if err := s.store.ImportUsers(ctx, entries); err != nil {
 		return nil, err
+	}
+	for _, index := range invited {
+		rawToken, expiresAt, tokenErr := s.issueInvitationToken(ctx, results[index].UserID)
+		if tokenErr != nil {
+			return nil, tokenErr
+		}
+		results[index].Invitation.Token = rawToken
+		results[index].Invitation.ExpiresAt = expiresAt
 	}
 	for _, result := range results {
 		event := domain.AuditEvent{ActorUserID: actorID, EventType: "user.imported", TargetType: "user", TargetID: result.UserID}

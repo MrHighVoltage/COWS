@@ -117,7 +117,12 @@ func run(ctx context.Context, args []string) error {
 			return fmt.Errorf("initialize notification service: %w", err)
 		}
 	}
-	webServer, err := web.New(db, authService, templateService, quotaService, podmanRuntime, web.Options{CookieSecure: cfg.CookieSecure, SessionLifetime: cfg.SessionLifetime, Logger: logger, RegistrationEnabled: cfg.RegistrationEnabled, Notifications: notificationService, ExternalBaseURL: cfg.ExternalBaseURL, PasswordResetEnabled: notificationService != nil && cfg.ExternalBaseURL != "", Store: store})
+	// Both credential links are only usable when mail can be sent and the link
+	// has a trusted host to point at.
+	credentialLinksEnabled := notificationService != nil && cfg.ExternalBaseURL != ""
+	authService.SetInvitationPolicy(credentialLinksEnabled, cfg.InvitationLifetime)
+	authService.SetPasswordResetPolicy(cfg.PasswordResetLifetime, cfg.PasswordResetMinInterval)
+	webServer, err := web.New(db, authService, templateService, quotaService, podmanRuntime, web.Options{CookieSecure: cfg.CookieSecure, SessionLifetime: cfg.SessionLifetime, Logger: logger, RegistrationEnabled: cfg.RegistrationEnabled, Notifications: notificationService, ExternalBaseURL: cfg.ExternalBaseURL, PasswordResetEnabled: credentialLinksEnabled, InvitationsEnabled: credentialLinksEnabled, Store: store})
 	if err != nil {
 		return fmt.Errorf("initialize web server: %w", err)
 	}
