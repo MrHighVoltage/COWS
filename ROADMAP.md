@@ -23,6 +23,9 @@ Implemented now:
 - authenticated terminal, noVNC desktop, restricted file manager, bounded
   uploads, and streamed directory ZIP downloads;
 - optional persisted lifecycle-warning email delivery;
+- local HTMX, Alpine.js, xterm.js, noVNC, and Nerd Font assets vendored and
+  embedded in the binary, so no Node.js or npm toolchain and no third-party CDN
+  is required at build or run time;
 - a bounded, runtime-aware readiness endpoint (`GET /readyz`) separate from
   the liveness-only `GET /healthz`;
 - offline administrator credential recovery via the `cows recover-admin`
