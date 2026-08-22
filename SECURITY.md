@@ -67,6 +67,17 @@ partial operations, and compromised or misconfigured images.
   password during registration. Optional local password reset uses a hashed,
   single-use token and an HTTPS external URL; email is not an identity proof
   or authorization factor.
+- An account created without a password stores a bcrypt hash of a random value
+  that is immediately discarded, never an empty or sentinel hash, so nothing
+  can authenticate against it. Such an account is opened only through a mailed
+  single-use invitation. Invitation and reset tokens share storage and their
+  security properties but carry an explicit purpose, and neither path accepts
+  the other's token. Replacing a token is scoped to its own purpose and cancels
+  any queued message carrying the superseded link.
+- Reset requests are throttled per account. The response is identical whether
+  or not the throttle applied, so the endpoint stays non-enumerating. The
+  administrator-triggered reset is not throttled and names its refusal reason,
+  because the caller is authenticated and already sees the account.
 - Changing a password (whether voluntarily or during the mandatory first-login
   change) revokes every other session for that account while preserving the
   session performing the change, so a stolen session cannot outlive a password
@@ -254,7 +265,12 @@ SMTP credentials must be protected as deployment secrets. Email warnings are
 advisory and may be delayed, duplicated around process crashes, rejected by a
 relay, or unavailable. They never authorize access and never determine whether
 COWS stops or deletes a container. Notification messages exclude secrets,
-terminal contents, runtime identifiers, host paths, and internal addresses.
+tokens beyond their own link, terminal contents, runtime identifiers, volume
+names, host paths, archive locations, and internal addresses. Link
+construction refuses a base URL carrying a query or fragment, so a token
+cannot be smuggled into an existing parameter. Invitation and reset links
+require both email delivery and a configured external base URL; without them
+those features are inert rather than half-enabled.
 
 ## Known limitations of the current milestone
 
