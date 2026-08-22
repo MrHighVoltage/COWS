@@ -1064,91 +1064,16 @@ func (s *Store) CreatePasswordResetToken(ctx context.Context, token domain.Passw
 	if _, err := tx.ExecContext(ctx, "DELETE FROM password_reset_tokens WHERE user_id = ?", token.UserID); err != nil {
 		return fmt.Errorf("replace password reset token: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, "UPDATE password_reset_emails SET status = 'canceled' WHERE user_id = ? AND status = 'pending'", token.UserID); err != nil {
-		return fmt.Errorf("cancel previous password reset emails: %w", err)
+	// A new token supersedes the old link, so any message still carrying it
+	// must not go out.
+	if _, err := tx.ExecContext(ctx, "UPDATE email_messages SET status = 'canceled' WHERE user_id = ? AND kind = ? AND status = 'pending'", token.UserID, domain.EmailKindPasswordReset); err != nil {
+		return fmt.Errorf("cancel superseded password reset emails: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, "INSERT INTO password_reset_tokens (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)", token.TokenHash, token.UserID, token.ExpiresAt.Unix(), token.CreatedAt.Unix()); err != nil {
 		return fmt.Errorf("store password reset token: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit password reset token: %w", err)
-	}
-	return nil
-}
-
-func (s *Store) UpsertPasswordResetEmail(ctx context.Context, email domain.PasswordResetEmail) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO password_reset_emails
-		(user_id, recipient, subject, body, status, attempts, next_attempt_at, last_error_code, created_at, sent_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, email.UserID, email.Recipient, email.Subject, email.Body, email.Status,
-		email.Attempts, email.NextAttemptAt.Unix(), email.LastErrorCode, email.CreatedAt.Unix(), unixOrZero(email.SentAt))
-	if err != nil {
-		return fmt.Errorf("store password reset email: %w", err)
-	}
-	return nil
-}
-
-func (s *Store) ListPendingPasswordResetEmails(ctx context.Context, now time.Time, limit int) ([]domain.PasswordResetEmail, error) {
-	if limit <= 0 || limit > 100 {
-		limit = 50
-	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, user_id, recipient, subject, body, status, attempts,
-		next_attempt_at, last_error_code, created_at, COALESCE(sent_at, 0)
-		FROM password_reset_emails WHERE status = 'pending' AND next_attempt_at <= ? ORDER BY id LIMIT ?`, now.Unix(), limit)
-	if err != nil {
-		return nil, fmt.Errorf("list pending password reset emails: %w", err)
-	}
-	defer rows.Close()
-	result := make([]domain.PasswordResetEmail, 0)
-	for rows.Next() {
-		var email domain.PasswordResetEmail
-		var nextAttempt, created, sent int64
-		if err := rows.Scan(&email.ID, &email.UserID, &email.Recipient, &email.Subject, &email.Body, &email.Status, &email.Attempts, &nextAttempt, &email.LastErrorCode, &created, &sent); err != nil {
-			return nil, fmt.Errorf("scan password reset email: %w", err)
-		}
-		email.NextAttemptAt, email.CreatedAt, email.SentAt = timeFromUnix(nextAttempt), timeFromUnix(created), timeFromUnix(sent)
-		result = append(result, email)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate password reset emails: %w", err)
-	}
-	return result, nil
-}
-
-func (s *Store) MarkPasswordResetEmailSent(ctx context.Context, id int64, sentAt time.Time) error {
-	result, err := s.db.ExecContext(ctx, "UPDATE password_reset_emails SET status = 'sent', sent_at = ? WHERE id = ? AND status = 'pending'", sentAt.Unix(), id)
-	if err != nil {
-		return fmt.Errorf("mark password reset email sent: %w", err)
-	}
-	if count, err := result.RowsAffected(); err != nil {
-		return fmt.Errorf("check password reset email sent: %w", err)
-	} else if count == 0 {
-		return repository.ErrNotFound
-	}
-	return nil
-}
-
-func (s *Store) MarkPasswordResetEmailFailed(ctx context.Context, id int64, attempts int, nextAttemptAt time.Time, errorCode string) error {
-	result, err := s.db.ExecContext(ctx, "UPDATE password_reset_emails SET attempts = ?, next_attempt_at = ?, last_error_code = ? WHERE id = ? AND status = 'pending'", attempts, nextAttemptAt.Unix(), errorCode, id)
-	if err != nil {
-		return fmt.Errorf("mark password reset email failed: %w", err)
-	}
-	if count, err := result.RowsAffected(); err != nil {
-		return fmt.Errorf("check password reset email failure: %w", err)
-	} else if count == 0 {
-		return repository.ErrNotFound
-	}
-	return nil
-}
-
-func (s *Store) MarkPasswordResetEmailCanceled(ctx context.Context, id int64) error {
-	result, err := s.db.ExecContext(ctx, "UPDATE password_reset_emails SET status = 'canceled' WHERE id = ? AND status = 'pending'", id)
-	if err != nil {
-		return fmt.Errorf("cancel password reset email: %w", err)
-	}
-	if count, err := result.RowsAffected(); err != nil {
-		return fmt.Errorf("check password reset email cancellation: %w", err)
-	} else if count == 0 {
-		return repository.ErrNotFound
 	}
 	return nil
 }
@@ -1475,107 +1400,143 @@ func (s *Store) UpsertHostSettings(ctx context.Context, settings domain.HostSett
 	return nil
 }
 
-func (s *Store) UpsertEmailNotification(ctx context.Context, notification domain.EmailNotification) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO email_notifications
-		(workspace_id, owner_user_id, recipient, kind, deadline, subject, body, status, attempts, next_attempt_at, last_error_code, created_at, sent_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, '', ?, 0)
-		ON CONFLICT(workspace_id, kind) DO UPDATE SET owner_user_id = excluded.owner_user_id,
-		recipient = excluded.recipient, deadline = excluded.deadline, subject = excluded.subject, body = excluded.body,
-		status = CASE WHEN email_notifications.deadline != excluded.deadline OR email_notifications.recipient != excluded.recipient THEN 'pending' ELSE email_notifications.status END,
-		attempts = CASE WHEN email_notifications.deadline != excluded.deadline OR email_notifications.recipient != excluded.recipient THEN 0 ELSE email_notifications.attempts END,
-		next_attempt_at = CASE WHEN email_notifications.deadline != excluded.deadline OR email_notifications.recipient != excluded.recipient THEN excluded.next_attempt_at ELSE email_notifications.next_attempt_at END,
-		last_error_code = CASE WHEN email_notifications.deadline != excluded.deadline OR email_notifications.recipient != excluded.recipient THEN '' ELSE email_notifications.last_error_code END,
-		sent_at = CASE WHEN email_notifications.deadline != excluded.deadline OR email_notifications.recipient != excluded.recipient THEN 0 ELSE email_notifications.sent_at END`,
-		notification.WorkspaceID, notification.OwnerUserID, notification.Recipient, notification.Kind,
-		unixOrZero(notification.Deadline), notification.Subject, notification.Body, unixOrZero(notification.NextAttemptAt), unixOrZero(notification.CreatedAt))
+func (s *Store) UpsertEmailMessage(ctx context.Context, message domain.EmailMessage) error {
+	var dedupe any
+	if message.DedupeKey != "" {
+		dedupe = message.DedupeKey
+	}
+	var userID any
+	if message.UserID != "" {
+		userID = message.UserID
+	}
+	status := message.Status
+	if status == "" {
+		status = "pending"
+	}
+	// A repeated dedupe key updates in place. The body encodes the deadline and
+	// workspace name, so a changed body means the message describes something
+	// different and the delivery state is reset; an unchanged body leaves an
+	// already-sent or already-retrying row alone.
+	_, err := s.db.ExecContext(ctx, `INSERT INTO email_messages
+		(kind, user_id, recipient, subject, body, dedupe_key, status, attempts, next_attempt_at, last_error_code, created_at, sent_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, '', ?, 0)
+		ON CONFLICT(dedupe_key) WHERE dedupe_key IS NOT NULL DO UPDATE SET
+		kind = excluded.kind, user_id = excluded.user_id, recipient = excluded.recipient,
+		subject = excluded.subject, body = excluded.body,
+		status = CASE WHEN email_messages.body != excluded.body OR email_messages.recipient != excluded.recipient THEN 'pending' ELSE email_messages.status END,
+		attempts = CASE WHEN email_messages.body != excluded.body OR email_messages.recipient != excluded.recipient THEN 0 ELSE email_messages.attempts END,
+		next_attempt_at = CASE WHEN email_messages.body != excluded.body OR email_messages.recipient != excluded.recipient THEN excluded.next_attempt_at ELSE email_messages.next_attempt_at END,
+		last_error_code = CASE WHEN email_messages.body != excluded.body OR email_messages.recipient != excluded.recipient THEN '' ELSE email_messages.last_error_code END,
+		sent_at = CASE WHEN email_messages.body != excluded.body OR email_messages.recipient != excluded.recipient THEN 0 ELSE email_messages.sent_at END`,
+		message.Kind, userID, message.Recipient, message.Subject, message.Body, dedupe, status,
+		unixOrZero(message.NextAttemptAt), unixOrZero(message.CreatedAt))
 	if err != nil {
-		return fmt.Errorf("upsert email notification: %w", err)
+		return fmt.Errorf("queue email message: %w", err)
 	}
 	return nil
 }
 
-func (s *Store) ListPendingEmailNotifications(ctx context.Context, now time.Time, limit int) ([]domain.EmailNotification, error) {
-	if limit <= 0 {
-		limit = 20
+func (s *Store) ListPendingEmailMessages(ctx context.Context, now time.Time, limit int) ([]domain.EmailMessage, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, workspace_id, owner_user_id, recipient, kind, deadline,
-		subject, body, status, attempts, next_attempt_at, last_error_code, created_at, sent_at
-		FROM email_notifications WHERE status = 'pending' AND next_attempt_at <= ?
+	rows, err := s.db.QueryContext(ctx, `SELECT id, kind, COALESCE(user_id, ''), recipient, subject, body,
+		COALESCE(dedupe_key, ''), status, attempts, next_attempt_at, last_error_code, created_at, sent_at
+		FROM email_messages WHERE status = 'pending' AND next_attempt_at <= ?
 		ORDER BY next_attempt_at, id LIMIT ?`, now.Unix(), limit)
 	if err != nil {
-		return nil, fmt.Errorf("list pending email notifications: %w", err)
+		return nil, fmt.Errorf("list pending email messages: %w", err)
 	}
 	defer rows.Close()
-	result := make([]domain.EmailNotification, 0)
+	result := make([]domain.EmailMessage, 0)
 	for rows.Next() {
-		var notification domain.EmailNotification
-		var deadlineUnix, nextAttemptUnix, createdUnix, sentUnix int64
-		if err := rows.Scan(&notification.ID, &notification.WorkspaceID, &notification.OwnerUserID, &notification.Recipient, &notification.Kind, &deadlineUnix, &notification.Subject, &notification.Body, &notification.Status, &notification.Attempts, &nextAttemptUnix, &notification.LastErrorCode, &createdUnix, &sentUnix); err != nil {
-			return nil, fmt.Errorf("scan email notification: %w", err)
+		var message domain.EmailMessage
+		var nextAttemptUnix, createdUnix, sentUnix int64
+		if err := rows.Scan(&message.ID, &message.Kind, &message.UserID, &message.Recipient, &message.Subject,
+			&message.Body, &message.DedupeKey, &message.Status, &message.Attempts, &nextAttemptUnix,
+			&message.LastErrorCode, &createdUnix, &sentUnix); err != nil {
+			return nil, fmt.Errorf("scan email message: %w", err)
 		}
-		notification.Deadline = timeFromUnix(deadlineUnix)
-		notification.NextAttemptAt = timeFromUnix(nextAttemptUnix)
-		notification.CreatedAt = timeFromUnix(createdUnix)
-		notification.SentAt = timeFromUnix(sentUnix)
-		result = append(result, notification)
+		message.NextAttemptAt = timeFromUnix(nextAttemptUnix)
+		message.CreatedAt = timeFromUnix(createdUnix)
+		message.SentAt = timeFromUnix(sentUnix)
+		result = append(result, message)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate email notifications: %w", err)
+		return nil, fmt.Errorf("iterate email messages: %w", err)
 	}
 	return result, nil
 }
 
-func (s *Store) MarkEmailNotificationSent(ctx context.Context, id int64, sentAt time.Time) error {
-	result, err := s.db.ExecContext(ctx, "UPDATE email_notifications SET status = 'sent', sent_at = ?, last_error_code = '' WHERE id = ?", unixOrZero(sentAt), id)
+func (s *Store) MarkEmailMessageSent(ctx context.Context, id int64, sentAt time.Time) error {
+	result, err := s.db.ExecContext(ctx, "UPDATE email_messages SET status = 'sent', sent_at = ?, last_error_code = '' WHERE id = ? AND status = 'pending'", unixOrZero(sentAt), id)
 	if err != nil {
-		return fmt.Errorf("mark email notification sent: %w", err)
+		return fmt.Errorf("mark email message sent: %w", err)
 	}
 	if count, err := result.RowsAffected(); err != nil {
-		return fmt.Errorf("check email notification sent: %w", err)
+		return fmt.Errorf("check email message sent: %w", err)
 	} else if count == 0 {
 		return repository.ErrNotFound
 	}
 	return nil
 }
 
-func (s *Store) MarkEmailNotificationFailed(ctx context.Context, id int64, attempts int, nextAttemptAt time.Time, errorCode string) error {
-	result, err := s.db.ExecContext(ctx, "UPDATE email_notifications SET attempts = ?, next_attempt_at = ?, last_error_code = ? WHERE id = ?", attempts, unixOrZero(nextAttemptAt), errorCode, id)
+func (s *Store) MarkEmailMessageFailed(ctx context.Context, id int64, attempts int, nextAttemptAt time.Time, errorCode string) error {
+	result, err := s.db.ExecContext(ctx, "UPDATE email_messages SET attempts = ?, next_attempt_at = ?, last_error_code = ? WHERE id = ? AND status = 'pending'", attempts, unixOrZero(nextAttemptAt), errorCode, id)
 	if err != nil {
-		return fmt.Errorf("mark email notification failed: %w", err)
+		return fmt.Errorf("mark email message failed: %w", err)
 	}
 	if count, err := result.RowsAffected(); err != nil {
-		return fmt.Errorf("check email notification failure: %w", err)
+		return fmt.Errorf("check email message failure: %w", err)
 	} else if count == 0 {
 		return repository.ErrNotFound
 	}
 	return nil
 }
 
-func (s *Store) MarkEmailNotificationCanceled(ctx context.Context, id int64) error {
-	result, err := s.db.ExecContext(ctx, "UPDATE email_notifications SET status = 'canceled' WHERE id = ? AND status = 'pending'", id)
+func (s *Store) MarkEmailMessageCanceled(ctx context.Context, id int64) error {
+	result, err := s.db.ExecContext(ctx, "UPDATE email_messages SET status = 'canceled' WHERE id = ? AND status = 'pending'", id)
 	if err != nil {
-		return fmt.Errorf("cancel email notification: %w", err)
+		return fmt.Errorf("cancel email message: %w", err)
 	}
 	if count, err := result.RowsAffected(); err != nil {
-		return fmt.Errorf("check email notification cancellation: %w", err)
+		return fmt.Errorf("check email message cancellation: %w", err)
 	} else if count == 0 {
 		return repository.ErrNotFound
 	}
 	return nil
 }
 
-func (s *Store) CancelEmailNotificationsForWorkspace(ctx context.Context, workspaceID string) error {
-	if _, err := s.db.ExecContext(ctx, "UPDATE email_notifications SET status = 'canceled' WHERE workspace_id = ? AND status = 'pending'", workspaceID); err != nil {
-		return fmt.Errorf("cancel workspace email notifications: %w", err)
+// escapeLike makes a value safe as a LIKE prefix. Workspace IDs are generated,
+// but a wildcard reaching this query would cancel unrelated mail.
+func escapeLike(value string) string {
+	return strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(value)
+}
+
+func (s *Store) CancelEmailMessagesForWorkspace(ctx context.Context, workspaceID string) error {
+	pattern := escapeLike("workspace:"+workspaceID+":") + "%"
+	if _, err := s.db.ExecContext(ctx, `UPDATE email_messages SET status = 'canceled'
+		WHERE status = 'pending' AND dedupe_key LIKE ? ESCAPE '\'`, pattern); err != nil {
+		return fmt.Errorf("cancel workspace email messages: %w", err)
 	}
 	return nil
 }
 
-func (s *Store) CancelEmailNotificationsForUser(ctx context.Context, userID string) error {
-	if _, err := s.db.ExecContext(ctx, "UPDATE email_notifications SET status = 'canceled' WHERE owner_user_id = ? AND status = 'pending'", userID); err != nil {
-		return fmt.Errorf("cancel user email notifications: %w", err)
+func (s *Store) CancelEmailMessagesForUser(ctx context.Context, userID string) error {
+	if _, err := s.db.ExecContext(ctx, "UPDATE email_messages SET status = 'canceled' WHERE user_id = ? AND status = 'pending'", userID); err != nil {
+		return fmt.Errorf("cancel user email messages: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) CountRecentEmailMessages(ctx context.Context, userID, kind string, since time.Time) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM email_messages WHERE user_id = ? AND kind = ? AND created_at >= ?",
+		userID, kind, since.Unix()).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count recent email messages: %w", err)
+	}
+	return count, nil
 }
 
 const workspaceSelect = `SELECT id, owner_user_id, template_id, name, desired_state, observed_state, runtime_id,

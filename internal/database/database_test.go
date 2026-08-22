@@ -34,8 +34,8 @@ func TestOpenInitializesSQLite(t *testing.T) {
 	if err := db.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&migrations); err != nil {
 		t.Fatalf("count migrations: %v", err)
 	}
-	if migrations != 27 {
-		t.Fatalf("migration count = %d, want 27", migrations)
+	if migrations != 28 {
+		t.Fatalf("migration count = %d, want 28", migrations)
 	}
 
 	var metadataTable string
@@ -65,8 +65,8 @@ func TestOpenReusesAppliedMigration(t *testing.T) {
 	if err := second.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&migrations); err != nil {
 		t.Fatalf("count migrations: %v", err)
 	}
-	if migrations != 27 {
-		t.Fatalf("migration count = %d, want 27", migrations)
+	if migrations != 28 {
+		t.Fatalf("migration count = %d, want 28", migrations)
 	}
 	if err := second.Ping(); err != nil && err != sql.ErrConnDone {
 		t.Fatalf("ping reopened database: %v", err)
@@ -135,6 +135,84 @@ func TestBackfillMigrationSeedsIdleSinceFromStartedAt(t *testing.T) {
 		}
 		if idleSince != expected {
 			t.Fatalf("idle_since for %s = %d, want %d", id, idleSince, expected)
+		}
+	}
+}
+
+func TestUnifiedOutboxMigrationCopiesBothOldTables(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "cows.db")
+	db, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("pin connection: %v", err)
+	}
+	// Rebuild the pre-0028 shape and re-run the migration against it, so the
+	// copy statements are exercised rather than assumed.
+	setup := []string{
+		"DROP TABLE email_messages",
+		`CREATE TABLE email_notifications (
+			id INTEGER PRIMARY KEY AUTOINCREMENT, workspace_id TEXT NOT NULL, owner_user_id TEXT NOT NULL,
+			recipient TEXT NOT NULL, kind TEXT NOT NULL, deadline INTEGER NOT NULL, subject TEXT NOT NULL,
+			body TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
+			next_attempt_at INTEGER NOT NULL, last_error_code TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL, sent_at INTEGER NOT NULL DEFAULT 0, UNIQUE (workspace_id, kind))`,
+		`CREATE TABLE password_reset_emails (
+			id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, recipient TEXT NOT NULL,
+			subject TEXT NOT NULL, body TEXT NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+			next_attempt_at INTEGER NOT NULL, last_error_code TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL, sent_at INTEGER)`,
+		`INSERT INTO email_notifications (workspace_id, owner_user_id, recipient, kind, deadline, subject, body,
+			status, next_attempt_at, created_at) VALUES ('w1', 'owner-1', 'owner@example.test', 'timeout_delete',
+			200, 'warning', 'body', 'pending', 100, 100)`,
+		`INSERT INTO password_reset_emails (user_id, recipient, subject, body, status, next_attempt_at, created_at)
+			VALUES ('owner-1', 'owner@example.test', 'reset', 'link', 'pending', 100, 100)`,
+		"DELETE FROM schema_migrations WHERE version = 28",
+	}
+	for _, statement := range setup {
+		if _, err := conn.ExecContext(ctx, statement); err != nil {
+			t.Fatalf("prepare pre-migration state (%s): %v", statement, err)
+		}
+	}
+	conn.Close()
+	db.Close()
+
+	reopened, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("reopen database: %v", err)
+	}
+	defer reopened.Close()
+
+	rows, err := reopened.QueryContext(ctx, "SELECT kind, COALESCE(dedupe_key, '') FROM email_messages ORDER BY kind")
+	if err != nil {
+		t.Fatalf("read migrated messages: %v", err)
+	}
+	defer rows.Close()
+	migrated := map[string]string{}
+	for rows.Next() {
+		var kind, dedupe string
+		if err := rows.Scan(&kind, &dedupe); err != nil {
+			t.Fatalf("scan migrated message: %v", err)
+		}
+		migrated[kind] = dedupe
+	}
+	if len(migrated) != 2 {
+		t.Fatalf("expected both old tables to be copied forward, got %+v", migrated)
+	}
+	if migrated["timeout_delete"] != "workspace:w1:timeout_delete" {
+		t.Fatalf("lifecycle row lost its dedupe key: %+v", migrated)
+	}
+	if migrated["password_reset"] != "" {
+		t.Fatalf("a reset message must stay one-shot, got dedupe key %q", migrated["password_reset"])
+	}
+	for _, table := range []string{"email_notifications", "password_reset_emails"} {
+		var name string
+		err := reopened.QueryRowContext(ctx, "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&name)
+		if err == nil {
+			t.Fatalf("%s should have been dropped", table)
 		}
 	}
 }

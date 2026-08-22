@@ -845,7 +845,7 @@ func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID stri
 		if err := s.logArchiveActivity(value, archiveAction, "succeeded", nil); err != nil {
 			return err
 		}
-		if err := s.store.CancelEmailNotificationsForWorkspace(ctx, value.ID); err != nil {
+		if err := s.store.CancelEmailMessagesForWorkspace(ctx, value.ID); err != nil {
 			return err
 		}
 		_, archivePath := archiveActivityPaths(s.mountRoot, s.mountArchiveRoot, value.ID)
@@ -917,7 +917,7 @@ func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID stri
 			return err
 		}
 	}
-	if err := s.store.CancelEmailNotificationsForWorkspace(ctx, value.ID); err != nil {
+	if err := s.store.CancelEmailMessagesForWorkspace(ctx, value.ID); err != nil {
 		_ = s.finishOperation(ctx, value.ID, "delete", "failed", err.Error(), operationStarted)
 		return err
 	}
@@ -1282,7 +1282,7 @@ func (s *Service) RunTimeouts(ctx context.Context) error {
 						operationErr = err
 					}
 				}
-				remember(s.store.CancelEmailNotificationsForWorkspace(ctx, value.ID))
+				remember(s.store.CancelEmailMessagesForWorkspace(ctx, value.ID))
 				remember(s.store.ReleaseWorkspacePorts(ctx, value.ID))
 				value.ContainerDeletedAt = now
 				value.DataArchiveEligibleAt = time.Time{}

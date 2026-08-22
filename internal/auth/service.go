@@ -523,7 +523,7 @@ func (s *Service) DeleteUser(ctx context.Context, actorID, targetID string) erro
 	} else if len(workspaces) > 0 {
 		return ErrUserHasWorkspaces
 	}
-	if err := s.store.CancelEmailNotificationsForUser(ctx, targetID); err != nil {
+	if err := s.store.CancelEmailMessagesForUser(ctx, targetID); err != nil {
 		return err
 	}
 	if err := s.store.DeleteUser(ctx, targetID); err != nil {
