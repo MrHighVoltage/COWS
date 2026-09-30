@@ -227,7 +227,7 @@ func (s *Server) adminUsersImportPreview(w http.ResponseWriter, r *http.Request)
 	groupIDs := append([]string(nil), r.Form["group_ids"]...)
 	previews, err := s.auth.PreviewUserImport(r.Context(), user.ID, inputs, groupIDs)
 	if err != nil {
-		s.renderUserImportError(w, r, user, "The CSV contains invalid or duplicate user records.")
+		s.renderUserImportError(w, r, user, "The CSV contains invalid user records, or an email address that is duplicated in the file or already belongs to another account.")
 		return
 	}
 	token, err := s.userImports.putDraft(userImportDraft{ActorID: user.ID, Inputs: inputs, GroupIDs: groupIDs, Previews: previews, CreatedAt: time.Now().UTC()})
@@ -246,17 +246,8 @@ func (s *Server) adminUsersImportPreview(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) adminUsersImportCommit(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAdministrator(w, r)
+	user, ok := s.adminForm(w, r)
 	if !ok {
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	if !s.validCSRF(r) {
-		http.Error(w, "invalid request", http.StatusForbidden)
-		return
-	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 	draft, ok := s.userImports.getDraft(user.ID, r.FormValue("draft_token"))

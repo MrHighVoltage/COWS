@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -33,7 +34,7 @@ func TestUserImportPreviewsAndCommitsNewAndExistingUsers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create existing user: %v", err)
 	}
-	inputs := []ImportUserInput{{Username: "existing", Email: "new@example.test", DisplayName: "Ignored"}, {Username: "new-user", Email: "new@example.test", DisplayName: "New User"}}
+	inputs := []ImportUserInput{{Username: "existing", Email: "new@example.test", DisplayName: "Ignored"}, {Username: "new-user", Email: "new-user@example.test", DisplayName: "New User"}}
 	preview, err := service.PreviewUserImport(ctx, admin.ID, inputs, []string{group.ID})
 	if err != nil || len(preview) != 2 || !preview[0].Existing || preview[0].GroupsToAdd[0] != group.ID || preview[1].Existing {
 		t.Fatalf("import preview = %+v err=%v", preview, err)
@@ -108,5 +109,47 @@ func TestImportFallsBackToPasswordsWhenInvitationsAreUnavailable(t *testing.T) {
 	}
 	if _, _, err := service.Authenticate(ctx, "rowone", results[0].Password); err != nil {
 		t.Fatalf("the temporary password must work: %v", err)
+	}
+}
+
+// Two accounts sharing an address would leave it undecided which one a
+// self-service reset link opens, so a batch carrying a duplicate is refused
+// whole rather than importing the rows that happen to come first.
+func TestUserImportRefusesDuplicateEmailAddresses(t *testing.T) {
+	service := testService(t)
+	ctx := context.Background()
+	admin := testAdministrator(t, service)
+	if _, err := service.CreateUser(ctx, admin.ID, CreateUserInput{Username: "existing", Email: "taken@example.test", DisplayName: "Existing", Password: "existing password", Role: domain.RoleUser}); err != nil {
+		t.Fatalf("create existing user: %v", err)
+	}
+	withinBatch := []ImportUserInput{{Username: "first", Email: "shared@example.test"}, {Username: "second", Email: "shared@example.test"}}
+	if _, err := service.PreviewUserImport(ctx, admin.ID, withinBatch, nil); !errors.Is(err, ErrInvalidUserImport) {
+		t.Fatalf("duplicate address within a batch = %v, want invalid import", err)
+	}
+	// Both a row that would create an account and a row that would update a
+	// different existing one are refused, and the preview refuses them too, so
+	// the batch never reaches a commit that could only fail.
+	if _, err := service.CreateUser(ctx, admin.ID, CreateUserInput{Username: "other", Email: "other@example.test", DisplayName: "Other", Password: "existing password", Role: domain.RoleUser}); err != nil {
+		t.Fatalf("create other user: %v", err)
+	}
+	for name, batch := range map[string][]ImportUserInput{
+		"new row":      {{Username: "third", Email: "taken@example.test"}},
+		"existing row": {{Username: "other", Email: "taken@example.test"}},
+	} {
+		if _, err := service.PreviewUserImport(ctx, admin.ID, batch, nil); !errors.Is(err, ErrEmailInUse) {
+			t.Fatalf("preview of a %s taking another account's address = %v, want email in use", name, err)
+		}
+		if _, err := service.ImportUsers(ctx, admin.ID, batch, nil); !errors.Is(err, ErrEmailInUse) {
+			t.Fatalf("import of a %s taking another account's address = %v, want email in use", name, err)
+		}
+	}
+	// A row that keeps the address its own account already holds is fine.
+	if _, err := service.ImportUsers(ctx, admin.ID, []ImportUserInput{{Username: "existing", Email: "taken@example.test", DisplayName: "Existing"}}, nil); err != nil {
+		t.Fatalf("import keeping an account's own address: %v", err)
+	}
+	// Rows without an address are not compared to each other.
+	blanks := []ImportUserInput{{Username: "fourth"}, {Username: "fifth"}}
+	if _, err := service.ImportUsers(ctx, admin.ID, blanks, nil); err != nil {
+		t.Fatalf("import without addresses: %v", err)
 	}
 }

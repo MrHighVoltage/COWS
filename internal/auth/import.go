@@ -156,7 +156,7 @@ func (s *Service) ImportUsers(ctx context.Context, actorID string, inputs []Impo
 		return nil, err
 	}
 	for _, index := range invited {
-		rawToken, expiresAt, tokenErr := s.issueInvitationToken(ctx, results[index].UserID)
+		rawToken, expiresAt, tokenErr := s.issueToken(ctx, results[index].UserID, domain.TokenPurposeInvitation, s.invitationLifetime)
 		if tokenErr != nil {
 			return nil, tokenErr
 		}
@@ -178,6 +178,10 @@ func (s *Service) validateImportInputs(ctx context.Context, inputs []ImportUserI
 		return ErrInvalidUserImport
 	}
 	seenUsers := make(map[string]struct{}, len(inputs))
+	// Addresses are deduped alongside usernames: the reset endpoint resolves an
+	// address to a single account, so a batch that gives two accounts the same
+	// address would leave which one a reset link opens up to the database.
+	seenEmails := make(map[string]struct{}, len(inputs))
 	for _, input := range inputs {
 		username := normalizeUsername(input.Username)
 		if !validUsername(username) || !validEmail(input.Email) || !validDisplayName(input.DisplayName) {
@@ -187,6 +191,30 @@ func (s *Service) validateImportInputs(ctx context.Context, inputs []ImportUserI
 			return ErrInvalidUserImport
 		}
 		seenUsers[username] = struct{}{}
+		email := strings.ToLower(strings.TrimSpace(input.Email))
+		if email == "" {
+			continue
+		}
+		if _, exists := seenEmails[email]; exists {
+			return ErrInvalidUserImport
+		}
+		seenEmails[email] = struct{}{}
+		// An address held by an account other than the one this row targets
+		// would give two accounts the same address once committed. Checking it
+		// here rather than at insert time means the preview refuses the batch
+		// before an administrator commits it, and covers rows that update an
+		// existing account as well as rows that create one.
+		targetID := ""
+		if record, err := s.store.FindUserByUsername(ctx, username); err == nil {
+			targetID = record.User.ID
+		} else if !errors.Is(err, repository.ErrNotFound) {
+			return err
+		}
+		if available, err := s.emailAvailable(ctx, email, targetID); err != nil {
+			return err
+		} else if !available {
+			return ErrEmailInUse
+		}
 	}
 	seenGroups := make(map[string]struct{}, len(groupIDs))
 	for _, groupID := range groupIDs {

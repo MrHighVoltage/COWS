@@ -100,8 +100,14 @@ sessions, CSRF protection, mandatory first-login password changes, user email
 addresses, password changes, local self-registration with server defaults,
 registration rate limiting, bounded CSV import with preview and credential
 export, roles, groups, quotas, disable/delete safety, group lifecycle, basic
-audit persistence, and offline administrator credential recovery
-(`cows recover-admin`, decision 0026).
+audit persistence, offline administrator credential recovery
+(`cows recover-admin`, decision 0026), account invitations over purpose-scoped
+credential tokens (decision 0027), administrator editing of an account's email
+address and display name, and direct administrator password setting for
+deployments without email delivery. An email address belongs to at most one
+account; replacing a credential or changing the address it was mailed to
+retires that account's outstanding invitation and reset tokens and cancels
+queued mail carrying them, on every route including CSV import.
 
 Remaining exit criteria:
 

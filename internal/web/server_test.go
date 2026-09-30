@@ -1266,3 +1266,126 @@ func TestLoginPageLinksPasswordResetOnlyWhenItIsUsable(t *testing.T) {
 		}
 	}
 }
+
+func TestAdministratorEditsAccountEmailAndPassword(t *testing.T) {
+	server, authService := testServer(t)
+	ctx := context.Background()
+	if _, err := authService.BootstrapAdministrator(ctx, auth.CreateUserInput{Username: "admin", Email: "admin@example.test", Password: "correct horse battery staple"}); err != nil {
+		t.Fatalf("bootstrap administrator: %v", err)
+	}
+	admin, _, err := authService.Authenticate(ctx, "admin", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate administrator: %v", err)
+	}
+	if err := authService.ChangePassword(ctx, admin.ID, "correct horse battery staple", "changed correct horse battery staple"); err != nil {
+		t.Fatalf("change administrator password: %v", err)
+	}
+	student, err := authService.CreateUser(ctx, admin.ID, auth.CreateUserInput{Username: "student", Email: "typo@example.test", DisplayName: "Student", Password: "another correct password", Role: domain.RoleUser})
+	if err != nil {
+		t.Fatalf("create student: %v", err)
+	}
+	_, token, err := authService.Authenticate(ctx, "admin", "changed correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate changed administrator: %v", err)
+	}
+	sessionCookie := &http.Cookie{Name: "cows_session", Value: token}
+	editURL := "/admin/users/" + student.ID + "/edit"
+	pageRequest := httptest.NewRequest(http.MethodGet, editURL, nil)
+	pageRequest.AddCookie(sessionCookie)
+	pageRecorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(pageRecorder, pageRequest)
+	csrfCookie := cookieByName(pageRecorder.Result().Cookies(), "cows_csrf")
+	if pageRecorder.Code != http.StatusOK || csrfCookie == nil || !strings.Contains(pageRecorder.Body.String(), "Account details") {
+		t.Fatalf("user edit page response: status=%d csrf=%#v body=%s", pageRecorder.Code, csrfCookie, pageRecorder.Body.String())
+	}
+
+	post := func(path string, form url.Values) *httptest.ResponseRecorder {
+		t.Helper()
+		form.Set("csrf_token", csrfCookie.Value)
+		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		request.AddCookie(sessionCookie)
+		request.AddCookie(csrfCookie)
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, request)
+		return recorder
+	}
+
+	profile := post("/admin/users/"+student.ID+"/profile", url.Values{"email": {"student@example.test"}, "display_name": {"Real Student"}})
+	if profile.Code != http.StatusSeeOther || profile.Header().Get("Location") != editURL+"?notice=profile" {
+		t.Fatalf("profile update response: status=%d location=%q", profile.Code, profile.Header().Get("Location"))
+	}
+	updated, err := authService.FindUserForAdmin(ctx, admin.ID, student.ID)
+	if err != nil || updated.Email != "student@example.test" || updated.DisplayName != "Real Student" {
+		t.Fatalf("updated user = %+v %v", updated, err)
+	}
+	invalid := post("/admin/users/"+student.ID+"/profile", url.Values{"email": {"not an address"}, "display_name": {"Real Student"}})
+	if invalid.Code != http.StatusSeeOther || invalid.Header().Get("Location") != editURL+"?error=profile" {
+		t.Fatalf("invalid profile response: status=%d location=%q", invalid.Code, invalid.Header().Get("Location"))
+	}
+
+	// An administrator's own account offers no password form here: setting it
+	// would end the session making the request.
+	selfRequest := httptest.NewRequest(http.MethodGet, "/admin/users/"+admin.ID+"/edit", nil)
+	selfRequest.AddCookie(sessionCookie)
+	selfRecorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(selfRecorder, selfRequest)
+	selfPasswordAction := "action=\"/admin/users/" + admin.ID + "/password\""
+	if body := selfRecorder.Body.String(); strings.Contains(body, selfPasswordAction) || !strings.Contains(body, "Account security") {
+		t.Fatalf("own account edit page offers a password form: %s", body)
+	}
+	selfPost := post("/admin/users/"+admin.ID+"/password", url.Values{"new_password": {"a password for myself"}, "confirm_password": {"a password for myself"}})
+	if selfPost.Header().Get("Location") != "/admin/users/"+admin.ID+"/edit?error=password_self" {
+		t.Fatalf("self password set location=%q", selfPost.Header().Get("Location"))
+	}
+	if _, _, err := authService.Authenticate(ctx, "admin", "changed correct horse battery staple"); err != nil {
+		t.Fatalf("administrator password changed by a refused self set: %v", err)
+	}
+
+	// Two accounts must not share an address: the reset endpoint resolves an
+	// address to exactly one account.
+	taken := post("/admin/users/"+student.ID+"/profile", url.Values{"email": {"admin@example.test"}, "display_name": {"Real Student"}})
+	if taken.Header().Get("Location") != editURL+"?error=email_in_use" {
+		t.Fatalf("duplicate address location=%q", taken.Header().Get("Location"))
+	}
+
+	mismatch := post("/admin/users/"+student.ID+"/password", url.Values{"new_password": {"an administrator chosen password"}, "confirm_password": {"a different password entirely"}})
+	if mismatch.Code != http.StatusSeeOther || mismatch.Header().Get("Location") != editURL+"?error=password_mismatch" {
+		t.Fatalf("mismatched password response: status=%d location=%q", mismatch.Code, mismatch.Header().Get("Location"))
+	}
+	if _, _, err := authService.Authenticate(ctx, "student", "another correct password"); err != nil {
+		t.Fatalf("password changed despite the mismatch: %v", err)
+	}
+	changed := post("/admin/users/"+student.ID+"/password", url.Values{"new_password": {"an administrator chosen password"}, "confirm_password": {"an administrator chosen password"}})
+	if changed.Code != http.StatusSeeOther || changed.Header().Get("Location") != editURL+"?notice=password" {
+		t.Fatalf("password response: status=%d location=%q", changed.Code, changed.Header().Get("Location"))
+	}
+	if _, _, err := authService.Authenticate(ctx, "student", "an administrator chosen password"); err != nil {
+		t.Fatalf("authenticate with the new password: %v", err)
+	}
+
+	// A signed-in user may not edit anyone, including themselves, through the
+	// administrator routes. The student clears the forced password change
+	// first, so the refusal below is about their role and not that flag.
+	signedIn, studentToken, err := authService.Authenticate(ctx, "student", "an administrator chosen password")
+	if err != nil {
+		t.Fatalf("authenticate student: %v", err)
+	}
+	if !signedIn.MustChangePassword {
+		t.Fatal("a password set by an administrator must be changed at next sign-in")
+	}
+	if err := authService.ChangePassword(ctx, student.ID, "an administrator chosen password", "a password of their own"); err != nil {
+		t.Fatalf("student changes their password: %v", err)
+	}
+	for _, path := range []string{"/profile", "/password"} {
+		request := httptest.NewRequest(http.MethodPost, "/admin/users/"+student.ID+path, strings.NewReader("email=self@example.test&new_password=a password of their own&confirm_password=a password of their own&csrf_token="+csrfCookie.Value))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		request.AddCookie(&http.Cookie{Name: "cows_session", Value: studentToken})
+		request.AddCookie(csrfCookie)
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusForbidden {
+			t.Fatalf("non-administrator POST %s = %d, want 403", path, recorder.Code)
+		}
+	}
+}

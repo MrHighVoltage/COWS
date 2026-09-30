@@ -208,10 +208,20 @@ to them.
   revoke-stolen, revoke-all) and `internal/web/server_test.go`
   (`TestPasswordChangeKeepsCallerAndRevokesOtherSessions`). `SECURITY.md` now
   documents this alongside disable-based invalidation.
+- **Update (2026-09-30):** the import duplicate-handling half is closed.
+  `ImportUsers` now rejects a batch whose rows repeat an email address or
+  claim one already held by another account
+  (`internal/auth/import.go`, `emailAvailable`), and an import row that
+  corrects an existing account's address retires that account's credential
+  links. Tests: `TestUserImportRefusesDuplicateEmailAddresses`
+  (`internal/auth/import_test.go`),
+  `TestEmailAddressesStayUniqueAcrossAccounts` and
+  `TestChangingAnEmailRetiresItsCredentialLinksAndQueuedMail`
+  (`internal/auth/service_test.go`).
 - Still open: concurrent session use after **disable** (behavior exists via
   the session lookup excluding disabled accounts, per `SECURITY.md`, but
-  lacks a dedicated test), CSV import partial failures and duplicate
-  handling, and registration throttling. ROADMAP M1.
+  lacks a dedicated test), CSV import partial failures, and registration
+  throttling. ROADMAP M1.
 
 ## D. Documented gaps the plans deliberately defer
 
@@ -277,6 +287,37 @@ made every workspace running at upgrade time permanently exempt from the idle
 stop. Migration `0027_backfill_idle_since.sql` seeds those rows from
 `started_at`, covered by
 `TestBackfillMigrationSeedsIdleSinceFromStartedAt`.
+
+**2026-09-30.** A code-level security review of the auth/web/repository/file/
+runtime layers (16 findings, recorded outside the repository) closed its
+first item: a CSV import that corrected an existing account's email address
+updated the row without retiring credential links already mailed to the old
+address, so an outstanding invitation or reset link stayed redeemable from a
+mailbox the account no longer owned. `invalidateCredentialTokensTx`
+(`internal/repository/sqlite/store.go`) is now the shared body behind every
+route that replaces a credential or changes an address — CSV import, the
+administrator profile editor, `UpdateUserProfile`, and the new
+`InvalidateUserCredentialTokens` — and it both deletes the account's
+invitation and reset tokens and cancels queued `email_messages` of those
+kinds. The same change added the one-address-one-account invariant (enforced
+at creation, import, and the administrator editor) and an administrator
+profile/password editor (`POST /admin/users/{id}/profile` and `/password`).
+Setting a password there is refused for the administrator's own account
+(`ErrSelfPasswordSet`, which has its own path proving knowledge of the current
+password) and for a disabled account (`ErrTargetDisabled`, because re-opening
+one is a separate audited decision); a password an administrator sets must be
+changed at the target's next sign-in and revokes every session for that
+account. `AGENTS.md`
+and `SECURITY.md` carry the invariants. Still open from that review, in
+priority order: the login limiter's check-then-act race
+(`internal/auth/limiter.go`, `Allow` reads the counter without reserving, so a
+parallel burst passes the five-failure cap), IP-only rate limiting behind a
+reverse proxy (B4 here; needs a decision record), `CookieSecure` defaulting
+false with no cross-check against an HTTPS external base URL, secrets accepted
+as CLI flags, and the absent Content-Security-Policy header. Note also that
+`users.email` has no unique index (migration `0004` adds it as plain
+`TEXT NOT NULL DEFAULT ''`), so the uniqueness invariant currently rests on an
+application-level check-then-act.
 
 Findings A2 and C3 above were updated 2026-08-11 to reflect commits made
 after the 2026-08-04 audit (`a6549c5`, `3ed253a`, `95ecb05`, `5876ec8`,

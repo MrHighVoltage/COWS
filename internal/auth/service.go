@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/mail"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -33,6 +34,9 @@ var (
 	ErrRegistrationUnavailable = errors.New("registration is unavailable")
 	ErrInvalidResetToken       = errors.New("invalid or expired password reset token")
 	ErrRecoveryTargetInvalid   = errors.New("recovery target must be an existing, enabled administrator")
+	ErrEmailInUse              = errors.New("email address already belongs to another account")
+	ErrTargetDisabled          = errors.New("the account must be enabled")
+	ErrSelfPasswordSet         = errors.New("administrator cannot set their own password from the user editor")
 )
 
 const (
@@ -42,6 +46,9 @@ const (
 	auditUserDisabled   = "user.disabled"
 	auditUserEnabled    = "user.enabled"
 	auditAdminRecovered = "administrator.recovered"
+
+	auditUserProfileUpdated = "user.profile_updated"
+	auditUserPasswordSet    = "user.password_set"
 )
 
 type Service struct {
@@ -210,14 +217,17 @@ func (s *Service) ChangePassword(ctx context.Context, userID, currentPassword, n
 	if record.User.Disabled || bcrypt.CompareHashAndPassword([]byte(record.PasswordHash), []byte(currentPassword)) != nil {
 		return ErrInvalidCredentials
 	}
-	if !validPassword(newPassword) {
-		return ErrInvalidInput
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	hash, err := hashPassword(newPassword)
 	if err != nil {
-		return fmt.Errorf("hash password: %w", err)
+		return err
 	}
-	if err := s.store.UpdateUserPassword(ctx, userID, string(hash), false); err != nil {
+	if err := s.store.UpdateUserPassword(ctx, userID, hash, false); err != nil {
+		return err
+	}
+	// A reset or invitation link mailed earlier must not survive the change it
+	// was meant to bring about; the caller keeps its own session, so sessions
+	// are left to RevokeOtherSessions.
+	if err := s.store.InvalidateUserCredentialTokens(ctx, userID); err != nil {
 		return err
 	}
 	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: userID, EventType: "password.changed", TargetType: "user", TargetID: userID})
@@ -261,12 +271,8 @@ func (s *Service) RequestPasswordReset(ctx context.Context, identifier string) (
 	if recent > 0 {
 		return PasswordResetRequest{}, nil
 	}
-	rawToken, err := randomToken()
+	rawToken, expiresAt, err := s.issueToken(ctx, record.User.ID, domain.TokenPurposeReset, s.passwordResetLifetime)
 	if err != nil {
-		return PasswordResetRequest{}, fmt.Errorf("create password reset token: %w", err)
-	}
-	expiresAt := now.Add(s.passwordResetLifetime)
-	if err := s.store.CreatePasswordResetToken(ctx, domain.PasswordResetToken{TokenHash: hashToken(rawToken), UserID: record.User.ID, Purpose: domain.TokenPurposeReset, ExpiresAt: expiresAt, CreatedAt: now}); err != nil {
 		return PasswordResetRequest{}, err
 	}
 	s.recordAudit(ctx, domain.AuditEvent{EventType: "password.reset.requested", TargetType: "user", TargetID: record.User.ID})
@@ -274,17 +280,16 @@ func (s *Service) RequestPasswordReset(ctx context.Context, identifier string) (
 }
 
 func (s *Service) ResetPassword(ctx context.Context, rawToken, newPassword string) error {
-	if rawToken == "" || !validPassword(newPassword) {
-		if !validPassword(newPassword) {
-			return ErrInvalidInput
-		}
+	// The password is judged before the token so a caller who fumbles both is
+	// told about the part they can fix without learning anything about the token.
+	hash, err := hashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+	if rawToken == "" {
 		return ErrInvalidResetToken
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
-	if err != nil {
-		return fmt.Errorf("hash reset password: %w", err)
-	}
-	user, err := s.store.ResetPasswordUsingToken(ctx, hashToken(rawToken), domain.TokenPurposeReset, string(hash), s.now().UTC())
+	user, err := s.store.ResetPasswordUsingToken(ctx, hashToken(rawToken), domain.TokenPurposeReset, hash, s.now().UTC())
 	if errors.Is(err, repository.ErrNotFound) {
 		return ErrInvalidResetToken
 	}
@@ -323,14 +328,11 @@ func (s *Service) RecoverAdministrator(ctx context.Context, username string) (st
 	if err != nil {
 		return "", fmt.Errorf("generate temporary password: %w", err)
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	hash, err := hashPassword(password)
 	if err != nil {
-		return "", fmt.Errorf("hash password: %w", err)
-	}
-	if err := s.store.UpdateUserPassword(ctx, record.User.ID, string(hash), true); err != nil {
 		return "", err
 	}
-	if err := s.store.DeleteSessionsForUser(ctx, record.User.ID); err != nil {
+	if err := s.replaceCredential(ctx, record.User.ID, hash); err != nil {
 		return "", err
 	}
 	s.recordAudit(ctx, domain.AuditEvent{EventType: auditAdminRecovered, TargetType: "user", TargetID: record.User.ID})
@@ -513,6 +515,81 @@ func (s *Service) CreateUser(ctx context.Context, actorID string, input CreateUs
 	return user, nil
 }
 
+// UpdateUserProfile lets an administrator correct an account's email address
+// and display name. Username and role stay out of it deliberately: both change
+// how the account authenticates or what it may do, and they have their own
+// paths. Changing the email invalidates outstanding invitation and reset links
+// for the account, because they were mailed to the previous address.
+func (s *Service) UpdateUserProfile(ctx context.Context, actorID, targetID, email, displayName string) (domain.User, error) {
+	if _, err := s.requireAdministrator(ctx, actorID); err != nil {
+		return domain.User{}, err
+	}
+	target, err := s.store.FindUserByID(ctx, targetID)
+	if err != nil {
+		return domain.User{}, err
+	}
+	email = strings.TrimSpace(email)
+	displayName = strings.TrimSpace(displayName)
+	if !validEmail(email) || !validDisplayName(displayName) {
+		return domain.User{}, ErrInvalidInput
+	}
+	if available, err := s.emailAvailable(ctx, email, targetID); err != nil {
+		return domain.User{}, err
+	} else if !available {
+		return domain.User{}, ErrEmailInUse
+	}
+	if displayName == "" {
+		displayName = target.Username
+	}
+	if err := s.store.UpdateUserProfile(ctx, targetID, email, displayName, s.now().UTC()); err != nil {
+		return domain.User{}, err
+	}
+	// The audit trail records that contact details changed, not the addresses
+	// themselves; the current value is always readable from the account.
+	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: auditUserProfileUpdated, TargetType: "user", TargetID: targetID, Metadata: map[string]string{
+		"email_changed": strconv.FormatBool(email != strings.TrimSpace(target.Email)),
+	}})
+	target.Email = email
+	target.DisplayName = displayName
+	return target, nil
+}
+
+// SetUserPassword replaces an account's password directly. It is the fallback
+// for deployments without email delivery; where mail works, an invitation or
+// reset link is preferable because it never puts the password in an
+// administrator's hands. The account must change the password at next login,
+// and every existing session for it is dropped.
+func (s *Service) SetUserPassword(ctx context.Context, actorID, targetID, newPassword string) error {
+	if _, err := s.requireAdministrator(ctx, actorID); err != nil {
+		return err
+	}
+	// The administrator's own password has its own path, which proves knowledge
+	// of the current one. Routing it through here instead would end the session
+	// making the request and force the actor back through a password change.
+	if actorID == targetID {
+		return ErrSelfPasswordSet
+	}
+	target, err := s.store.FindUserByID(ctx, targetID)
+	if err != nil {
+		return err
+	}
+	// Every other credential operation refuses a disabled account, because
+	// re-opening one is a separate, audited decision and must not happen as a
+	// side effect of handing out a password.
+	if target.Disabled {
+		return ErrTargetDisabled
+	}
+	hash, err := hashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+	if err := s.replaceCredential(ctx, targetID, hash); err != nil {
+		return err
+	}
+	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: auditUserPasswordSet, TargetType: "user", TargetID: targetID})
+	return nil
+}
+
 func (s *Service) SetUserDisabled(ctx context.Context, actorID, targetID string, disabled bool) error {
 	if _, err := s.requireAdministrator(ctx, actorID); err != nil {
 		return err
@@ -656,6 +733,11 @@ func (s *Service) prepareUser(ctx context.Context, input CreateUserInput, mustCh
 	} else if !errors.Is(err, repository.ErrNotFound) {
 		return domain.User{}, "", err
 	}
+	if available, err := s.emailAvailable(ctx, input.Email, ""); err != nil {
+		return domain.User{}, "", err
+	} else if !available {
+		return domain.User{}, "", ErrEmailInUse
+	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
 	if err != nil {
 		return domain.User{}, "", fmt.Errorf("hash password: %w", err)
@@ -723,6 +805,74 @@ func hashToken(raw string) string {
 	return base64.RawURLEncoding.EncodeToString(hash[:])
 }
 
+// issueToken stores the hash of a fresh single-use credential token and returns
+// the raw value, which belongs only in a link. Every credential link in COWS is
+// issued here so the three call sites cannot drift apart on lifetime, hashing,
+// or purpose scoping. CreatePasswordResetToken replaces the account's previous
+// token of the same purpose and cancels any queued message carrying it.
+func (s *Service) issueToken(ctx context.Context, userID, purpose string, lifetime time.Duration) (string, time.Time, error) {
+	rawToken, err := randomToken()
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("create %s token: %w", purpose, err)
+	}
+	now := s.now().UTC()
+	expiresAt := now.Add(lifetime)
+	if err := s.store.CreatePasswordResetToken(ctx, domain.PasswordResetToken{
+		TokenHash: hashToken(rawToken), UserID: userID, Purpose: purpose,
+		ExpiresAt: expiresAt, CreatedAt: now,
+	}); err != nil {
+		return "", time.Time{}, err
+	}
+	return rawToken, expiresAt, nil
+}
+
+// hashPassword validates a candidate password and returns its bcrypt hash.
+func hashPassword(value string) (string, error) {
+	if !validPassword(value) {
+		return "", ErrInvalidInput
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(value), bcrypt.DefaultCost)
+	if err != nil {
+		return "", fmt.Errorf("hash password: %w", err)
+	}
+	return string(hash), nil
+}
+
+// replaceCredential installs a password that someone other than the account
+// holder chose. All three effects belong together: the account must pick its own
+// password at the next sign-in, no session may outlive the credential it was
+// opened with, and any invitation or reset link mailed earlier must stop working
+// now that the credential has been replaced by another route.
+func (s *Service) replaceCredential(ctx context.Context, userID, passwordHash string) error {
+	if err := s.store.UpdateUserPassword(ctx, userID, passwordHash, true); err != nil {
+		return err
+	}
+	if err := s.store.DeleteSessionsForUser(ctx, userID); err != nil {
+		return err
+	}
+	return s.store.InvalidateUserCredentialTokens(ctx, userID)
+}
+
+// emailAvailable reports whether an address is free, or already belongs to
+// userID. Addresses must stay unique because the unauthenticated reset endpoint
+// resolves an identifier to a single account: were two accounts to share an
+// address, whoever reads that mailbox could reset either one, including an
+// administrator account they do not own.
+func (s *Service) emailAvailable(ctx context.Context, email, userID string) (bool, error) {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return true, nil
+	}
+	record, err := s.store.FindUserByEmail(ctx, email)
+	if errors.Is(err, repository.ErrNotFound) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return record.User.ID == userID, nil
+}
+
 // SendPasswordResetFor issues a reset token on an administrator's behalf, so
 // no secret has to be relayed out of band. Unlike RequestPasswordReset it names
 // the exact reason it refused: the caller is an authenticated administrator
@@ -740,16 +890,8 @@ func (s *Service) SendPasswordResetFor(ctx context.Context, actorID, targetUserI
 	if target.Disabled || strings.TrimSpace(target.Email) == "" {
 		return PasswordResetRequest{}, ErrRecoveryTargetInvalid
 	}
-	rawToken, err := randomToken()
+	rawToken, expiresAt, err := s.issueToken(ctx, target.ID, domain.TokenPurposeReset, s.passwordResetLifetime)
 	if err != nil {
-		return PasswordResetRequest{}, fmt.Errorf("create password reset token: %w", err)
-	}
-	now := s.now().UTC()
-	expiresAt := now.Add(s.passwordResetLifetime)
-	if err := s.store.CreatePasswordResetToken(ctx, domain.PasswordResetToken{
-		TokenHash: hashToken(rawToken), UserID: target.ID, Purpose: domain.TokenPurposeReset,
-		ExpiresAt: expiresAt, CreatedAt: now,
-	}); err != nil {
 		return PasswordResetRequest{}, err
 	}
 	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "user.password_reset_sent", TargetType: "user", TargetID: target.ID})

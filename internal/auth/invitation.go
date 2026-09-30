@@ -42,24 +42,6 @@ func unusablePasswordHash() (string, error) {
 	return string(hash), nil
 }
 
-// issueInvitationToken stores the hash of a fresh single-use invitation and
-// returns the raw value, which belongs only in a link.
-func (s *Service) issueInvitationToken(ctx context.Context, userID string) (string, time.Time, error) {
-	rawToken, err := randomToken()
-	if err != nil {
-		return "", time.Time{}, fmt.Errorf("create invitation token: %w", err)
-	}
-	now := s.now().UTC()
-	expiresAt := now.Add(s.invitationLifetime)
-	if err := s.store.CreatePasswordResetToken(ctx, domain.PasswordResetToken{
-		TokenHash: hashToken(rawToken), UserID: userID, Purpose: domain.TokenPurposeInvitation,
-		ExpiresAt: expiresAt, CreatedAt: now,
-	}); err != nil {
-		return "", time.Time{}, err
-	}
-	return rawToken, expiresAt, nil
-}
-
 // CreateUserWithInvitation creates an account with a password when one is
 // given, and otherwise an account that can only be opened through a mailed
 // single-use invitation. The returned token is raw and must be placed only in
@@ -97,7 +79,7 @@ func (s *Service) CreateUserWithInvitation(ctx context.Context, actorID string, 
 	if err := s.store.CreateUser(ctx, user, hash); err != nil {
 		return domain.User{}, InvitationRequest{}, err
 	}
-	rawToken, expiresAt, err := s.issueInvitationToken(ctx, user.ID)
+	rawToken, expiresAt, err := s.issueToken(ctx, user.ID, domain.TokenPurposeInvitation, s.invitationLifetime)
 	if err != nil {
 		return domain.User{}, InvitationRequest{}, err
 	}
@@ -110,14 +92,14 @@ func (s *Service) CreateUserWithInvitation(ctx context.Context, actorID string, 
 // for the account. It mirrors the reset path deliberately: the only
 // differences are the token purpose and the audit event.
 func (s *Service) AcceptInvitation(ctx context.Context, rawToken, password, confirmation string) (domain.User, error) {
-	if password != confirmation || !validPassword(password) {
+	if password != confirmation {
 		return domain.User{}, ErrInvalidInput
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	hash, err := hashPassword(password)
 	if err != nil {
-		return domain.User{}, fmt.Errorf("hash password: %w", err)
+		return domain.User{}, err
 	}
-	user, err := s.store.ResetPasswordUsingToken(ctx, hashToken(rawToken), domain.TokenPurposeInvitation, string(hash), s.now().UTC())
+	user, err := s.store.ResetPasswordUsingToken(ctx, hashToken(rawToken), domain.TokenPurposeInvitation, hash, s.now().UTC())
 	if err != nil {
 		return domain.User{}, err
 	}
@@ -142,7 +124,7 @@ func (s *Service) ResendInvitation(ctx context.Context, actorID, targetUserID st
 	if target.Disabled || strings.TrimSpace(target.Email) == "" {
 		return InvitationRequest{}, ErrInvitationUnavailable
 	}
-	rawToken, expiresAt, err := s.issueInvitationToken(ctx, target.ID)
+	rawToken, expiresAt, err := s.issueToken(ctx, target.ID, domain.TokenPurposeInvitation, s.invitationLifetime)
 	if err != nil {
 		return InvitationRequest{}, err
 	}

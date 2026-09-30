@@ -133,7 +133,10 @@ runtime identifier, or archive location.
 An account created without a password stores an unusable bcrypt hash, never an
 empty or sentinel value, and is opened only through a mailed single-use
 invitation. Invitation and reset tokens are purpose-scoped and must never be
-interchangeable. Reset requests are throttled per account without changing the
+interchangeable. Issue every credential token through the single token helper.
+An email address belongs to at most one account. Replacing a credential, or
+changing the address it was mailed to, retires that account's outstanding
+tokens and cancels queued mail carrying them. Reset requests are throttled per account without changing the
 response, so the endpoint stays non-enumerating. Invitation and reset links
 require both email delivery and a configured external base URL.
 

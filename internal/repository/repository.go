@@ -40,7 +40,15 @@ type UserRepository interface {
 	RegisterUser(ctx context.Context, user domain.User, passwordHash string, groupIDs []string, userQuota domain.UserQuota) error
 	DeleteUser(ctx context.Context, id string) error
 	UpdateUserPassword(ctx context.Context, id, passwordHash string, mustChangePassword bool) error
+	// UpdateUserProfile changes an existing account's email and display name.
+	// An email change also invalidates that account's outstanding invitation
+	// and reset tokens, which were mailed to the previous address.
+	UpdateUserProfile(ctx context.Context, id, email, displayName string, updatedAt time.Time) error
 	ResetPasswordUsingToken(ctx context.Context, tokenHash, purpose, passwordHash string, now time.Time) (domain.User, error)
+	// InvalidateUserCredentialTokens drops an account's outstanding invitation
+	// and reset tokens and cancels any queued message carrying one. Callers use
+	// it whenever the account's credential is replaced by another route.
+	InvalidateUserCredentialTokens(ctx context.Context, userID string) error
 	SetUserDisabled(ctx context.Context, id string, disabled bool) error
 	ListUserGroupIDs(ctx context.Context, userID string) ([]string, error)
 	SetUserGroups(ctx context.Context, userID string, groupIDs []string) error

@@ -142,3 +142,68 @@ func TestCountRecentEmailMessagesBacksThrottling(t *testing.T) {
 		t.Fatalf("expected the older message to fall outside the window, got %d", count)
 	}
 }
+
+// An address correction has to take with it both the links mailed to the old
+// address and any message still queued for it, while leaving mail that carries
+// no token alone.
+func TestChangingAnEmailRetiresItsCredentialLinksAndQueuedMail(t *testing.T) {
+	ctx := context.Background()
+	store := outboxTestStore(t)
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	user := domain.User{ID: "user-1", Username: "student", Email: "typo@example.test", DisplayName: "Student", Role: domain.RoleUser, CreatedAt: now, UpdatedAt: now}
+	if err := store.CreateUser(ctx, user, "hash"); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	for _, purpose := range []string{domain.TokenPurposeReset, domain.TokenPurposeInvitation} {
+		if err := store.CreatePasswordResetToken(ctx, domain.PasswordResetToken{
+			TokenHash: "hash-" + purpose, UserID: user.ID, Purpose: purpose,
+			ExpiresAt: now.Add(time.Hour), CreatedAt: now,
+		}); err != nil {
+			t.Fatalf("create %s token: %v", purpose, err)
+		}
+	}
+	for _, kind := range []string{domain.EmailKindInvitation, domain.EmailKindPasswordReset, domain.EmailKindWorkspaceDeleted} {
+		if err := store.UpsertEmailMessage(ctx, domain.EmailMessage{
+			Kind: kind, UserID: user.ID, Recipient: user.Email, Subject: kind, Body: "body",
+			Status: "pending", NextAttemptAt: now, CreatedAt: now,
+		}); err != nil {
+			t.Fatalf("queue %s message: %v", kind, err)
+		}
+	}
+
+	if err := store.UpdateUserProfile(ctx, user.ID, "student@example.test", "Student", now); err != nil {
+		t.Fatalf("update profile: %v", err)
+	}
+
+	var tokens int
+	if err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM password_reset_tokens WHERE user_id = ?", user.ID).Scan(&tokens); err != nil {
+		t.Fatalf("count tokens: %v", err)
+	}
+	if tokens != 0 {
+		t.Fatalf("tokens surviving an address change = %d, want 0", tokens)
+	}
+	pending, err := store.ListPendingEmailMessages(ctx, now, 10)
+	if err != nil {
+		t.Fatalf("list pending: %v", err)
+	}
+	if len(pending) != 1 || pending[0].Kind != domain.EmailKindWorkspaceDeleted {
+		t.Fatalf("pending after an address change = %+v, want only the workspace notice", pending)
+	}
+
+	// Rewriting the same address is not a change and retires nothing.
+	if err := store.CreatePasswordResetToken(ctx, domain.PasswordResetToken{
+		TokenHash: "hash-kept", UserID: user.ID, Purpose: domain.TokenPurposeReset,
+		ExpiresAt: now.Add(time.Hour), CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+	if err := store.UpdateUserProfile(ctx, user.ID, "student@example.test", "Real Student", now); err != nil {
+		t.Fatalf("update display name only: %v", err)
+	}
+	if err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM password_reset_tokens WHERE user_id = ?", user.ID).Scan(&tokens); err != nil {
+		t.Fatalf("count tokens: %v", err)
+	}
+	if tokens != 1 {
+		t.Fatalf("tokens after a display-name-only edit = %d, want 1", tokens)
+	}
+}
