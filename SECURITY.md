@@ -74,6 +74,28 @@ partial operations, and compromised or misconfigured images.
   security properties but carry an explicit purpose, and neither path accepts
   the other's token. Replacing a token is scoped to its own purpose and cancels
   any queued message carrying the superseded link.
+- An email address belongs to at most one account. The unauthenticated reset
+  endpoint resolves an identifier to a single account, so two accounts sharing
+  an address would leave it undecided which one a mailed link opens; account
+  creation, CSV import, and the administrator profile editor all refuse a
+  duplicate.
+- An administrator may edit an account's email address and display name, and
+  may set its password directly for deployments without email delivery. The
+  username and role are not editable through that form. Setting a password is
+  refused for the administrator's own account, which has its own path proving
+  knowledge of the current password, and for a disabled account, because
+  re-opening one is a separate audited decision.
+- Replacing an account's credential by any route -- an administrator setting a
+  password, `recover-admin`, the account holder changing their own, or a
+  consumed invitation or reset link --
+  retires that account's outstanding invitation and reset tokens and cancels
+  any queued message still carrying one. A password set by an administrator
+  additionally must be changed at the account's next sign-in and revokes every
+  session for that account, including the target's own.
+- Changing an account's email address likewise invalidates its outstanding
+  invitation and reset tokens and cancels queued invitation or reset mail
+  addressed to the previous address; lifecycle notices, which carry no token,
+  are unaffected.
 - Reset requests are throttled per account. The response is identical whether
   or not the throttle applied, so the endpoint stays non-enumerating. The
   administrator-triggered reset is not throttled and names its refusal reason,

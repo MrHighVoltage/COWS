@@ -170,6 +170,75 @@ func (s *Store) RegisterUser(ctx context.Context, user domain.User, passwordHash
 	return nil
 }
 
+// UpdateUserProfile changes the contact details of an existing account. An
+// email change also drops the account's outstanding invitation and reset
+// tokens in the same transaction: those links were mailed to the previous
+// address, and a correction to a wrong address has to take them away with it.
+func (s *Store) UpdateUserProfile(ctx context.Context, id, email, displayName string, updatedAt time.Time) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin user profile update: %w", err)
+	}
+	defer tx.Rollback()
+	var currentEmail string
+	if err := tx.QueryRowContext(ctx, "SELECT email FROM users WHERE id = ?", id).Scan(&currentEmail); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return repository.ErrNotFound
+		}
+		return fmt.Errorf("load user profile: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE users SET email = ?, display_name = ?, updated_at = ? WHERE id = ?",
+		email, displayName, updatedAt.Unix(), id); err != nil {
+		return fmt.Errorf("update user profile: %w", err)
+	}
+	if currentEmail != email {
+		// The old address keeps neither the link nor the message carrying it:
+		// a correction to a wrong address must not be followed by mail to it.
+		if err := invalidateCredentialTokensTx(ctx, tx, id); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit user profile update: %w", err)
+	}
+	return nil
+}
+
+// InvalidateUserCredentialTokens drops every outstanding invitation and reset
+// token for an account and cancels any queued message still carrying one. It is
+// called whenever the account's credential is replaced by another route, so a
+// link mailed earlier cannot open an account whose password has since changed.
+func (s *Store) InvalidateUserCredentialTokens(ctx context.Context, userID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin credential token invalidation: %w", err)
+	}
+	defer tx.Rollback()
+	if err := invalidateCredentialTokensTx(ctx, tx, userID); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit credential token invalidation: %w", err)
+	}
+	return nil
+}
+
+// invalidateCredentialTokensTx is the shared body of the two callers that must
+// retire an account's credential links: an email correction and a password
+// replacement. Only invitation and reset mail is canceled; lifecycle notices
+// carry no token and are unaffected.
+func invalidateCredentialTokensTx(ctx context.Context, tx *sql.Tx, userID string) error {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM password_reset_tokens WHERE user_id = ?", userID); err != nil {
+		return fmt.Errorf("invalidate credential tokens: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		"UPDATE email_messages SET status = 'canceled' WHERE user_id = ? AND status = 'pending' AND kind IN (?, ?)",
+		userID, domain.EmailKindInvitation, domain.EmailKindPasswordReset); err != nil {
+		return fmt.Errorf("cancel superseded credential emails: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) UpdateUserPassword(ctx context.Context, id, passwordHash string, mustChangePassword bool) error {
 	result, err := s.db.ExecContext(ctx, "UPDATE users SET password_hash = ?, must_change_password = ?, updated_at = ? WHERE id = ?", passwordHash, boolInt(mustChangePassword), time.Now().UTC().Unix(), id)
 	if err != nil {
@@ -216,6 +285,12 @@ func (s *Store) ResetPasswordUsingToken(ctx context.Context, tokenHash, purpose,
 		return domain.User{}, fmt.Errorf("check password reset token: %w", err)
 	} else if count == 0 {
 		return domain.User{}, repository.ErrNotFound
+	}
+	// The account now has a password its holder chose, so every other link to
+	// it retires with the one just used: consuming an invitation must not leave
+	// an earlier reset link (or its queued mail) able to set the password again.
+	if err := invalidateCredentialTokensTx(ctx, tx, record.User.ID); err != nil {
+		return domain.User{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return domain.User{}, fmt.Errorf("commit password reset: %w", err)

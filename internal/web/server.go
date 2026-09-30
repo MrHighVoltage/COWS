@@ -637,6 +637,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/users/{id}/disabled", s.adminUserDisabled)
 	mux.HandleFunc("POST /admin/users/{id}/delete", s.adminUserDelete)
 	mux.HandleFunc("POST /admin/users/{id}/groups", s.adminUserGroups)
+	mux.HandleFunc("POST /admin/users/{id}/profile", s.adminUserProfile)
+	mux.HandleFunc("POST /admin/users/{id}/password", s.adminUserPassword)
 	mux.HandleFunc("POST /admin/users/{id}/invitation", s.adminUserInvitation)
 	mux.HandleFunc("POST /admin/users/{id}/password-reset", s.adminUserPasswordReset)
 	mux.HandleFunc("GET /admin/groups", s.adminGroups)
@@ -2345,12 +2347,28 @@ func (s *Server) adminUserEdit(w http.ResponseWriter, r *http.Request) {
 		data.Notice = "An invitation message was queued."
 	case "reset":
 		data.Notice = "A password reset message was queued."
+	case "profile":
+		data.Notice = "The account details were updated."
+	case "password":
+		data.Notice = "The password was replaced. The user must change it at their next sign-in, all of their sessions were signed out, and any invitation or reset link already sent to them no longer works."
 	}
 	switch r.URL.Query().Get("error") {
 	case "invitation":
 		data.Error = "The invitation could not be sent. The account needs an email address and must not be disabled."
 	case "reset":
 		data.Error = "The reset link could not be sent. The account needs an email address and must not be disabled."
+	case "profile":
+		data.Error = "The account details could not be saved. Check the email address and display name."
+	case "email_in_use":
+		data.Error = "That email address already belongs to another account. Addresses must be unique so a reset link can only ever open one account."
+	case "password":
+		data.Error = "The password could not be set. It must be between 12 and 72 characters."
+	case "password_mismatch":
+		data.Error = "The two passwords did not match."
+	case "password_self":
+		data.Error = "Change your own password from Account security instead. Setting it here would end this session."
+	case "password_disabled":
+		data.Error = "A disabled account cannot be given a password. Enable it first."
 	}
 	s.render(w, http.StatusOK, "admin-user-edit-page", data)
 }
@@ -2371,17 +2389,8 @@ func (s *Server) adminUsersNew(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminUsersCreate(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAdministrator(w, r)
+	user, ok := s.adminForm(w, r)
 	if !ok {
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	if !s.validCSRF(r) {
-		http.Error(w, "invalid request", http.StatusForbidden)
-		return
-	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 	form := userFormData{Username: r.FormValue("username"), Email: r.FormValue("email"), DisplayName: r.FormValue("display_name"), Role: r.FormValue("role")}
@@ -2413,40 +2422,89 @@ func (s *Server) enqueueInvitation(r *http.Request, user domain.User, invitation
 	}
 }
 
-func (s *Server) adminUserInvitation(w http.ResponseWriter, r *http.Request) {
-	actor, ok := s.requireAdministrator(w, r)
+// adminUserProfile updates the contact details of an account. Only the email
+// address and display name are editable here; the username and role are not,
+// so a mistyped form cannot change who an account is or what it may do.
+func (s *Server) adminUserProfile(w http.ResponseWriter, r *http.Request) {
+	actor, ok := s.adminForm(w, r)
 	if !ok {
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	if !s.validCSRF(r) {
-		http.Error(w, "invalid request", http.StatusForbidden)
+	targetID := r.PathValue("id")
+	editURL := "/admin/users/" + url.PathEscape(targetID) + "/edit"
+	if _, err := s.auth.UpdateUserProfile(r.Context(), actor.ID, targetID, r.FormValue("email"), r.FormValue("display_name")); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		reason := "profile"
+		if errors.Is(err, auth.ErrEmailInUse) {
+			reason = "email_in_use"
+		}
+		http.Redirect(w, r, editURL+"?error="+reason, http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, editURL+"?notice=profile", http.StatusSeeOther)
+}
+
+// adminUserPassword sets a password chosen by the administrator. It exists for
+// deployments without email delivery; where mail is configured, the invitation
+// and reset links above are the better route because no one has to relay a
+// secret out of band.
+func (s *Server) adminUserPassword(w http.ResponseWriter, r *http.Request) {
+	actor, ok := s.adminForm(w, r)
+	if !ok {
+		return
+	}
+	targetID := r.PathValue("id")
+	editURL := "/admin/users/" + url.PathEscape(targetID) + "/edit"
+	password := r.FormValue("new_password")
+	if password != r.FormValue("confirm_password") {
+		http.Redirect(w, r, editURL+"?error=password_mismatch", http.StatusSeeOther)
+		return
+	}
+	if err := s.auth.SetUserPassword(r.Context(), actor.ID, targetID, password); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		reason := "password"
+		switch {
+		case errors.Is(err, auth.ErrSelfPasswordSet):
+			reason = "password_self"
+		case errors.Is(err, auth.ErrTargetDisabled):
+			reason = "password_disabled"
+		}
+		http.Redirect(w, r, editURL+"?error="+reason, http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, editURL+"?notice=password", http.StatusSeeOther)
+}
+
+func (s *Server) adminUserInvitation(w http.ResponseWriter, r *http.Request) {
+	actor, ok := s.adminForm(w, r)
+	if !ok {
 		return
 	}
 	targetID := r.PathValue("id")
 	invitation, err := s.auth.ResendInvitation(r.Context(), actor.ID, targetID)
 	if err != nil {
-		http.Redirect(w, r, "/admin/users/"+url.PathEscape(targetID)+"?error=invitation", http.StatusSeeOther)
+		http.Redirect(w, r, "/admin/users/"+url.PathEscape(targetID)+"/edit?error=invitation", http.StatusSeeOther)
 		return
 	}
 	s.enqueueInvitation(r, invitation.User, invitation)
-	http.Redirect(w, r, "/admin/users/"+url.PathEscape(targetID)+"?notice=invitation", http.StatusSeeOther)
+	http.Redirect(w, r, "/admin/users/"+url.PathEscape(targetID)+"/edit?notice=invitation", http.StatusSeeOther)
 }
 
 func (s *Server) adminUserPasswordReset(w http.ResponseWriter, r *http.Request) {
-	actor, ok := s.requireAdministrator(w, r)
+	actor, ok := s.adminForm(w, r)
 	if !ok {
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	if !s.validCSRF(r) {
-		http.Error(w, "invalid request", http.StatusForbidden)
 		return
 	}
 	targetID := r.PathValue("id")
 	request, err := s.auth.SendPasswordResetFor(r.Context(), actor.ID, targetID)
 	if err != nil {
-		http.Redirect(w, r, "/admin/users/"+url.PathEscape(targetID)+"?error=reset", http.StatusSeeOther)
+		http.Redirect(w, r, "/admin/users/"+url.PathEscape(targetID)+"/edit?error=reset", http.StatusSeeOther)
 		return
 	}
 	if s.options.Notifications != nil {
@@ -2454,21 +2512,12 @@ func (s *Server) adminUserPasswordReset(w http.ResponseWriter, r *http.Request) 
 			s.logger.Warn("queue administrator password reset failed", "user_id", request.User.ID, "error", err)
 		}
 	}
-	http.Redirect(w, r, "/admin/users/"+url.PathEscape(targetID)+"?notice=reset", http.StatusSeeOther)
+	http.Redirect(w, r, "/admin/users/"+url.PathEscape(targetID)+"/edit?notice=reset", http.StatusSeeOther)
 }
 
 func (s *Server) adminUserDisabled(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAdministrator(w, r)
+	user, ok := s.adminForm(w, r)
 	if !ok {
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	if !s.validCSRF(r) {
-		http.Error(w, "invalid request", http.StatusForbidden)
-		return
-	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 	disabled, err := strconv.ParseBool(r.FormValue("disabled"))
@@ -2540,17 +2589,8 @@ func (s *Server) renderUserRow(w http.ResponseWriter, r *http.Request, actor dom
 }
 
 func (s *Server) adminUserDelete(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAdministrator(w, r)
+	user, ok := s.adminForm(w, r)
 	if !ok {
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	if !s.validCSRF(r) {
-		http.Error(w, "invalid request", http.StatusForbidden)
-		return
-	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 	targetID := r.PathValue("id")
@@ -2586,17 +2626,8 @@ func (s *Server) adminUserDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminUserGroups(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAdministrator(w, r)
+	user, ok := s.adminForm(w, r)
 	if !ok {
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	if !s.validCSRF(r) {
-		http.Error(w, "invalid request", http.StatusForbidden)
-		return
-	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 	if err := s.auth.SetUserGroups(r.Context(), user.ID, r.PathValue("id"), r.Form["group_ids"]); err != nil {
@@ -2624,17 +2655,8 @@ func (s *Server) adminGroups(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminGroupsCreate(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAdministrator(w, r)
+	user, ok := s.adminForm(w, r)
 	if !ok {
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	if !s.validCSRF(r) {
-		http.Error(w, "invalid request", http.StatusForbidden)
-		return
-	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 	if _, err := s.auth.CreateGroup(r.Context(), user.ID, r.FormValue("name"), r.FormValue("description")); err != nil {
@@ -2646,17 +2668,8 @@ func (s *Server) adminGroupsCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminGroupDelete(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAdministrator(w, r)
+	user, ok := s.adminForm(w, r)
 	if !ok {
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	if !s.validCSRF(r) {
-		http.Error(w, "invalid request", http.StatusForbidden)
-		return
-	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 	if err := s.auth.DeleteGroup(r.Context(), user.ID, r.PathValue("id")); err != nil {
@@ -2691,17 +2704,8 @@ func (s *Server) adminGroupEdit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminQuotaUpdate(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAdministrator(w, r)
+	user, ok := s.adminForm(w, r)
 	if !ok {
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	if !s.validCSRF(r) {
-		http.Error(w, "invalid request", http.StatusForbidden)
-		return
-	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 	form := quotaFormData{UserID: r.PathValue("id"), MaxCPUMillis: r.FormValue("max_cpu_millis"), MaxMemoryMiB: r.FormValue("max_memory_mib"), MaxStorageGiB: r.FormValue("max_storage_gib"), MaxWorkspaces: r.FormValue("max_workspaces"), MaxRunningWorkspaces: r.FormValue("max_running_workspaces")}
@@ -2735,17 +2739,8 @@ func (s *Server) adminQuotaUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminQuotaDelete(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAdministrator(w, r)
+	user, ok := s.adminForm(w, r)
 	if !ok {
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	if !s.validCSRF(r) {
-		http.Error(w, "invalid request", http.StatusForbidden)
-		return
-	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 	userID := r.PathValue("id")
@@ -2761,17 +2756,8 @@ func (s *Server) adminQuotaDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminGroupQuotaUpdate(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAdministrator(w, r)
+	user, ok := s.adminForm(w, r)
 	if !ok {
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	if !s.validCSRF(r) {
-		http.Error(w, "invalid request", http.StatusForbidden)
-		return
-	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 	form := quotaFormData{GroupID: r.PathValue("id"), MaxCPUMillis: r.FormValue("max_cpu_millis"), MaxMemoryMiB: r.FormValue("max_memory_mib"), MaxStorageGiB: r.FormValue("max_storage_gib"), MaxWorkspaces: r.FormValue("max_workspaces"), MaxRunningWorkspaces: r.FormValue("max_running_workspaces")}
@@ -2805,17 +2791,8 @@ func (s *Server) adminGroupQuotaUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminGroupQuotaDelete(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAdministrator(w, r)
+	user, ok := s.adminForm(w, r)
 	if !ok {
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	if !s.validCSRF(r) {
-		http.Error(w, "invalid request", http.StatusForbidden)
-		return
-	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 	groupID := r.PathValue("id")
@@ -2909,17 +2886,8 @@ func (s *Server) adminSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminSettingsUpdate(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAdministrator(w, r)
+	user, ok := s.adminForm(w, r)
 	if !ok {
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	if !s.validCSRF(r) {
-		http.Error(w, "invalid request", http.StatusForbidden)
-		return
-	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 	form := settingsFormData{
@@ -3051,13 +3019,8 @@ func (s *Server) runImagePull(templateID string, image runtime.Image, imageRunti
 }
 
 func (s *Server) adminTemplateImagePull(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAdministrator(w, r)
+	user, ok := s.adminForm(w, r)
 	if !ok {
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	if !s.validCSRF(r) {
-		http.Error(w, "invalid request", http.StatusForbidden)
 		return
 	}
 	templateValue, err := s.workspace.GetTemplate(r.Context(), user.ID, r.PathValue("id"))
@@ -3112,17 +3075,8 @@ func (s *Server) adminTemplatesNew(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminTemplatesCreate(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAdministrator(w, r)
+	user, ok := s.adminForm(w, r)
 	if !ok {
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	if !s.validCSRF(r) {
-		http.Error(w, "invalid request", http.StatusForbidden)
-		return
-	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 	form, input, err := s.parseTemplateForm(r)
@@ -3178,17 +3132,8 @@ func (s *Server) adminTemplatesCopy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminTemplatesUpdate(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAdministrator(w, r)
+	user, ok := s.adminForm(w, r)
 	if !ok {
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	if !s.validCSRF(r) {
-		http.Error(w, "invalid request", http.StatusForbidden)
-		return
-	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 	form, input, err := s.parseTemplateForm(r)
@@ -3220,17 +3165,8 @@ func (s *Server) templateGroups(ctx context.Context, actorID string) []domain.Gr
 }
 
 func (s *Server) adminTemplateEnabled(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAdministrator(w, r)
+	user, ok := s.adminForm(w, r)
 	if !ok {
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	if !s.validCSRF(r) {
-		http.Error(w, "invalid request", http.StatusForbidden)
-		return
-	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 	enabled, err := strconv.ParseBool(r.FormValue("enabled"))
@@ -3514,13 +3450,8 @@ func (s *Server) adminVolumeDownload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminVolumeDelete(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAdministrator(w, r)
+	user, ok := s.adminForm(w, r)
 	if !ok {
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	if !s.validCSRF(r) {
-		http.Error(w, "invalid request", http.StatusForbidden)
 		return
 	}
 	volume, err := s.retainedVolumeForRoute(r.Context(), r.PathValue("workspace_id"), r.PathValue("mount_name"))
@@ -3635,13 +3566,8 @@ func (s *Server) adminDirectoryDownload(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) adminDirectoryDelete(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAdministrator(w, r)
+	user, ok := s.adminForm(w, r)
 	if !ok {
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	if !s.validCSRF(r) {
-		http.Error(w, "invalid request", http.StatusForbidden)
 		return
 	}
 	if s.options.Store == nil {
@@ -4402,6 +4328,30 @@ func (s *Server) ensureCSRF(w http.ResponseWriter, r *http.Request) string {
 	return token
 }
 
+// adminForm runs the preamble every administrator form POST repeats: the actor
+// must be a signed-in administrator, the request body is capped before anything
+// reads it, the CSRF token must match, and the form must parse. It answers the
+// request itself on every failure, so a false result means the handler is done.
+// Parsing here rather than in each handler is what makes the CSRF check
+// dependable: validCSRF reads the token through r.FormValue, which silently
+// yields an empty string if the body was never parsed.
+func (s *Server) adminForm(w http.ResponseWriter, r *http.Request) (domain.User, bool) {
+	user, ok := s.requireAdministrator(w, r)
+	if !ok {
+		return domain.User{}, false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return domain.User{}, false
+	}
+	if !s.validCSRF(r) {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return domain.User{}, false
+	}
+	return user, true
+}
+
 func (s *Server) validCSRF(r *http.Request) bool {
 	cookie, err := r.Cookie(csrfCookieName)
 	if err != nil || cookie.Value == "" {
@@ -4437,6 +4387,8 @@ func userFormError(err error) string {
 		return "Use a valid username, email address, display name, supported role, and password between 12 and 72 characters."
 	case errors.Is(err, repository.ErrConflict):
 		return "A user with that username already exists."
+	case errors.Is(err, auth.ErrEmailInUse):
+		return "That email address already belongs to another account."
 	case errors.Is(err, auth.ErrInvitationUnavailable):
 		return "Set a temporary password, or add an email address so an invitation can be sent."
 	default:

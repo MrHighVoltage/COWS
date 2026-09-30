@@ -28,6 +28,29 @@ func testService(t *testing.T) *Service {
 	return service
 }
 
+// testAdministrator bootstraps an administrator and clears the forced password
+// change, since requireAdministrator refuses an actor who still owes one. Tests
+// that are about the bootstrap or the forced change itself do this by hand.
+func testAdministrator(t *testing.T, service *Service) domain.User {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := service.BootstrapAdministrator(ctx, CreateUserInput{Username: "admin", Email: "admin@example.test", Password: "correct horse battery staple"}); err != nil {
+		t.Fatalf("bootstrap administrator: %v", err)
+	}
+	initial, _, err := service.Authenticate(ctx, "admin", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate administrator: %v", err)
+	}
+	if err := service.ChangePassword(ctx, initial.ID, "correct horse battery staple", "changed correct horse battery staple"); err != nil {
+		t.Fatalf("change administrator password: %v", err)
+	}
+	admin, _, err := service.Authenticate(ctx, "admin", "changed correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate changed administrator: %v", err)
+	}
+	return admin
+}
+
 func TestBootstrapAuthenticateAndSession(t *testing.T) {
 	service := testService(t)
 	ctx := context.Background()
@@ -471,5 +494,195 @@ func TestRecoverAdministratorRefusesInvalidTargets(t *testing.T) {
 	// The refusals must not have touched the ordinary user's password.
 	if _, _, err := service.Authenticate(ctx, "ordinary", "an ordinary password"); err != nil {
 		t.Fatalf("ordinary user password changed by a refused recovery: %v", err)
+	}
+}
+
+func TestAdministratorEditsProfileAndPassword(t *testing.T) {
+	service := testService(t)
+	ctx := context.Background()
+	admin := testAdministrator(t, service)
+	user, err := service.CreateUser(ctx, admin.ID, CreateUserInput{Username: "student", Email: "typo@example.test", DisplayName: "Student", Password: "another correct password", Role: domain.RoleUser})
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	_, userSession, err := service.Authenticate(ctx, "student", "another correct password")
+	if err != nil {
+		t.Fatalf("authenticate student: %v", err)
+	}
+	reset, err := service.SendPasswordResetFor(ctx, admin.ID, user.ID)
+	if err != nil {
+		t.Fatalf("send reset to the old address: %v", err)
+	}
+
+	if _, err := service.UpdateUserProfile(ctx, admin.ID, user.ID, "not an address", "Student"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("invalid email = %v, want invalid input", err)
+	}
+	if _, err := service.UpdateUserProfile(ctx, user.ID, user.ID, "self@example.test", "Student"); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("non-administrator profile update = %v, want invalid credentials", err)
+	}
+	updated, err := service.UpdateUserProfile(ctx, admin.ID, user.ID, " student@example.test ", "Real Student")
+	if err != nil {
+		t.Fatalf("update profile: %v", err)
+	}
+	if updated.Email != "student@example.test" || updated.DisplayName != "Real Student" {
+		t.Fatalf("updated user = %+v", updated)
+	}
+	stored, err := service.FindUserForAdmin(ctx, admin.ID, user.ID)
+	if err != nil || stored.Email != "student@example.test" || stored.DisplayName != "Real Student" {
+		t.Fatalf("stored user = %+v %v", stored, err)
+	}
+	// The link went to the address that turned out to be wrong, so correcting
+	// the address has to take the link with it.
+	if err := service.ResetPassword(ctx, reset.Token, "yet another correct password"); !errors.Is(err, ErrInvalidResetToken) {
+		t.Fatalf("reset with a token mailed to the old address = %v, want invalid token", err)
+	}
+	// A blank display name falls back to the username rather than emptying it.
+	blank, err := service.UpdateUserProfile(ctx, admin.ID, user.ID, "student@example.test", "   ")
+	if err != nil || blank.DisplayName != "student" {
+		t.Fatalf("blank display name = %+v %v", blank, err)
+	}
+
+	if err := service.SetUserPassword(ctx, admin.ID, user.ID, "short"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("short password = %v, want invalid input", err)
+	}
+	if err := service.SetUserPassword(ctx, user.ID, user.ID, "a password the user picked"); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("non-administrator password set = %v, want invalid credentials", err)
+	}
+	if err := service.SetUserPassword(ctx, admin.ID, user.ID, "an administrator chosen password"); err != nil {
+		t.Fatalf("set password: %v", err)
+	}
+	if _, err := service.UserForSession(ctx, userSession); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("session after an administrator set the password = %v, want not found", err)
+	}
+	if _, _, err := service.Authenticate(ctx, "student", "another correct password"); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("old password = %v, want invalid credentials", err)
+	}
+	signedIn, _, err := service.Authenticate(ctx, "student", "an administrator chosen password")
+	if err != nil {
+		t.Fatalf("authenticate with the new password: %v", err)
+	}
+	if !signedIn.MustChangePassword {
+		t.Fatal("a password chosen by an administrator must be changed at next sign-in")
+	}
+}
+
+func TestSetUserPasswordRefusesSelfAndDisabledTargets(t *testing.T) {
+	service := testService(t)
+	ctx := context.Background()
+	admin := testAdministrator(t, service)
+	user, err := service.CreateUser(ctx, admin.ID, CreateUserInput{Username: "student", Email: "student@example.test", Password: "another correct password", Role: domain.RoleUser})
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	// The administrator's own password goes through ChangePassword, which
+	// proves knowledge of the current one and keeps the session alive.
+	if err := service.SetUserPassword(ctx, admin.ID, admin.ID, "a password for myself"); !errors.Is(err, ErrSelfPasswordSet) {
+		t.Fatalf("self password set = %v, want self refusal", err)
+	}
+	if _, _, err := service.Authenticate(ctx, "admin", "changed correct horse battery staple"); err != nil {
+		t.Fatalf("administrator password changed by a refused self set: %v", err)
+	}
+	// Re-opening a disabled account is its own audited decision and must not
+	// ride along with handing out a password.
+	if err := service.SetUserDisabled(ctx, admin.ID, user.ID, true); err != nil {
+		t.Fatalf("disable user: %v", err)
+	}
+	if err := service.SetUserPassword(ctx, admin.ID, user.ID, "a password for a disabled account"); !errors.Is(err, ErrTargetDisabled) {
+		t.Fatalf("disabled target = %v, want disabled refusal", err)
+	}
+}
+
+func TestReplacingAPasswordRetiresOutstandingCredentialLinks(t *testing.T) {
+	service := testService(t)
+	service.SetInvitationPolicy(true, time.Hour)
+	ctx := context.Background()
+	admin := testAdministrator(t, service)
+	user, err := service.CreateUser(ctx, admin.ID, CreateUserInput{Username: "student", Email: "student@example.test", Password: "another correct password", Role: domain.RoleUser})
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	// A link mailed before the credential was replaced by another route must
+	// not still open the account afterwards.
+	reset, err := service.SendPasswordResetFor(ctx, admin.ID, user.ID)
+	if err != nil {
+		t.Fatalf("send reset: %v", err)
+	}
+	invitation, err := service.ResendInvitation(ctx, admin.ID, user.ID)
+	if err != nil {
+		t.Fatalf("send invitation: %v", err)
+	}
+	if err := service.SetUserPassword(ctx, admin.ID, user.ID, "an administrator chosen password"); err != nil {
+		t.Fatalf("set password: %v", err)
+	}
+	if err := service.ResetPassword(ctx, reset.Token, "a password from the stale link"); !errors.Is(err, ErrInvalidResetToken) {
+		t.Fatalf("stale reset token = %v, want invalid token", err)
+	}
+	if _, err := service.AcceptInvitation(ctx, invitation.Token, "a password from the stale link", "a password from the stale link"); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("stale invitation token = %v, want not found", err)
+	}
+
+	// And when the account holder opens the account through one link, the
+	// other purpose's link retires with it.
+	viaReset, err := service.SendPasswordResetFor(ctx, admin.ID, user.ID)
+	if err != nil {
+		t.Fatalf("send reset: %v", err)
+	}
+	viaInvitation, err := service.ResendInvitation(ctx, admin.ID, user.ID)
+	if err != nil {
+		t.Fatalf("send invitation: %v", err)
+	}
+	if _, err := service.AcceptInvitation(ctx, viaInvitation.Token, "a password from the invitation", "a password from the invitation"); err != nil {
+		t.Fatalf("accept invitation: %v", err)
+	}
+	if err := service.ResetPassword(ctx, viaReset.Token, "a password from the other link"); !errors.Is(err, ErrInvalidResetToken) {
+		t.Fatalf("reset token surviving an accepted invitation = %v, want invalid token", err)
+	}
+	if err := service.ChangePassword(ctx, user.ID, "a password from the invitation", "an administrator chosen password"); err != nil {
+		t.Fatalf("restore password: %v", err)
+	}
+
+	// The same holds when the account holder changes their own password.
+	replacement, err := service.SendPasswordResetFor(ctx, admin.ID, user.ID)
+	if err != nil {
+		t.Fatalf("send second reset: %v", err)
+	}
+	if err := service.ChangePassword(ctx, user.ID, "an administrator chosen password", "a password of their own"); err != nil {
+		t.Fatalf("change own password: %v", err)
+	}
+	if err := service.ResetPassword(ctx, replacement.Token, "yet another password"); !errors.Is(err, ErrInvalidResetToken) {
+		t.Fatalf("reset token surviving a self-service change = %v, want invalid token", err)
+	}
+}
+
+func TestEmailAddressesStayUniqueAcrossAccounts(t *testing.T) {
+	service := testService(t)
+	ctx := context.Background()
+	admin := testAdministrator(t, service)
+	first, err := service.CreateUser(ctx, admin.ID, CreateUserInput{Username: "first", Email: "shared@example.test", Password: "a perfectly fine password", Role: domain.RoleUser})
+	if err != nil {
+		t.Fatalf("create first user: %v", err)
+	}
+	if _, err := service.CreateUser(ctx, admin.ID, CreateUserInput{Username: "second", Email: "shared@example.test", Password: "a perfectly fine password", Role: domain.RoleUser}); !errors.Is(err, ErrEmailInUse) {
+		t.Fatalf("second account on the same address = %v, want email in use", err)
+	}
+	second, err := service.CreateUser(ctx, admin.ID, CreateUserInput{Username: "second", Email: "second@example.test", Password: "a perfectly fine password", Role: domain.RoleUser})
+	if err != nil {
+		t.Fatalf("create second user: %v", err)
+	}
+	// Case differs, the account does not: FindUserByEmail folds case, so a
+	// case-only variation would still resolve to two accounts.
+	if _, err := service.UpdateUserProfile(ctx, admin.ID, second.ID, "SHARED@example.test", "Second"); !errors.Is(err, ErrEmailInUse) {
+		t.Fatalf("address taken by another account = %v, want email in use", err)
+	}
+	// Keeping one's own address is not a conflict.
+	if _, err := service.UpdateUserProfile(ctx, admin.ID, first.ID, "shared@example.test", "First"); err != nil {
+		t.Fatalf("keeping the account's own address: %v", err)
+	}
+	// Any number of accounts may have no address at all.
+	if _, err := service.CreateUser(ctx, admin.ID, CreateUserInput{Username: "third", Password: "a perfectly fine password", Role: domain.RoleUser}); err != nil {
+		t.Fatalf("create user without an address: %v", err)
+	}
+	if _, err := service.UpdateUserProfile(ctx, admin.ID, second.ID, "", "Second"); err != nil {
+		t.Fatalf("clearing an address: %v", err)
 	}
 }
