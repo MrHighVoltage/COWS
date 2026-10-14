@@ -22,6 +22,36 @@ var (
 	ErrPasswordChangeRequired = errors.New("password change required")
 )
 
+// Template form field names. Template validation attributes each rejected
+// value to one of these through domain.FieldError, and the administration
+// form renders controls under exactly these names, so a rule and the input it
+// marks cannot drift apart. The two memory fields are named for the MiB the
+// form collects even though TemplateInput carries bytes, because the marked
+// control is the one the administrator typed into.
+const (
+	FieldTemplateName              = "name"
+	FieldTemplateDescription       = "description"
+	FieldTemplateImageReference    = "image_reference"
+	FieldTemplateImageDigest       = "image_digest"
+	FieldTemplateDefaultCPU        = "default_cpu_millis"
+	FieldTemplateMaxCPU            = "max_cpu_millis"
+	FieldTemplateDefaultMemory     = "default_memory_mib"
+	FieldTemplateMaxMemory         = "max_memory_mib"
+	FieldTemplateInitialConnection = "initial_connection_hours"
+	FieldTemplateStoppedRetention  = "stopped_retention_hours"
+	FieldTemplateConfiguration     = "configuration_json"
+	FieldTemplateAccessMethods     = "access_methods"
+	FieldTemplateAllowedRoles      = "allowed_roles"
+	FieldTemplateGroupAccessMode   = "group_access_mode"
+	FieldTemplateAllowedGroupIDs   = "allowed_group_ids"
+)
+
+// invalidTemplateField attributes a rejected template value to the form
+// control that carries it.
+func invalidTemplateField(field, message string) error {
+	return domain.InvalidField(ErrInvalidTemplate, field, message)
+}
+
 const (
 	auditTemplateCreated  = "template.created"
 	auditTemplateUpdated  = "template.updated"
@@ -131,6 +161,7 @@ func (s *Service) CreateTemplate(ctx context.Context, actorID string, input Temp
 	if _, err := s.requireAdministrator(ctx, actorID); err != nil {
 		return domain.WorkspaceTemplate{}, err
 	}
+	input = normalizeTemplateResources(input)
 	if err := validateTemplate(input); err != nil {
 		return domain.WorkspaceTemplate{}, err
 	}
@@ -179,6 +210,7 @@ func (s *Service) UpdateTemplate(ctx context.Context, actorID, id string, input 
 	if _, err := s.requireAdministrator(ctx, actorID); err != nil {
 		return domain.WorkspaceTemplate{}, err
 	}
+	input = normalizeTemplateResources(input)
 	if err := validateTemplate(input); err != nil {
 		return domain.WorkspaceTemplate{}, err
 	}
@@ -260,63 +292,142 @@ func (s *Service) recordAudit(ctx context.Context, event domain.AuditEvent) {
 	_ = s.store.RecordAuditEvent(ctx, event)
 }
 
+// normalizeTemplateResources collapses the maximum onto the default for a
+// template whose resources users cannot choose. A maximum only describes the
+// top of a user-selectable range, so a fixed template has none:
+// selectedResources ignores it when creating a workspace and the form freezes
+// its control. Leaving a stale value there would advertise a ceiling that
+// nothing enforces, and would reject a default raised above it by naming a
+// control the administrator is not allowed to edit.
+func normalizeTemplateResources(input TemplateInput) TemplateInput {
+	if input.ResourcesConfigurable {
+		return input
+	}
+	input.MaxCPUMillis = input.DefaultCPUMillis
+	input.MaxMemoryBytes = input.DefaultMemoryBytes
+	return input
+}
+
+// ValidateTemplateInput runs the same checks CreateTemplate and UpdateTemplate
+// run, without storing anything. The web layer calls it when its own parsing
+// already failed, so a submission whose numbers could not be read still gets
+// marks on everything else that is wrong instead of only the unreadable
+// fields.
+func ValidateTemplateInput(input TemplateInput) error {
+	return validateTemplate(normalizeTemplateResources(input))
+}
+
+// validateTemplate checks every submitted value and reports all of the ones
+// it rejects together, each attributed to the control that carries it, so one
+// submission of this long form marks everything that needs fixing instead of
+// revealing the problems one at a time. It expects input to have been through
+// normalizeTemplateResources.
 func validateTemplate(input TemplateInput) error {
-	if runeCount(input.Name) < 1 || runeCount(input.Name) > 100 {
-		return ErrInvalidTemplate
+	problems := make([]error, 0, 8)
+	// A fixed template's ceiling is its default, so report an out-of-range
+	// ceiling on the default control: its own maximum control is frozen.
+	cpuCeilingField, memoryCeilingField := FieldTemplateMaxCPU, FieldTemplateMaxMemory
+	if !input.ResourcesConfigurable {
+		cpuCeilingField, memoryCeilingField = FieldTemplateDefaultCPU, FieldTemplateDefaultMemory
+	}
+	if runeCount(input.Name) < 1 {
+		problems = append(problems, invalidTemplateField(FieldTemplateName, "Enter a display name."))
+	} else if runeCount(input.Name) > 100 {
+		problems = append(problems, invalidTemplateField(FieldTemplateName, "Use at most 100 characters."))
 	}
 	if runeCount(input.Description) > 2000 {
-		return ErrInvalidTemplate
+		problems = append(problems, invalidTemplateField(FieldTemplateDescription, "Use at most 2000 characters."))
 	}
-	if !validImageReference(input.ImageReference) || !validDigest(input.ImageDigest) {
-		return ErrInvalidTemplate
+	if !validImageReference(input.ImageReference) {
+		problems = append(problems, invalidTemplateField(FieldTemplateImageReference, "Enter a reference of at most 255 characters without spaces or control characters, not starting with a dash."))
 	}
-	if input.DefaultCPUMillis <= 0 || input.MaxCPUMillis < input.DefaultCPUMillis || input.MaxCPUMillis > 1_000_000 {
-		return ErrInvalidTemplate
+	if !validDigest(input.ImageDigest) {
+		problems = append(problems, invalidTemplateField(FieldTemplateImageDigest, "Leave this empty or enter sha256: followed by 64 lowercase hexadecimal characters."))
 	}
-	if input.DefaultMemoryBytes <= 0 || input.MaxMemoryBytes < input.DefaultMemoryBytes || input.MaxMemoryBytes > 1<<50 {
-		return ErrInvalidTemplate
+	switch {
+	case input.DefaultCPUMillis <= 0:
+		problems = append(problems, invalidTemplateField(FieldTemplateDefaultCPU, "Enter at least 1 mCPU."))
+	case input.MaxCPUMillis < input.DefaultCPUMillis:
+		problems = append(problems, invalidTemplateField(FieldTemplateMaxCPU, "The maximum must be at least the default CPU value."))
+	case input.MaxCPUMillis > 1_000_000:
+		problems = append(problems, invalidTemplateField(cpuCeilingField, "Enter at most 1000000 mCPU."))
 	}
-	if !validTimeout(input.InitialConnectionTimeoutSeconds) || !validTimeout(input.StoppedRetentionSeconds) {
-		return ErrInvalidTemplate
+	switch {
+	case input.DefaultMemoryBytes <= 0:
+		problems = append(problems, invalidTemplateField(FieldTemplateDefaultMemory, "Enter at least 1 MiB."))
+	case input.MaxMemoryBytes < input.DefaultMemoryBytes:
+		problems = append(problems, invalidTemplateField(FieldTemplateMaxMemory, "The maximum must be at least the default memory value."))
+	case input.MaxMemoryBytes > 1<<50:
+		problems = append(problems, invalidTemplateField(memoryCeilingField, "Enter at most 1073741824 MiB."))
+	}
+	if !validTimeout(input.InitialConnectionTimeoutSeconds) {
+		problems = append(problems, invalidTemplateField(FieldTemplateInitialConnection, "Enter 0 to disable, or at most 87600 hours."))
+	}
+	if !validTimeout(input.StoppedRetentionSeconds) {
+		problems = append(problems, invalidTemplateField(FieldTemplateStoppedRetention, "Enter 0 to disable, or at most 87600 hours."))
 	}
 	if err := validateTemplateConfiguration(input.Configuration); err != nil {
-		return err
+		problems = append(problems, err)
 	}
-	if len(input.AccessMethods) == 0 || hasDuplicateAccessMethod(input.AccessMethods) {
-		return ErrInvalidTemplate
+	problems = append(problems, validateTemplateAccess(input)...)
+	if input.GroupAccessMode != "" && input.GroupAccessMode != domain.GroupAccessInclude && input.GroupAccessMode != domain.GroupAccessExclude {
+		problems = append(problems, invalidTemplateField(FieldTemplateGroupAccessMode, "Choose one of the offered group policies."))
 	}
-	for _, method := range input.AccessMethods {
-		if !method.Valid() {
-			return ErrInvalidTemplate
-		}
+	if hasDuplicateString(input.AllowedGroupIDs) {
+		problems = append(problems, invalidTemplateField(FieldTemplateAllowedGroupIDs, "Select each group at most once."))
 	}
-	if hasAccessMethod(input.AccessMethods, domain.AccessFiles) {
-		fileMount := false
-		for _, mount := range input.Configuration.Mounts {
-			if mount.FileManager {
-				fileMount = true
+	return domain.InvalidFields(problems...)
+}
+
+// validateTemplateAccess covers the access-method and role checkbox groups,
+// including the file-manager rule that spans the access methods and the
+// container configuration.
+func validateTemplateAccess(input TemplateInput) []error {
+	problems := make([]error, 0, 3)
+	switch {
+	case len(input.AccessMethods) == 0:
+		problems = append(problems, invalidTemplateField(FieldTemplateAccessMethods, "Select at least one access method."))
+	case hasDuplicateAccessMethod(input.AccessMethods):
+		problems = append(problems, invalidTemplateField(FieldTemplateAccessMethods, "Select each access method at most once."))
+	default:
+		for _, method := range input.AccessMethods {
+			if !method.Valid() {
+				problems = append(problems, invalidTemplateField(FieldTemplateAccessMethods, "Select only the offered access methods."))
 				break
 			}
 		}
-		if !fileMount {
-			return ErrInvalidTemplate
+		if hasAccessMethod(input.AccessMethods, domain.AccessFiles) {
+			fileMount := false
+			for _, mount := range input.Configuration.Mounts {
+				if mount.FileManager {
+					fileMount = true
+					break
+				}
+			}
+			if !fileMount {
+				// The rule spans two controls, so mark both: the access
+				// method can be dropped or the mount can be added.
+				problems = append(problems,
+					invalidTemplateField(FieldTemplateAccessMethods, "The browser file manager needs a mount marked file_manager in the container configuration."),
+					invalidTemplateField(FieldConfigurationMounts, "Mark one mount for the browser file manager (\"file_manager\": true), or clear the browser file manager access method."),
+				)
+			}
 		}
 	}
-	if len(input.AllowedRoles) == 0 || hasDuplicateRole(input.AllowedRoles) {
-		return ErrInvalidTemplate
-	}
-	if input.GroupAccessMode != "" && input.GroupAccessMode != domain.GroupAccessInclude && input.GroupAccessMode != domain.GroupAccessExclude {
-		return ErrInvalidTemplate
-	}
-	if hasDuplicateString(input.AllowedGroupIDs) {
-		return ErrInvalidTemplate
-	}
-	for _, role := range input.AllowedRoles {
-		if !role.Valid() {
-			return ErrInvalidTemplate
+	switch {
+	case len(input.AllowedRoles) == 0:
+		problems = append(problems, invalidTemplateField(FieldTemplateAllowedRoles, "Select at least one role."))
+	case hasDuplicateRole(input.AllowedRoles):
+		problems = append(problems, invalidTemplateField(FieldTemplateAllowedRoles, "Select each role at most once."))
+	default:
+		for _, role := range input.AllowedRoles {
+			if !role.Valid() {
+				problems = append(problems, invalidTemplateField(FieldTemplateAllowedRoles, "Select only the offered roles."))
+				break
+			}
 		}
 	}
-	return nil
+	return problems
 }
 
 func normalizeGroupAccessMode(value string) string {

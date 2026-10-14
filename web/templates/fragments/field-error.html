@@ -1,0 +1,7 @@
+{{/*
+  field-error renders the message for one rejected form control. The "." is the
+  result of the fieldError function, which is nil when the control was
+  accepted, so a caller can pass it unconditionally. Its id is what the control
+  points at through aria-describedby, emitted by the invalidField function.
+*/}}
+{{ define "field-error" }}{{ with . }}<p class="field-error" id="{{ .ID }}" role="alert">{{ .Message }}</p>{{ end }}{{ end }}

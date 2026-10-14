@@ -1319,9 +1319,14 @@ func TestAdministratorEditsAccountEmailAndPassword(t *testing.T) {
 	if err != nil || updated.Email != "student@example.test" || updated.DisplayName != "Real Student" {
 		t.Fatalf("updated user = %+v %v", updated, err)
 	}
+	// A rejected change re-renders the editor rather than redirecting, so the
+	// submitted values survive and the control at fault is marked.
 	invalid := post("/admin/users/"+student.ID+"/profile", url.Values{"email": {"not an address"}, "display_name": {"Real Student"}})
-	if invalid.Code != http.StatusSeeOther || invalid.Header().Get("Location") != editURL+"?error=profile" {
+	if invalid.Code != http.StatusBadRequest {
 		t.Fatalf("invalid profile response: status=%d location=%q", invalid.Code, invalid.Header().Get("Location"))
+	}
+	if body := invalid.Body.String(); !strings.Contains(body, `id="email" name="email" type="email" value="not an address" maxlength="254" autocomplete="email" aria-invalid="true"`) {
+		t.Fatalf("rejected email field is not marked: %s", body)
 	}
 
 	// An administrator's own account offers no password form here: setting it
@@ -1345,8 +1350,11 @@ func TestAdministratorEditsAccountEmailAndPassword(t *testing.T) {
 	// Two accounts must not share an address: the reset endpoint resolves an
 	// address to exactly one account.
 	taken := post("/admin/users/"+student.ID+"/profile", url.Values{"email": {"admin@example.test"}, "display_name": {"Real Student"}})
-	if taken.Header().Get("Location") != editURL+"?error=email_in_use" {
-		t.Fatalf("duplicate address location=%q", taken.Header().Get("Location"))
+	if taken.Code != http.StatusBadRequest {
+		t.Fatalf("duplicate address status=%d location=%q", taken.Code, taken.Header().Get("Location"))
+	}
+	if body := taken.Body.String(); !strings.Contains(body, "already belongs to another account") {
+		t.Fatalf("duplicate address is not reported on the email field: %s", body)
 	}
 
 	mismatch := post("/admin/users/"+student.ID+"/password", url.Values{"new_password": {"an administrator chosen password"}, "confirm_password": {"a different password entirely"}})
@@ -1387,5 +1395,256 @@ func TestAdministratorEditsAccountEmailAndPassword(t *testing.T) {
 		if recorder.Code != http.StatusForbidden {
 			t.Fatalf("non-administrator POST %s = %d, want 403", path, recorder.Code)
 		}
+	}
+}
+
+// adminSession bootstraps an administrator, clears the forced password change,
+// and returns the cookies an authenticated form post needs.
+func adminSession(t *testing.T, server *Server, authService *auth.Service) (*http.Cookie, *http.Cookie) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := authService.BootstrapAdministrator(ctx, auth.CreateUserInput{Username: "admin", Email: "admin@example.test", Password: "correct horse battery staple"}); err != nil {
+		t.Fatalf("bootstrap administrator: %v", err)
+	}
+	admin, _, err := authService.Authenticate(ctx, "admin", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate administrator: %v", err)
+	}
+	if err := authService.ChangePassword(ctx, admin.ID, "correct horse battery staple", "changed correct horse battery staple"); err != nil {
+		t.Fatalf("change administrator password: %v", err)
+	}
+	_, token, err := authService.Authenticate(ctx, "admin", "changed correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate changed administrator: %v", err)
+	}
+	session := &http.Cookie{Name: "cows_session", Value: token}
+	pageRequest := httptest.NewRequest(http.MethodGet, "/admin/templates/new", nil)
+	pageRequest.AddCookie(session)
+	pageRecorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(pageRecorder, pageRequest)
+	csrf := cookieByName(pageRecorder.Result().Cookies(), "cows_csrf")
+	if pageRecorder.Code != http.StatusOK || csrf == nil {
+		t.Fatalf("template form page: status=%d csrf=%#v", pageRecorder.Code, csrf)
+	}
+	return session, csrf
+}
+
+// TestTemplateFormMarksEveryRejectedControl covers the point of attributing
+// validation failures to fields: the long template form has to say which of
+// its inputs is wrong, and it has to say so for all of them at once rather
+// than revealing one problem per submission.
+func TestTemplateFormMarksEveryRejectedControl(t *testing.T) {
+	server, authService := testServer(t)
+	session, csrf := adminSession(t, server, authService)
+
+	form := url.Values{
+		"csrf_token": {csrf.Value},
+		// Configurable, so the maximum controls are live and their rules apply.
+		"resources_configurable":   {"on"},
+		"name":                     {""},
+		"image_reference":          {"registry.example/has a space:1"},
+		"image_digest":             {"sha256:nothex"},
+		"default_cpu_millis":       {"4000"},
+		"max_cpu_millis":           {"1000"},
+		"default_memory_mib":       {"2048"},
+		"max_memory_mib":           {"not a number"},
+		"initial_connection_hours": {"24"},
+		"stopped_retention_hours":  {"24"},
+		"configuration_json":       {"{\"mounts\": ["},
+		"access_methods":           {"terminal"},
+		"allowed_roles":            {"user"},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/admin/templates", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(session)
+	request.AddCookie(csrf)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("rejected template status = %d, want 400", recorder.Code)
+	}
+	body := recorder.Body.String()
+	for _, field := range []string{"name", "image_reference", "image_digest", "max_cpu_millis", "max_memory_mib", "configuration_json"} {
+		if !strings.Contains(body, `aria-describedby="field-error-`+field+`"`) {
+			t.Fatalf("control %q is not marked invalid: %s", field, body)
+		}
+		if !strings.Contains(body, `id="field-error-`+field+`"`) {
+			t.Fatalf("control %q has no message: %s", field, body)
+		}
+	}
+	// The alert points at the marks instead of repeating them, so the two can
+	// never describe the problem differently.
+	if !strings.Contains(body, "fields need attention. They are marked below.") {
+		t.Fatalf("summary alert does not point at the marks: %s", body)
+	}
+	// Accepted values survive the round trip, so only the marked controls
+	// have to be fixed.
+	if !strings.Contains(body, `name="default_memory_mib" type="number" min="1" value="2048"`) {
+		t.Fatalf("accepted value was not preserved: %s", body)
+	}
+}
+
+// TestTemplateFormMarksNameConflict covers the attribution the service cannot
+// make on its own, because it is about the stored templates rather than the
+// submitted value.
+func TestTemplateFormMarksNameConflict(t *testing.T) {
+	server, authService := testServer(t)
+	session, csrf := adminSession(t, server, authService)
+
+	form := url.Values{
+		"csrf_token":               {csrf.Value},
+		"name":                     {"Research environment"},
+		"image_reference":          {"registry.example/research:1"},
+		"default_cpu_millis":       {"1000"},
+		"max_cpu_millis":           {"4000"},
+		"default_memory_mib":       {"2048"},
+		"max_memory_mib":           {"8192"},
+		"initial_connection_hours": {"24"},
+		"stopped_retention_hours":  {"24"},
+		"configuration_json":       {"{}"},
+		"access_methods":           {"terminal"},
+		"allowed_roles":            {"user"},
+	}
+	post := func() *httptest.ResponseRecorder {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodPost, "/admin/templates", strings.NewReader(form.Encode()))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		request.AddCookie(session)
+		request.AddCookie(csrf)
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, request)
+		return recorder
+	}
+	if first := post(); first.Code != http.StatusSeeOther {
+		t.Fatalf("first create status = %d body=%s", first.Code, first.Body.String())
+	}
+	second := post()
+	if second.Code != http.StatusBadRequest {
+		t.Fatalf("duplicate name status = %d, want 400", second.Code)
+	}
+	body := second.Body.String()
+	if !strings.Contains(body, `aria-describedby="field-error-name"`) || !strings.Contains(body, "already exists") {
+		t.Fatalf("duplicate name is not marked on the name control: %s", body)
+	}
+}
+
+// TestFileManagerWithoutAMountMarksBothControls covers a rule that spans two
+// inputs: either the access method goes or the mount arrives, so the form
+// marks both rather than picking one.
+func TestFileManagerWithoutAMountMarksBothControls(t *testing.T) {
+	server, authService := testServer(t)
+	session, csrf := adminSession(t, server, authService)
+
+	form := url.Values{
+		"csrf_token":               {csrf.Value},
+		"name":                     {"Files without a mount"},
+		"image_reference":          {"registry.example/research:1"},
+		"default_cpu_millis":       {"1000"},
+		"max_cpu_millis":           {"4000"},
+		"default_memory_mib":       {"2048"},
+		"max_memory_mib":           {"8192"},
+		"initial_connection_hours": {"24"},
+		"stopped_retention_hours":  {"24"},
+		"configuration_json":       {"{}"},
+		"access_methods":           {"files"},
+		"allowed_roles":            {"user"},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/admin/templates", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(session)
+	request.AddCookie(csrf)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", recorder.Code)
+	}
+	body := recorder.Body.String()
+	for _, field := range []string{"access_methods", "configuration_json"} {
+		if !strings.Contains(body, `id="field-error-`+field+`"`) {
+			t.Fatalf("control %q is not marked: %s", field, body)
+		}
+	}
+}
+
+// TestHostSettingsMarkTheOutOfRangeFactor checks that a form outside the
+// template editor gets the same treatment.
+func TestHostSettingsMarkTheOutOfRangeFactor(t *testing.T) {
+	server, authService := testServer(t)
+	session, csrf := adminSession(t, server, authService)
+
+	form := url.Values{
+		"csrf_token":                {csrf.Value},
+		"host_storage_gib":          {"100"},
+		"cpu_overbooking_factor":    {"1"},
+		"memory_overbooking_factor": {"50000"},
+		"reserved_storage_gib":      {"200"},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/admin/settings", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(session)
+	request.AddCookie(csrf)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", recorder.Code)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, `id="field-error-memory_overbooking_factor"`) {
+		t.Fatalf("the out-of-range factor is not marked: %s", body)
+	}
+	if !strings.Contains(body, `id="field-error-reserved_storage_gib"`) {
+		t.Fatalf("reserved storage above the host total is not marked: %s", body)
+	}
+	if strings.Contains(body, `id="field-error-cpu_overbooking_factor"`) {
+		t.Fatalf("the accepted CPU factor was marked: %s", body)
+	}
+}
+
+// TestFixedResourceTemplateAcceptsADefaultAboveTheFrozenMaximum is the
+// regression for a dead end in the template editor: with user-selectable
+// resources switched off the maximum controls are readonly, so rejecting a
+// default raised above them complained about a control the administrator could
+// not change.
+func TestFixedResourceTemplateAcceptsADefaultAboveTheFrozenMaximum(t *testing.T) {
+	server, authService := testServer(t)
+	session, csrf := adminSession(t, server, authService)
+
+	form := url.Values{
+		"csrf_token": {csrf.Value},
+		// resources_configurable deliberately absent: the checkbox is off, so
+		// the maximum fields below are the frozen ones the form submits.
+		"name":                     {"Fixed eight cores"},
+		"image_reference":          {"registry.example/research:1"},
+		"default_cpu_millis":       {"8000"},
+		"max_cpu_millis":           {"4000"},
+		"default_memory_mib":       {"16384"},
+		"max_memory_mib":           {"8192"},
+		"initial_connection_hours": {"24"},
+		"stopped_retention_hours":  {"24"},
+		"configuration_json":       {"{}"},
+		"access_methods":           {"terminal"},
+		"allowed_roles":            {"user"},
+		"enabled":                  {"on"},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/admin/templates", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(session)
+	request.AddCookie(csrf)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("fixed-resource template status = %d, want 303: %s", recorder.Code, recorder.Body.String())
+	}
+	admin, _, err := authService.Authenticate(context.Background(), "admin", "changed correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate administrator: %v", err)
+	}
+	templates, err := server.workspace.ListTemplates(context.Background(), admin.ID)
+	if err != nil || len(templates) != 1 {
+		t.Fatalf("load created template: count=%d err=%v", len(templates), err)
+	}
+	stored := templates[0]
+	if stored.MaxCPUMillis != 8000 || stored.MaxMemoryBytes != 16384<<20 {
+		t.Fatalf("stored maximums = %d mCPU / %d bytes, want them following the defaults", stored.MaxCPUMillis, stored.MaxMemoryBytes)
 	}
 }

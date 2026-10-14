@@ -263,6 +263,35 @@ non-destructive, administrator-gated repair policy and restart recovery
 procedure must be defined before automatic repair is added. Lifecycle
 operations should be idempotent where the runtime allows it.
 
+## Form validation reporting
+
+Server-side validation is the only validation COWS trusts, so a rejected
+submission has to be able to say which input caused it. Validators return
+`domain.FieldError`, which carries the name of the form control plus a message
+written for the person who submitted it, and wraps the package sentinel the
+caller already returned so every `errors.Is` check keeps matching.
+`domain.InvalidFields` joins several of them, and `domain.FieldMessages` walks
+the whole join tree, so one submission can mark every control it got wrong at
+once instead of revealing problems one at a time.
+
+The field names are the form control names. They are declared as constants
+beside the rules that use them (`internal/workspace`, `internal/auth`,
+`internal/quota`) and the templates render controls under the same names, which
+keeps a rule and the input it marks from drifting apart. The web layer adds the
+attributions a service cannot make on its own, such as a name already taken by
+another record, and renders each mark as `aria-invalid` plus an
+`aria-describedby` message; the stylesheet selects on that same attribute, so
+the accessible state and the visible one cannot disagree. The alert above a
+form only says that marks are present once at least one control is marked.
+
+Where a form's values pass through web-level parsing first, an unreadable value
+stops the submission but does not stop the report: the handler asks the service
+to validate the values it could read and merges both verdicts. Rules that span
+two controls, such as the browser file manager needing a `file_manager` mount,
+mark both, because either one can be changed to satisfy them. Forms whose only
+possible error is already obvious from the form itself, such as a password
+change or a sign-in, stay with a single message.
+
 ## Workspace timeout model
 
 Timeouts are administrator-controlled template policy, stored as durations in
@@ -372,6 +401,21 @@ initial SQLite deployment; browser input is converted to typed values and
 validated before persistence. Runtime arguments, mounts, capabilities, devices,
 host networking, and arbitrary environment values are intentionally absent.
 
+The template form offers two editors for that one typed configuration: a form
+with a control per value and a row per repeated entry, and the JSON document.
+Exactly one is rendered. Switching between them, and adding or removing a row,
+posts the whole template form to `POST /admin/templates/configuration-editor`,
+which converts through `domain.TemplateConfiguration` on the server and answers
+with the re-rendered editor; it is administrator-only, CSRF-checked, and stores
+nothing. Saving still goes through the template service. The form refuses a
+stored configuration it has no control for (a second or non-desktop service, a
+literal container username, an unknown mount type, an empty command argument,
+or a control character), which then opens as JSON with the reason, so opening
+and saving a template cannot rewrite its configuration. Configuration
+validation reports each rejection on the form control that holds the value,
+down to the row (`config_mount_2_container_path`); the JSON editor folds every
+`config_` field onto its single control.
+
 Workspaces reference an owner and template through foreign keys. Creation
 stores the template's default allocations and desired state `stopped`; it does
 not contact Podman. Observed state, runtime ID, and reconciliation errors are
@@ -403,7 +447,12 @@ capacity after the configured CPU and memory overbooking factors.
 Templates can either fix CPU and memory at their defaults or allow users to
 select values between the administrator-defined default and maximum. The
 selection is validated in the workspace service and checked again against live
-quota and host availability under the admission lock.
+quota and host availability under the admission lock. A maximum only describes
+the top of a selectable range, so a fixed template does not have one: saving
+such a template collapses its maximums onto its defaults, and the editor,
+template list, and creation page show a single value for it. Existing rows keep
+whatever maximum they were stored with until they are saved again; nothing
+reads it, because resource selection ignores the maximum for a fixed template.
 Storage measurements are cached per workspace for a short bounded interval and
 coalesced when concurrent requests ask for the same workspace. Workspace pages
 reuse the measured rows for their allocation summary; a missing measurement is

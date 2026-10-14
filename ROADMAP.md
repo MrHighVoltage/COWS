@@ -16,7 +16,8 @@ Implemented now:
   groups, quotas, account lifecycle, sessions, CSRF, and basic audit events;
 - typed administrator templates, resource selection, container identity,
   terminal UID policy, VNC secrets, managed mounts, image availability, pulls,
-  and template copying;
+  and template copying, with a form editor for the runtime configuration beside
+  the JSON editor;
 - workspace lifecycle, desired/observed state, reconciliation, timeout
   processing, measured storage, overbooked host admission, and explicit data
   archival;

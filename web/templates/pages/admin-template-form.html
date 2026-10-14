@@ -7,55 +7,69 @@
   <form class="form-panel" method="post" action="{{ if .Template.Editing }}/admin/templates/{{ .Template.ID }}{{ else }}/admin/templates{{ end }}">
     <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
     <label for="template-name">Display name</label>
-    <input id="template-name" name="name" type="text" value="{{ .Template.Name }}" maxlength="100" required>
+    <input id="template-name" name="name" type="text" value="{{ .Template.Name }}" maxlength="100" required{{ invalidField .Template.FieldErrors "name" }}>
+    {{ template "field-error" (fieldError .Template.FieldErrors "name") }}
     <label for="template-description">Description</label>
-    <textarea id="template-description" name="description" rows="3" maxlength="2000">{{ .Template.Description }}</textarea>
+    <textarea id="template-description" name="description" rows="3" maxlength="2000"{{ invalidField .Template.FieldErrors "description" }}>{{ .Template.Description }}</textarea>
+    {{ template "field-error" (fieldError .Template.FieldErrors "description") }}
     <label for="image-reference">Container image reference</label>
-    <input id="image-reference" name="image_reference" type="text" value="{{ .Template.ImageReference }}" maxlength="255" placeholder="registry.example/team/image:version" required>
+    <input id="image-reference" name="image_reference" type="text" value="{{ .Template.ImageReference }}" maxlength="255" placeholder="registry.example/team/image:version" required{{ invalidField .Template.FieldErrors "image_reference" }}>
+    {{ template "field-error" (fieldError .Template.FieldErrors "image_reference") }}
     <label for="image-digest">Image digest <span class="muted">optional</span></label>
-    <input id="image-digest" name="image_digest" type="text" value="{{ .Template.ImageDigest }}" placeholder="sha256:...">
+    <input id="image-digest" name="image_digest" type="text" value="{{ .Template.ImageDigest }}" placeholder="sha256:..."{{ invalidField .Template.FieldErrors "image_digest" }}>
+    {{ template "field-error" (fieldError .Template.FieldErrors "image_digest") }}
 
-    <fieldset x-data="{ resourcesConfigurable: {{ if .Template.ResourcesConfigurable }}true{{ else }}false{{ end }} }">
+    {{/*
+      mirrorFixedMaximums keeps the frozen maximum controls showing the default
+      they will actually be saved as. A template users cannot configure has no
+      selectable range, so the server collapses its maximum onto its default;
+      without this the greyed-out fields would advertise a different ceiling,
+      and raising a default past the old maximum would look like an error.
+      The values are read from the controls rather than templated into this
+      expression, so no submitted text reaches an Alpine evaluation.
+    */}}
+    <fieldset x-data="{
+        resourcesConfigurable: {{ if .Template.ResourcesConfigurable }}true{{ else }}false{{ end }},
+        mirrorFixedMaximums() {
+          if (this.resourcesConfigurable) { return; }
+          this.$refs.maxCPU.value = this.$refs.defaultCPU.value;
+          this.$refs.maxMemory.value = this.$refs.defaultMemory.value;
+        }
+      }" x-effect="mirrorFixedMaximums()">
       <legend>CPU and memory resources</legend>
       <div class="form-grid">
-        <div><label for="default-cpu">Default CPU (mCPU)</label><input id="default-cpu" name="default_cpu_millis" type="number" min="1" max="1000000" value="{{ .Template.DefaultCPUMillis }}" required></div>
-        <div><label for="max-cpu">Maximum CPU (mCPU)</label><input id="max-cpu" name="max_cpu_millis" type="number" min="1" max="1000000" value="{{ .Template.MaxCPUMillis }}" :readonly="!resourcesConfigurable" :class="{ 'is-inert': !resourcesConfigurable }" required></div>
-        <div><label for="default-memory">Default memory (MiB)</label><input id="default-memory" name="default_memory_mib" type="number" min="1" value="{{ .Template.DefaultMemoryMiB }}" required></div>
-        <div><label for="max-memory">Maximum memory (MiB)</label><input id="max-memory" name="max_memory_mib" type="number" min="1" value="{{ .Template.MaxMemoryMiB }}" :readonly="!resourcesConfigurable" :class="{ 'is-inert': !resourcesConfigurable }" required></div>
+        <div><label for="default-cpu">Default CPU (mCPU)</label><input id="default-cpu" name="default_cpu_millis" type="number" min="1" max="1000000" value="{{ .Template.DefaultCPUMillis }}" required x-ref="defaultCPU" x-on:input="mirrorFixedMaximums()"{{ invalidField .Template.FieldErrors "default_cpu_millis" }}>{{ template "field-error" (fieldError .Template.FieldErrors "default_cpu_millis") }}</div>
+        <div><label for="max-cpu">Maximum CPU (mCPU)</label><input id="max-cpu" name="max_cpu_millis" type="number" min="1" max="1000000" value="{{ .Template.MaxCPUMillis }}" x-ref="maxCPU" :readonly="!resourcesConfigurable" :class="{ 'is-inert': !resourcesConfigurable }" required{{ invalidField .Template.FieldErrors "max_cpu_millis" }}>{{ template "field-error" (fieldError .Template.FieldErrors "max_cpu_millis") }}</div>
+        <div><label for="default-memory">Default memory (MiB)</label><input id="default-memory" name="default_memory_mib" type="number" min="1" value="{{ .Template.DefaultMemoryMiB }}" required x-ref="defaultMemory" x-on:input="mirrorFixedMaximums()"{{ invalidField .Template.FieldErrors "default_memory_mib" }}>{{ template "field-error" (fieldError .Template.FieldErrors "default_memory_mib") }}</div>
+        <div><label for="max-memory">Maximum memory (MiB)</label><input id="max-memory" name="max_memory_mib" type="number" min="1" value="{{ .Template.MaxMemoryMiB }}" x-ref="maxMemory" :readonly="!resourcesConfigurable" :class="{ 'is-inert': !resourcesConfigurable }" required{{ invalidField .Template.FieldErrors "max_memory_mib" }}>{{ template "field-error" (fieldError .Template.FieldErrors "max_memory_mib") }}</div>
       </div>
       <label class="check-row"><input type="checkbox" name="resources_configurable" x-model="resourcesConfigurable"> Allow users to choose CPU and memory between the default and maximum</label>
-      <p class="muted">When disabled, every workspace uses the default values. Storage is measured after creation and is not allocated per template or workspace.</p>
+      <p class="muted">When disabled, every workspace uses the default values and the maximums follow them. Storage is measured after creation and is not allocated per template or workspace.</p>
     </fieldset>
 
     <fieldset>
       <legend>Workspace timeouts</legend>
       <p class="muted">These values are copied into each new workspace. Zero disables that phase. Email warnings and archiving are not active yet.</p>
       <div class="form-grid">
-        <div><label for="initial-connection-hours">Stop if never connected (hours)</label><input id="initial-connection-hours" name="initial_connection_hours" type="number" min="0" max="87600" value="{{ .Template.InitialConnectionHours }}" required></div>
-        <div><label for="stopped-retention-hours">Keep stopped container (hours)</label><input id="stopped-retention-hours" name="stopped_retention_hours" type="number" min="0" max="87600" value="{{ .Template.StoppedRetentionHours }}" required></div>
+        <div><label for="initial-connection-hours">Stop if never connected (hours)</label><input id="initial-connection-hours" name="initial_connection_hours" type="number" min="0" max="87600" value="{{ .Template.InitialConnectionHours }}" required{{ invalidField .Template.FieldErrors "initial_connection_hours" }}>{{ template "field-error" (fieldError .Template.FieldErrors "initial_connection_hours") }}</div>
+        <div><label for="stopped-retention-hours">Keep stopped container (hours)</label><input id="stopped-retention-hours" name="stopped_retention_hours" type="number" min="0" max="87600" value="{{ .Template.StoppedRetentionHours }}" required{{ invalidField .Template.FieldErrors "stopped_retention_hours" }}>{{ template "field-error" (fieldError .Template.FieldErrors "stopped_retention_hours") }}</div>
       </div>
     </fieldset>
 
-    <fieldset>
-      <legend>Container configuration</legend>
-      <p class="muted">Administrator-only typed JSON. Users can select this template but cannot edit or see the resolved values. Mounts use <code>volume</code> by default or COWS-created <code>directory</code> mounts. Directory mounts may set <code>file_manager:true</code>; names are generated from the workspace container name plus optional prefix and suffix. Use named secrets with <code>{{"{{"}}cows.secret.name{{"}}"}}</code>; generated secrets are resolved per workspace.</p>
-      <label for="configuration-json">Environment, mounts, desktop service, and command</label>
-      <textarea id="configuration-json" name="configuration_json" rows="16" maxlength="20000" spellcheck="false">{{ .Template.ConfigurationJSON }}</textarea>
-      {{ if .Template.TerminalRootAllowed }}<p class="alert alert-warning">This template allows terminal access as UID 0 (root) inside the container. That grants full control over the workspace and all writable mounts.</p>{{ end }}
-      <p class="muted">Example: <code>{"command":["/bin/bash","-l"],"container_user":{"uid":1000,"gid":1000,"name":"{{"{{"}}cows.user.display_name{{"}}"}}","home":"/home/{{"{{"}}cows.user.username{{"}}"}}","shell":"/bin/bash"},"mounts":[{"name":"designs","type":"directory","container_path":"/foss/designs","read_only":false,"file_manager":true,"name_prefix":"workspace-","name_suffix":"-data"}]}</code></p>
-      <p class="muted">Optional <code>terminal_uids</code> is a list of numeric container UIDs users may select for terminal sessions. For example, <code>"terminal_uids":[1000,0]</code>. UID 0 enables root terminal access.</p>
-    </fieldset>
+    {{ template "template-configuration-editor" . }}
 
-    <fieldset>
+    <fieldset{{ invalidField .Template.FieldErrors "access_methods" }}>
       <legend>Supported access methods</legend>
+      {{ template "field-error" (fieldError .Template.FieldErrors "access_methods") }}
       <label class="check-row"><input type="checkbox" name="access_methods" value="terminal"{{ if .Template.TerminalAccess }} checked{{ end }}> Browser terminal</label>
       <label class="check-row"><input type="checkbox" name="access_methods" value="desktop"{{ if .Template.DesktopAccess }} checked{{ end }}> Graphical desktop</label>
       <label class="check-row"><input type="checkbox" name="access_methods" value="files"{{ if .Template.FilesAccess }} checked{{ end }}> Browser file manager</label>
       <label class="check-row"><input type="checkbox" name="access_methods" value="logs"{{ if .Template.LogsAccess }} checked{{ end }}> Container log viewer</label>
     </fieldset>
 
-    <fieldset>
+    <fieldset{{ invalidField .Template.FieldErrors "allowed_roles" }}>
       <legend>Allowed roles</legend>
+      {{ template "field-error" (fieldError .Template.FieldErrors "allowed_roles") }}
       <label class="check-row"><input type="checkbox" name="allowed_roles" value="user"{{ if .Template.UserRole }} checked{{ end }}> Users</label>
       <label class="check-row"><input type="checkbox" name="allowed_roles" value="administrator"{{ if .Template.AdministratorRole }} checked{{ end }}> Administrators</label>
     </fieldset>
@@ -63,10 +77,12 @@
     <fieldset>
       <legend>Group access</legend>
       <label for="group-access-mode">Group policy</label>
-      <select id="group-access-mode" name="group_access_mode">
+      <select id="group-access-mode" name="group_access_mode"{{ invalidField .Template.FieldErrors "group_access_mode" }}>
         <option value="exclude"{{ if eq .Template.GroupAccessMode "exclude" }} selected{{ end }}>Exclude selected groups</option>
         <option value="include"{{ if eq .Template.GroupAccessMode "include" }} selected{{ end }}>Include selected groups only</option>
       </select>
+      {{ template "field-error" (fieldError .Template.FieldErrors "group_access_mode") }}
+      {{ template "field-error" (fieldError .Template.FieldErrors "allowed_group_ids") }}
       {{ if .Groups }}
         <div class="check-list">
         {{ range .Groups }}

@@ -39,6 +39,16 @@ var (
 	ErrRetainedStorageIncompatible = errors.New("retained storage is not available for this template")
 )
 
+// Workspace creation form field names, matching the controls the creation page
+// renders. See the Field* constants in template.go for why validation names
+// form controls.
+const (
+	FieldWorkspaceName       = "name"
+	FieldWorkspaceTemplateID = "template_id"
+	FieldWorkspaceCPUMillis  = "cpu_millis"
+	FieldWorkspaceMemoryMiB  = "memory_mib"
+)
+
 type WorkspaceCleanupError struct {
 	Operation string
 	Failed    int
@@ -97,8 +107,15 @@ func (s *Service) CreateWorkspace(ctx context.Context, actorID string, input Cre
 		return domain.Workspace{}, err
 	}
 	name := strings.TrimSpace(input.Name)
-	if !validWorkspaceName(name) || strings.TrimSpace(input.TemplateID) == "" {
-		return domain.Workspace{}, ErrInvalidWorkspace
+	nameProblems := make([]error, 0, 2)
+	if !validWorkspaceName(name) {
+		nameProblems = append(nameProblems, domain.InvalidField(ErrInvalidWorkspace, FieldWorkspaceName, "Enter a name of 1 to 100 characters without control characters."))
+	}
+	if strings.TrimSpace(input.TemplateID) == "" {
+		nameProblems = append(nameProblems, domain.InvalidField(ErrInvalidWorkspace, FieldWorkspaceTemplateID, "Select a workspace template."))
+	}
+	if err := domain.InvalidFields(nameProblems...); err != nil {
+		return domain.Workspace{}, err
 	}
 	template, err := s.store.FindTemplateByID(ctx, input.TemplateID)
 	if err != nil {
@@ -298,9 +315,17 @@ func selectedResources(template domain.WorkspaceTemplate, input CreateWorkspaceI
 	if !template.ResourcesConfigurable {
 		return template.DefaultCPUMillis, template.DefaultMemoryBytes, nil
 	}
-	if input.CPUMillis < template.DefaultCPUMillis || input.CPUMillis > template.MaxCPUMillis ||
-		input.MemoryBytes < template.DefaultMemoryBytes || input.MemoryBytes > template.MaxMemoryBytes {
-		return 0, 0, ErrInvalidWorkspaceResources
+	problems := make([]error, 0, 2)
+	if input.CPUMillis < template.DefaultCPUMillis || input.CPUMillis > template.MaxCPUMillis {
+		problems = append(problems, domain.InvalidField(ErrInvalidWorkspaceResources, FieldWorkspaceCPUMillis,
+			fmt.Sprintf("Choose between %d and %d mCPU.", template.DefaultCPUMillis, template.MaxCPUMillis)))
+	}
+	if input.MemoryBytes < template.DefaultMemoryBytes || input.MemoryBytes > template.MaxMemoryBytes {
+		problems = append(problems, domain.InvalidField(ErrInvalidWorkspaceResources, FieldWorkspaceMemoryMiB,
+			fmt.Sprintf("Choose between %d and %d MiB.", template.DefaultMemoryBytes/(1<<20), template.MaxMemoryBytes/(1<<20))))
+	}
+	if err := domain.InvalidFields(problems...); err != nil {
+		return 0, 0, err
 	}
 	return input.CPUMillis, input.MemoryBytes, nil
 }

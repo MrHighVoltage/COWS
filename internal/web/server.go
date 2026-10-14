@@ -99,10 +99,21 @@ type userFormData struct {
 	DisplayName string
 	Role        string
 	Error       string
+	// FieldErrors marks the individual controls a rejected submission got
+	// wrong, keyed by form field name. The Error above only says that marks
+	// are present, so the two can never describe the problem differently.
+	FieldErrors map[string]string
 }
 
 type passwordFormData struct {
 	Error string
+}
+
+type groupFormData struct {
+	Name        string
+	Description string
+	Error       string
+	FieldErrors map[string]string
 }
 
 type passwordResetFormData struct {
@@ -117,14 +128,16 @@ type registrationFormData struct {
 	Email       string
 	DisplayName string
 	Error       string
+	FieldErrors map[string]string
 }
 
 type workspaceFormData struct {
-	Name       string
-	TemplateID string
-	CPUMillis  string
-	MemoryMiB  string
-	Error      string
+	Name        string
+	TemplateID  string
+	CPUMillis   string
+	MemoryMiB   string
+	Error       string
+	FieldErrors map[string]string
 }
 
 type quotaFormData struct {
@@ -136,6 +149,7 @@ type quotaFormData struct {
 	MaxWorkspaces        string
 	MaxRunningWorkspaces string
 	Error                string
+	FieldErrors          map[string]string
 }
 
 type settingsFormData struct {
@@ -144,6 +158,7 @@ type settingsFormData struct {
 	MemoryOverbookingFactor string
 	ReservedStorageGiB      string
 	Error                   string
+	FieldErrors             map[string]string
 }
 
 type allocationView struct {
@@ -177,7 +192,7 @@ type templateFormData struct {
 	ResourcesConfigurable  bool
 	InitialConnectionHours string
 	StoppedRetentionHours  string
-	ConfigurationJSON      string
+	Configuration          configurationEditor
 	TerminalRootAllowed    bool
 	TerminalAccess         bool
 	DesktopAccess          bool
@@ -189,6 +204,7 @@ type templateFormData struct {
 	AllowedGroupIDs        []string
 	Enabled                bool
 	Error                  string
+	FieldErrors            map[string]string
 }
 
 type templateImageView struct {
@@ -209,14 +225,19 @@ type imagePullOperation struct {
 }
 
 type pageData struct {
-	Title                       string
-	User                        *domain.User
-	Health                      healthSnapshot
-	CSRFToken                   string
-	Error                       string
-	Notice                      string
-	Users                       []domain.User
-	Form                        userFormData
+	Title     string
+	User      *domain.User
+	Health    healthSnapshot
+	CSRFToken string
+	Error     string
+	Notice    string
+	Users     []domain.User
+	Form      userFormData
+	// Profile holds the account-details form on the user editor, seeded from
+	// the stored account and replaced by what was submitted when a change is
+	// rejected, so the editor can mark the offending control instead of
+	// redirecting the values away.
+	Profile                     userFormData
 	Templates                   []domain.WorkspaceTemplate
 	TemplateImages              []templateImageView
 	TemplateImage               *templateImageView
@@ -252,6 +273,7 @@ type pageData struct {
 	LogLines                    []runtime.LogLine
 	LogError                    string
 	Groups                      []domain.Group
+	GroupForm                   groupFormData
 	UserGroupIDs                map[string][]string
 	UserGroups                  map[string][]domain.Group
 	EditUser                    *domain.User
@@ -408,6 +430,10 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 		options.RegistrationLimiter, _ = auth.NewLoginLimiter(auth.DefaultLoginFailureLimit, auth.DefaultLoginFailureWindow)
 	}
 	templates, err := template.New("cows").Funcs(template.FuncMap{
+		// fieldError renders the message under a rejected control and
+		// invalidField marks the control itself; see internal/web/fields.go.
+		"fieldError":    fieldErrorFor,
+		"invalidField":  invalidFieldAttrs,
 		"mib":           func(bytes int64) int64 { return bytes / (1 << 20) },
 		"gib":           func(bytes int64) int64 { return bytes / (1 << 30) },
 		"quotaClass":    quotaProgressClass,
@@ -471,7 +497,8 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 		"volumeMounts": func(mounts []domain.TemplateMount) []domain.TemplateMount {
 			volumes := make([]domain.TemplateMount, 0, len(mounts))
 			for _, mount := range mounts {
-				if mount.Type == domain.TemplateMountVolume {
+				// A mount without a type is a volume; see normalizedMountType.
+				if mount.Type == "" || mount.Type == domain.TemplateMountVolume {
 					volumes = append(volumes, mount)
 				}
 			}
@@ -653,6 +680,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/settings", s.adminSettingsUpdate)
 	mux.HandleFunc("GET /admin/templates", s.adminTemplates)
 	mux.HandleFunc("GET /admin/templates/new", s.adminTemplatesNew)
+	mux.HandleFunc("POST /admin/templates/configuration-editor", s.adminTemplateConfigurationEditor)
 	mux.HandleFunc("POST /admin/templates", s.adminTemplatesCreate)
 	mux.HandleFunc("GET /admin/templates/{id}/edit", s.adminTemplatesEdit)
 	mux.HandleFunc("GET /admin/templates/{id}/copy", s.adminTemplatesCopy)
@@ -936,7 +964,7 @@ func (s *Server) registerPost(w http.ResponseWriter, r *http.Request) {
 	registered, err := s.auth.Register(r.Context(), auth.RegisterUserInput{Username: form.Username, Email: form.Email, DisplayName: form.DisplayName, Password: r.FormValue("password"), PasswordConfirmation: r.FormValue("confirm_password")})
 	if err != nil {
 		s.options.RegistrationLimiter.Failure(key)
-		form.Error = registrationFormError(err)
+		form.Error, form.FieldErrors = registrationFormFeedback(err)
 		s.render(w, http.StatusBadRequest, "register-page", pageData{Title: "Register | COWS", CSRFToken: s.ensureCSRF(w, r), RegistrationEnabled: true, Registration: form})
 		return
 	}
@@ -1179,32 +1207,30 @@ func (s *Server) workspacesCreate(w http.ResponseWriter, r *http.Request) {
 	form := workspaceFormData{Name: r.FormValue("name"), TemplateID: r.FormValue("template_id"), CPUMillis: r.FormValue("cpu_millis"), MemoryMiB: r.FormValue("memory_mib")}
 	reattachVolumesFrom := reattachVolumeSelections(r.PostForm)
 	reattachDirectoriesFrom := strings.TrimSpace(r.FormValue("reattach_directories"))
-	cpuMillis, err := parseOptionalPositiveInt(form.CPUMillis)
-	if err != nil {
-		form.Error = "The selected CPU value is invalid."
-	} else {
-		memoryMiB, memoryErr := parseOptionalPositiveInt(form.MemoryMiB)
-		if memoryErr != nil || memoryMiB > (1<<62)/(1<<20) {
-			form.Error = "The selected memory value is invalid."
-		} else if _, err := s.workspace.CreateWorkspace(r.Context(), user.ID, workspace.CreateWorkspaceInput{
-			Name: form.Name, TemplateID: form.TemplateID, CPUMillis: cpuMillis, MemoryBytes: memoryMiB * (1 << 20),
-			ReattachVolumesFrom: reattachVolumesFrom, ReattachDirectoriesFrom: reattachDirectoriesFrom,
-		}); err != nil {
-			form.Error = workspaceFormError(err)
-		} else {
-			http.Redirect(w, r, "/workspaces", http.StatusSeeOther)
-			return
-		}
+	cpuMillis, cpuErr := parseOptionalPositiveInt(form.CPUMillis)
+	memoryMiB, memoryErr := parseOptionalPositiveInt(form.MemoryMiB)
+	if memoryErr == nil && memoryMiB > (1<<62)/(1<<20) {
+		memoryErr = errors.New("memory value is out of range")
 	}
-	if form.Error != "" {
-		templates, _ := s.workspace.ListAvailableTemplates(r.Context(), user.ID)
-		volumeOptions, directoryOptions := s.reattachOptionsForUser(r.Context(), user.ID)
-		data := pageData{Title: "Create workspace | COWS", User: user, Templates: templates, CSRFToken: s.ensureCSRF(w, r), Workspace: form,
-			ReattachVolumeOptions: volumeOptions, ReattachDirectoryOptions: directoryOptions}
-		s.setWorkspaceAvailability(r.Context(), user.ID, &data)
-		s.render(w, http.StatusBadRequest, "workspace-new-page", data)
+	if cpuErr != nil || memoryErr != nil {
+		form.Error, form.FieldErrors = fieldFeedback(nil, "The selected resources are invalid.",
+			markIf(cpuErr != nil, workspace.FieldWorkspaceCPUMillis, "Enter a whole number of mCPU within the template's range."),
+			markIf(memoryErr != nil, workspace.FieldWorkspaceMemoryMiB, "Enter a whole number of MiB within the template's range."))
+	} else if _, err := s.workspace.CreateWorkspace(r.Context(), user.ID, workspace.CreateWorkspaceInput{
+		Name: form.Name, TemplateID: form.TemplateID, CPUMillis: cpuMillis, MemoryBytes: memoryMiB * (1 << 20),
+		ReattachVolumesFrom: reattachVolumesFrom, ReattachDirectoriesFrom: reattachDirectoriesFrom,
+	}); err != nil {
+		form.Error, form.FieldErrors = workspaceFormFeedback(err)
+	} else {
+		http.Redirect(w, r, "/workspaces", http.StatusSeeOther)
 		return
 	}
+	templates, _ := s.workspace.ListAvailableTemplates(r.Context(), user.ID)
+	volumeOptions, directoryOptions := s.reattachOptionsForUser(r.Context(), user.ID)
+	data := pageData{Title: "Create workspace | COWS", User: user, Templates: templates, CSRFToken: s.ensureCSRF(w, r), Workspace: form,
+		ReattachVolumeOptions: volumeOptions, ReattachDirectoryOptions: directoryOptions}
+	s.setWorkspaceAvailability(r.Context(), user.ID, &data)
+	s.render(w, http.StatusBadRequest, "workspace-new-page", data)
 }
 
 // reattachVolumeSelections extracts the workspace-creation form's per-mount
@@ -2357,10 +2383,6 @@ func (s *Server) adminUserEdit(w http.ResponseWriter, r *http.Request) {
 		data.Error = "The invitation could not be sent. The account needs an email address and must not be disabled."
 	case "reset":
 		data.Error = "The reset link could not be sent. The account needs an email address and must not be disabled."
-	case "profile":
-		data.Error = "The account details could not be saved. Check the email address and display name."
-	case "email_in_use":
-		data.Error = "That email address already belongs to another account. Addresses must be unique so a reset link can only ever open one account."
 	case "password":
 		data.Error = "The password could not be set. It must be between 12 and 72 characters."
 	case "password_mismatch":
@@ -2402,7 +2424,7 @@ func (s *Server) adminUsersCreate(w http.ResponseWriter, r *http.Request) {
 		Role:        domain.Role(form.Role),
 	})
 	if err != nil {
-		form.Error = userFormError(err)
+		form.Error, form.FieldErrors = userFormFeedback(err)
 		s.render(w, http.StatusBadRequest, "admin-users-new-page", pageData{Title: "Create user | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), Form: form, InvitationsEnabled: s.options.InvitationsEnabled})
 		return
 	}
@@ -2432,16 +2454,30 @@ func (s *Server) adminUserProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	targetID := r.PathValue("id")
 	editURL := "/admin/users/" + url.PathEscape(targetID) + "/edit"
-	if _, err := s.auth.UpdateUserProfile(r.Context(), actor.ID, targetID, r.FormValue("email"), r.FormValue("display_name")); err != nil {
+	form := userFormData{Email: r.FormValue("email"), DisplayName: r.FormValue("display_name")}
+	if _, err := s.auth.UpdateUserProfile(r.Context(), actor.ID, targetID, form.Email, form.DisplayName); err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			http.NotFound(w, r)
 			return
 		}
-		reason := "profile"
-		if errors.Is(err, auth.ErrEmailInUse) {
-			reason = "email_in_use"
+		// Re-rendered rather than redirected, so the rejected values stay in
+		// the form and the control at fault can be marked.
+		data, loadErr := s.userEditPageData(r.Context(), actor.ID, targetID)
+		if loadErr != nil {
+			http.Error(w, "failed to load user", http.StatusInternalServerError)
+			return
 		}
-		http.Redirect(w, r, editURL+"?error="+reason, http.StatusSeeOther)
+		form.Error, form.FieldErrors = fieldFeedback(err, "The account details could not be saved. Check the email address and display name.",
+			markIf(errors.Is(err, auth.ErrEmailInUse), auth.FieldEmail, "That email address already belongs to another account. Addresses must be unique so a reset link can only ever open one account."))
+		form.Username = data.Profile.Username
+		form.Role = data.Profile.Role
+		data.Profile = form
+		data.Title = "Edit user | COWS"
+		data.User = &actor
+		data.CSRFToken = s.ensureCSRF(w, r)
+		data.InvitationsEnabled = s.options.InvitationsEnabled
+		data.PasswordResetEnabled = s.options.PasswordResetEnabled
+		s.render(w, http.StatusBadRequest, "admin-user-edit-page", data)
 		return
 	}
 	http.Redirect(w, r, editURL+"?notice=profile", http.StatusSeeOther)
@@ -2659,9 +2695,12 @@ func (s *Server) adminGroupsCreate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, err := s.auth.CreateGroup(r.Context(), user.ID, r.FormValue("name"), r.FormValue("description")); err != nil {
+	form := groupFormData{Name: r.FormValue("name"), Description: r.FormValue("description")}
+	if _, err := s.auth.CreateGroup(r.Context(), user.ID, form.Name, form.Description); err != nil {
+		form.Error, form.FieldErrors = fieldFeedback(err, "The group could not be created. Check the name and try again.",
+			markIf(errors.Is(err, repository.ErrConflict), auth.FieldGroupName, "A group with that name already exists."))
 		groups, _ := s.auth.ListGroups(r.Context(), user.ID)
-		s.render(w, http.StatusBadRequest, "admin-groups-page", pageData{Title: "Groups | COWS", User: &user, Groups: groups, CSRFToken: s.ensureCSRF(w, r), Error: "The group could not be created. Check the name and try again."})
+		s.render(w, http.StatusBadRequest, "admin-groups-page", pageData{Title: "Groups | COWS", User: &user, Groups: groups, CSRFToken: s.ensureCSRF(w, r), GroupForm: form})
 		return
 	}
 	http.Redirect(w, r, "/admin/groups", http.StatusSeeOther)
@@ -2710,15 +2749,16 @@ func (s *Server) adminQuotaUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	form := quotaFormData{UserID: r.PathValue("id"), MaxCPUMillis: r.FormValue("max_cpu_millis"), MaxMemoryMiB: r.FormValue("max_memory_mib"), MaxStorageGiB: r.FormValue("max_storage_gib"), MaxWorkspaces: r.FormValue("max_workspaces"), MaxRunningWorkspaces: r.FormValue("max_running_workspaces")}
 	input, err := parseQuotaForm(form)
-	if err == nil {
-		if s.quota == nil {
-			err = errors.New("quota service unavailable")
-		} else {
-			_, err = s.quota.Set(r.Context(), user.ID, form.UserID, input)
-		}
+	switch {
+	case err != nil:
+		err = domain.InvalidFields(err, quota.ValidateInput(input))
+	case s.quota == nil:
+		err = errors.New("quota service unavailable")
+	default:
+		_, err = s.quota.Set(r.Context(), user.ID, form.UserID, input)
 	}
 	if err != nil {
-		form.Error = quotaFormError(err)
+		form.Error, form.FieldErrors = quotaFormFeedback(err)
 		data, loadErr := s.userEditPageData(r.Context(), user.ID, form.UserID)
 		if errors.Is(loadErr, repository.ErrNotFound) {
 			http.NotFound(w, r)
@@ -2762,15 +2802,16 @@ func (s *Server) adminGroupQuotaUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	form := quotaFormData{GroupID: r.PathValue("id"), MaxCPUMillis: r.FormValue("max_cpu_millis"), MaxMemoryMiB: r.FormValue("max_memory_mib"), MaxStorageGiB: r.FormValue("max_storage_gib"), MaxWorkspaces: r.FormValue("max_workspaces"), MaxRunningWorkspaces: r.FormValue("max_running_workspaces")}
 	input, err := parseQuotaForm(form)
-	if err == nil {
-		if s.quota == nil {
-			err = errors.New("quota service unavailable")
-		} else {
-			_, err = s.quota.SetGroup(r.Context(), user.ID, form.GroupID, input)
-		}
+	switch {
+	case err != nil:
+		err = domain.InvalidFields(err, quota.ValidateInput(input))
+	case s.quota == nil:
+		err = errors.New("quota service unavailable")
+	default:
+		_, err = s.quota.SetGroup(r.Context(), user.ID, form.GroupID, input)
 	}
 	if err != nil {
-		form.Error = quotaFormError(err)
+		form.Error, form.FieldErrors = quotaFormFeedback(err)
 		data, loadErr := s.groupEditPageData(r.Context(), user.ID, form.GroupID)
 		if errors.Is(loadErr, repository.ErrNotFound) {
 			http.NotFound(w, r)
@@ -2821,6 +2862,7 @@ func (s *Server) userEditPageData(ctx context.Context, actorID, targetID string)
 		Groups:         s.templateGroups(ctx, actorID),
 		EditUserGroups: groupIDs,
 		Quota:          quotaFormData{UserID: target.ID},
+		Profile:        userFormData{Username: target.Username, Email: target.Email, DisplayName: target.DisplayName, Role: string(target.Role)},
 	}
 	if s.quota == nil {
 		return data, nil
@@ -2895,14 +2937,16 @@ func (s *Server) adminSettingsUpdate(w http.ResponseWriter, r *http.Request) {
 		MemoryOverbookingFactor: r.FormValue("memory_overbooking_factor"), ReservedStorageGiB: r.FormValue("reserved_storage_gib"),
 	}
 	input, err := parseSettingsForm(form)
-	if err == nil && s.quota == nil {
+	switch {
+	case err != nil:
+		err = domain.InvalidFields(err, quota.ValidateHostSettings(input))
+	case s.quota == nil:
 		err = errors.New("quota service unavailable")
-	}
-	if err == nil {
+	default:
 		_, err = s.quota.SetHostSettings(r.Context(), user.ID, input)
 	}
 	if err != nil {
-		form.Error = settingsFormError(err)
+		form.Error, form.FieldErrors = settingsFormFeedback(err)
 		var settings *domain.HostSettings
 		if s.quota != nil {
 			if current, loadErr := s.quota.GetHostSettings(r.Context(), user.ID); loadErr == nil {
@@ -3081,12 +3125,12 @@ func (s *Server) adminTemplatesCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	form, input, err := s.parseTemplateForm(r)
 	if err != nil {
-		form.Error = templateFormError(err)
+		form.Error, form.FieldErrors = templateFormFeedback(unreadableAndInvalid(err, input), form.Configuration)
 		s.render(w, http.StatusBadRequest, "admin-template-form-page", pageData{Title: "Create template | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), Template: form, Groups: s.templateGroups(r.Context(), user.ID)})
 		return
 	}
 	if _, err := s.workspace.CreateTemplate(r.Context(), user.ID, input); err != nil {
-		form.Error = templateFormError(err)
+		form.Error, form.FieldErrors = templateFormFeedback(err, form.Configuration)
 		s.render(w, http.StatusBadRequest, "admin-template-form-page", pageData{Title: "Create template | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), Template: form, Groups: s.templateGroups(r.Context(), user.ID)})
 		return
 	}
@@ -3140,7 +3184,7 @@ func (s *Server) adminTemplatesUpdate(w http.ResponseWriter, r *http.Request) {
 	form.ID = r.PathValue("id")
 	form.Editing = true
 	if err != nil {
-		form.Error = templateFormError(err)
+		form.Error, form.FieldErrors = templateFormFeedback(unreadableAndInvalid(err, input), form.Configuration)
 		s.render(w, http.StatusBadRequest, "admin-template-form-page", pageData{Title: "Edit template | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), Template: form, Groups: s.templateGroups(r.Context(), user.ID)})
 		return
 	}
@@ -3149,7 +3193,7 @@ func (s *Server) adminTemplatesUpdate(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, repository.ErrNotFound) {
 			status = http.StatusNotFound
 		}
-		form.Error = templateFormError(err)
+		form.Error, form.FieldErrors = templateFormFeedback(err, form.Configuration)
 		s.render(w, status, "admin-template-form-page", pageData{Title: "Edit template | COWS", User: &user, CSRFToken: s.ensureCSRF(w, r), Template: form, Groups: s.templateGroups(r.Context(), user.ID)})
 		return
 	}
@@ -3688,7 +3732,7 @@ func (s *Server) parseTemplateForm(r *http.Request) (templateFormData, workspace
 		ResourcesConfigurable:  r.FormValue("resources_configurable") == "on",
 		InitialConnectionHours: r.FormValue("initial_connection_hours"),
 		StoppedRetentionHours:  r.FormValue("stopped_retention_hours"),
-		ConfigurationJSON:      r.FormValue("configuration_json"),
+		Configuration:          configurationEditorFromForm(r.Form),
 		Enabled:                r.FormValue("enabled") == "on",
 		GroupAccessMode:        r.FormValue("group_access_mode"),
 		AllowedGroupIDs:        append([]string(nil), r.Form["allowed_group_ids"]...),
@@ -3713,35 +3757,40 @@ func (s *Server) parseTemplateForm(r *http.Request) (templateFormData, workspace
 			form.AdministratorRole = true
 		}
 	}
+	// Every unreadable value is attributed to its own control and they are
+	// collected before returning, so a form this long reports all of its
+	// malformed numbers at once instead of one per submission.
+	problems := make([]error, 0, 7)
+	rejected := func(field, message string) {
+		problems = append(problems, domain.InvalidField(workspace.ErrInvalidTemplate, field, message))
+	}
 	defaultCPU, err := parsePositiveInt(form.DefaultCPUMillis)
 	if err != nil {
-		return form, workspace.TemplateInput{}, workspace.ErrInvalidTemplate
+		rejected(workspace.FieldTemplateDefaultCPU, "Enter a whole number of at least 1.")
 	}
 	initialConnection, err := parseDurationInput(form.InitialConnectionHours, time.Hour)
 	if err != nil {
-		return form, workspace.TemplateInput{}, workspace.ErrInvalidTemplate
+		rejected(workspace.FieldTemplateInitialConnection, "Enter a whole number of hours between 0 and 87600.")
 	}
 	stoppedRetention, err := parseDurationInput(form.StoppedRetentionHours, time.Hour)
 	if err != nil {
-		return form, workspace.TemplateInput{}, workspace.ErrInvalidTemplate
+		rejected(workspace.FieldTemplateStoppedRetention, "Enter a whole number of hours between 0 and 87600.")
 	}
 	maxCPU, err := parsePositiveInt(form.MaxCPUMillis)
 	if err != nil {
-		return form, workspace.TemplateInput{}, workspace.ErrInvalidTemplate
+		rejected(workspace.FieldTemplateMaxCPU, "Enter a whole number of at least 1.")
 	}
 	defaultMemory, err := parseResource(form.DefaultMemoryMiB, 1<<20)
 	if err != nil {
-		return form, workspace.TemplateInput{}, workspace.ErrInvalidTemplate
+		rejected(workspace.FieldTemplateDefaultMemory, "Enter a whole number of at least 1.")
 	}
 	maxMemory, err := parseResource(form.MaxMemoryMiB, 1<<20)
 	if err != nil {
-		return form, workspace.TemplateInput{}, workspace.ErrInvalidTemplate
+		rejected(workspace.FieldTemplateMaxMemory, "Enter a whole number of at least 1.")
 	}
-	configuration := domain.TemplateConfiguration{}
-	if strings.TrimSpace(form.ConfigurationJSON) != "" {
-		if err := decodeTemplateConfiguration(form.ConfigurationJSON, &configuration); err != nil {
-			return form, workspace.TemplateInput{}, workspace.ErrInvalidTemplate
-		}
+	configuration, err := form.Configuration.configuration()
+	if err != nil {
+		problems = append(problems, err)
 	}
 	form.TerminalRootAllowed = hasTerminalUID(configuration, 0)
 	methods := make([]domain.AccessMethod, 0, 4)
@@ -3764,6 +3813,9 @@ func (s *Server) parseTemplateForm(r *http.Request) (templateFormData, workspace
 	if form.AdministratorRole {
 		roles = append(roles, domain.RoleAdministrator)
 	}
+	// The returned input is only complete when the error is nil; on failure it
+	// still carries every value that could be read, which is what lets the
+	// handler ask the service what else is wrong.
 	return form, workspace.TemplateInput{
 		Name:                            form.Name,
 		Description:                     form.Description,
@@ -3782,7 +3834,7 @@ func (s *Server) parseTemplateForm(r *http.Request) (templateFormData, workspace
 		GroupAccessMode:                 form.GroupAccessMode,
 		AllowedGroupIDs:                 form.AllowedGroupIDs,
 		Enabled:                         form.Enabled,
-	}, nil
+	}, domain.InvalidFields(problems...)
 }
 
 func decodeTemplateConfiguration(value string, configuration *domain.TemplateConfiguration) error {
@@ -4122,28 +4174,25 @@ func observedErrorText(code string) string {
 	}
 }
 
+// parseQuotaForm reads the five limits, attributing each unreadable one to its
+// own control so the editor marks every field that has to be retyped.
 func parseQuotaForm(form quotaFormData) (quota.Input, error) {
-	cpu, err := parseNonNegativeInt(form.MaxCPUMillis)
-	if err != nil {
-		return quota.Input{}, quota.ErrInvalidQuota
+	problems := make([]error, 0, 5)
+	limit := func(field, value string, multiplier int64) int64 {
+		parsed, err := parseNonNegativeResource(value, multiplier)
+		if err != nil {
+			problems = append(problems, domain.InvalidField(quota.ErrInvalidQuota, field, "Enter a whole number of zero or more. Zero means unlimited."))
+		}
+		return parsed
 	}
-	memory, err := parseNonNegativeResource(form.MaxMemoryMiB, 1<<20)
-	if err != nil {
-		return quota.Input{}, quota.ErrInvalidQuota
+	input := quota.Input{
+		MaxCPUMillis:         limit(quota.FieldMaxCPUMillis, form.MaxCPUMillis, 1),
+		MaxMemoryBytes:       limit(quota.FieldMaxMemoryMiB, form.MaxMemoryMiB, 1<<20),
+		MaxStorageBytes:      limit(quota.FieldMaxStorageGiB, form.MaxStorageGiB, 1<<30),
+		MaxWorkspaces:        limit(quota.FieldMaxWorkspaces, form.MaxWorkspaces, 1),
+		MaxRunningWorkspaces: limit(quota.FieldMaxRunningWorkspaces, form.MaxRunningWorkspaces, 1),
 	}
-	storage, err := parseNonNegativeResource(form.MaxStorageGiB, 1<<30)
-	if err != nil {
-		return quota.Input{}, quota.ErrInvalidQuota
-	}
-	workspaces, err := parseNonNegativeInt(form.MaxWorkspaces)
-	if err != nil {
-		return quota.Input{}, quota.ErrInvalidQuota
-	}
-	runningWorkspaces, err := parseNonNegativeInt(form.MaxRunningWorkspaces)
-	if err != nil {
-		return quota.Input{}, quota.ErrInvalidQuota
-	}
-	return quota.Input{MaxCPUMillis: cpu, MaxMemoryBytes: memory, MaxStorageBytes: storage, MaxWorkspaces: workspaces, MaxRunningWorkspaces: runningWorkspaces}, nil
+	return input, domain.InvalidFields(problems...)
 }
 
 func quotaFormFromUserQuota(value domain.UserQuota) quotaFormData {
@@ -4168,24 +4217,34 @@ func quotaFormFromGroupQuota(value domain.GroupQuota) quotaFormData {
 	}
 }
 
+// parseSettingsForm reads the host settings, attributing each unreadable value
+// to its own control. The quota service repeats every range check on the
+// parsed values, so this only has to reject what it cannot turn into a number
+// and leave the bounds to the one place that owns them.
 func parseSettingsForm(form settingsFormData) (quota.HostSettingsInput, error) {
-	storage, err := parseNonNegativeResource(form.HostStorageGiB, 1<<30)
-	if err != nil {
-		return quota.HostSettingsInput{}, quota.ErrInvalidQuota
+	problems := make([]error, 0, 4)
+	storage := func(field, value string) int64 {
+		parsed, err := parseNonNegativeResource(value, 1<<30)
+		if err != nil {
+			problems = append(problems, domain.InvalidField(quota.ErrInvalidQuota, field, "Enter a whole number of GiB, zero or more."))
+		}
+		return parsed
 	}
-	cpuFactor, err := strconv.ParseFloat(strings.TrimSpace(form.CPUOverbookingFactor), 64)
-	if err != nil || math.IsNaN(cpuFactor) || math.IsInf(cpuFactor, 0) || cpuFactor < quota.MinOverbookingFactor || cpuFactor > quota.MaxOverbookingFactor {
-		return quota.HostSettingsInput{}, quota.ErrInvalidQuota
+	factor := func(field, value string) float64 {
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+			problems = append(problems, domain.InvalidField(quota.ErrInvalidQuota, field, "Enter a decimal factor."))
+			return 0
+		}
+		return parsed
 	}
-	memoryFactor, err := strconv.ParseFloat(strings.TrimSpace(form.MemoryOverbookingFactor), 64)
-	if err != nil || math.IsNaN(memoryFactor) || math.IsInf(memoryFactor, 0) || memoryFactor < quota.MinOverbookingFactor || memoryFactor > quota.MaxOverbookingFactor {
-		return quota.HostSettingsInput{}, quota.ErrInvalidQuota
+	input := quota.HostSettingsInput{
+		HostStorageBytes:        storage(quota.FieldHostStorageGiB, form.HostStorageGiB),
+		CPUOverbookingFactor:    factor(quota.FieldCPUOverbookingFactor, form.CPUOverbookingFactor),
+		MemoryOverbookingFactor: factor(quota.FieldMemoryOverbookingFactor, form.MemoryOverbookingFactor),
+		ReservedStorageBytes:    storage(quota.FieldReservedStorageGiB, form.ReservedStorageGiB),
 	}
-	reservedStorage, err := parseNonNegativeResource(form.ReservedStorageGiB, 1<<30)
-	if err != nil {
-		return quota.HostSettingsInput{}, quota.ErrInvalidQuota
-	}
-	return quota.HostSettingsInput{HostStorageBytes: storage, CPUOverbookingFactor: cpuFactor, MemoryOverbookingFactor: memoryFactor, ReservedStorageBytes: reservedStorage}, nil
+	return input, domain.InvalidFields(problems...)
 }
 
 func parseNonNegativeInt(value string) (int64, error) {
@@ -4214,7 +4273,7 @@ func settingsFormFromDomain(settings domain.HostSettings) settingsFormData {
 }
 
 func defaultTemplateForm() templateFormData {
-	return templateFormData{DefaultCPUMillis: "1000", MaxCPUMillis: "4000", DefaultMemoryMiB: "2048", MaxMemoryMiB: "8192", InitialConnectionHours: "24", StoppedRetentionHours: "24", ConfigurationJSON: "{}", TerminalAccess: true, UserRole: true, GroupAccessMode: domain.GroupAccessExclude, Enabled: true}
+	return templateFormData{DefaultCPUMillis: "1000", MaxCPUMillis: "4000", DefaultMemoryMiB: "2048", MaxMemoryMiB: "8192", InitialConnectionHours: "24", StoppedRetentionHours: "24", Configuration: configurationEditor{Mode: configurationModeForm}, TerminalAccess: true, UserRole: true, GroupAccessMode: domain.GroupAccessExclude, Enabled: true}
 }
 
 func hasTerminalUID(configuration domain.TemplateConfiguration, want int64) bool {
@@ -4227,11 +4286,7 @@ func hasTerminalUID(configuration domain.TemplateConfiguration, want int64) bool
 }
 
 func templateFormFromDomain(template domain.WorkspaceTemplate) templateFormData {
-	configurationJSON, _ := json.MarshalIndent(template.Configuration, "", "  ")
-	if len(configurationJSON) == 0 {
-		configurationJSON = []byte("{}")
-	}
-	form := templateFormData{ID: template.ID, Editing: true, Name: template.Name, Description: template.Description, ImageReference: template.ImageReference, ImageDigest: template.ImageDigest, DefaultCPUMillis: strconv.FormatInt(template.DefaultCPUMillis, 10), MaxCPUMillis: strconv.FormatInt(template.MaxCPUMillis, 10), DefaultMemoryMiB: strconv.FormatInt(template.DefaultMemoryBytes/(1<<20), 10), MaxMemoryMiB: strconv.FormatInt(template.MaxMemoryBytes/(1<<20), 10), ResourcesConfigurable: template.ResourcesConfigurable, InitialConnectionHours: strconv.FormatInt(template.InitialConnectionTimeoutSeconds/3600, 10), StoppedRetentionHours: strconv.FormatInt(template.StoppedRetentionSeconds/3600, 10), GroupAccessMode: template.GroupAccessMode, AllowedGroupIDs: append([]string(nil), template.AllowedGroupIDs...), ConfigurationJSON: string(configurationJSON), TerminalRootAllowed: hasTerminalUID(template.Configuration, 0), Enabled: template.Enabled}
+	form := templateFormData{ID: template.ID, Editing: true, Name: template.Name, Description: template.Description, ImageReference: template.ImageReference, ImageDigest: template.ImageDigest, DefaultCPUMillis: strconv.FormatInt(template.DefaultCPUMillis, 10), MaxCPUMillis: strconv.FormatInt(template.MaxCPUMillis, 10), DefaultMemoryMiB: strconv.FormatInt(template.DefaultMemoryBytes/(1<<20), 10), MaxMemoryMiB: strconv.FormatInt(template.MaxMemoryBytes/(1<<20), 10), ResourcesConfigurable: template.ResourcesConfigurable, InitialConnectionHours: strconv.FormatInt(template.InitialConnectionTimeoutSeconds/3600, 10), StoppedRetentionHours: strconv.FormatInt(template.StoppedRetentionSeconds/3600, 10), GroupAccessMode: template.GroupAccessMode, AllowedGroupIDs: append([]string(nil), template.AllowedGroupIDs...), Configuration: templateConfigurationEditorFor(template.Configuration), TerminalRootAllowed: hasTerminalUID(template.Configuration, 0), Enabled: template.Enabled}
 	for _, method := range template.AccessMethods {
 		switch method {
 		case domain.AccessTerminal:
@@ -4379,6 +4434,55 @@ func (s *Server) render(w http.ResponseWriter, status int, name string, data pag
 	if err := s.templates.ExecuteTemplate(w, name, data); err != nil {
 		return
 	}
+}
+
+// userFormFeedback pairs the alert above the create-user form with the marks
+// on the rejected controls. Uniqueness and deliverability can only be decided
+// against stored accounts and the mail configuration, so the service reports
+// them as whole-operation failures and this is where they become field marks.
+func userFormFeedback(err error) (string, map[string]string) {
+	return fieldFeedback(err, userFormError(err),
+		markIf(errors.Is(err, repository.ErrConflict), auth.FieldUsername, "That username is already taken."),
+		markIf(errors.Is(err, auth.ErrEmailInUse), auth.FieldEmail, "That email address already belongs to another account."),
+		markIf(errors.Is(err, auth.ErrInvitationUnavailable), auth.FieldPassword, "Set a temporary password, or add an email address so an invitation can be sent."),
+	)
+}
+
+func registrationFormFeedback(err error) (string, map[string]string) {
+	// A taken username or address must not be distinguishable here, so the
+	// conflict stays a single non-committal message on the whole form.
+	if errors.Is(err, repository.ErrConflict) || errors.Is(err, auth.ErrEmailInUse) {
+		return registrationFormError(err), nil
+	}
+	return fieldFeedback(err, registrationFormError(err))
+}
+
+// templateFormFeedback pairs the alert above the workspace-template form with
+// the marks on the rejected controls. The configuration editor decides which
+// of its controls shows a configuration rejection, because the JSON editor has
+// only one.
+func templateFormFeedback(err error, editor configurationEditor) (string, map[string]string) {
+	return markedFeedback(domain.FieldMessagesOn(err, editor.control), templateFormError(err),
+		markIf(errors.Is(err, repository.ErrConflict), workspace.FieldTemplateName, "A workspace template with that name already exists."))
+}
+
+// workspaceFormFeedback pairs the alert above the workspace-creation form with
+// the marks on the rejected controls. Quota and host-capacity rejections stay
+// on the form as a whole: no single control is wrong, the request is simply
+// too large for what the account or the host has left.
+func workspaceFormFeedback(err error) (string, map[string]string) {
+	return fieldFeedback(err, workspaceFormError(err),
+		markIf(errors.Is(err, repository.ErrConflict), workspace.FieldWorkspaceName, "You already have a workspace with that name."),
+		markIf(errors.Is(err, workspace.ErrTemplateNotAvailable), workspace.FieldWorkspaceTemplateID, "That workspace template is not available for your account."),
+	)
+}
+
+func quotaFormFeedback(err error) (string, map[string]string) {
+	return fieldFeedback(err, quotaFormError(err))
+}
+
+func settingsFormFeedback(err error) (string, map[string]string) {
+	return fieldFeedback(err, settingsFormError(err))
 }
 
 func userFormError(err error) string {

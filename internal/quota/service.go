@@ -21,6 +21,30 @@ var (
 	ErrStorageUnavailable   = errors.New("workspace storage usage unavailable")
 )
 
+// Quota and host-settings form field names. Validation attributes each
+// rejected value to one of these through domain.FieldError, and the quota and
+// host-settings forms render controls under exactly these names. They are
+// named for the MiB and GiB the forms collect even though Input and
+// HostSettingsInput carry bytes, because the marked control is the one the
+// administrator typed into.
+const (
+	FieldMaxCPUMillis            = "max_cpu_millis"
+	FieldMaxMemoryMiB            = "max_memory_mib"
+	FieldMaxStorageGiB           = "max_storage_gib"
+	FieldMaxWorkspaces           = "max_workspaces"
+	FieldMaxRunningWorkspaces    = "max_running_workspaces"
+	FieldHostStorageGiB          = "host_storage_gib"
+	FieldCPUOverbookingFactor    = "cpu_overbooking_factor"
+	FieldMemoryOverbookingFactor = "memory_overbooking_factor"
+	FieldReservedStorageGiB      = "reserved_storage_gib"
+)
+
+// invalidQuotaField attributes a rejected quota or host-settings value to the
+// form control that carries it.
+func invalidQuotaField(field, message string) error {
+	return domain.InvalidField(ErrInvalidQuota, field, message)
+}
+
 type CapacityInsufficientError struct {
 	Resource  string
 	Available int64
@@ -111,8 +135,8 @@ func (s *Service) SetGroup(ctx context.Context, actorID, groupID string, input I
 	if _, err := s.requireAdministrator(ctx, actorID); err != nil {
 		return domain.GroupQuota{}, err
 	}
-	if !validInput(input) {
-		return domain.GroupQuota{}, ErrInvalidQuota
+	if err := ValidateInput(input); err != nil {
+		return domain.GroupQuota{}, err
 	}
 	if _, err := s.store.FindGroupByID(ctx, groupID); err != nil {
 		return domain.GroupQuota{}, err
@@ -195,8 +219,8 @@ func (s *Service) Set(ctx context.Context, actorID, userID string, input Input) 
 	if _, err := s.requireAdministrator(ctx, actorID); err != nil {
 		return domain.UserQuota{}, err
 	}
-	if !validInput(input) {
-		return domain.UserQuota{}, ErrInvalidQuota
+	if err := ValidateInput(input); err != nil {
+		return domain.UserQuota{}, err
 	}
 	if _, err := s.store.FindUserByID(ctx, userID); err != nil {
 		return domain.UserQuota{}, err
@@ -251,8 +275,8 @@ func (s *Service) EnsureHostSettings(ctx context.Context, defaults HostSettingsI
 	if defaults.MemoryOverbookingFactor == 0 {
 		defaults.MemoryOverbookingFactor = 1
 	}
-	if !validHostSettings(defaults) {
-		return domain.HostSettings{}, ErrInvalidQuota
+	if err := validateHostSettings(defaults); err != nil {
+		return domain.HostSettings{}, err
 	}
 	now := s.now().UTC()
 	settings = domain.HostSettings{ID: 1, HostStorageBytes: defaults.HostStorageBytes, CPUOverbookingFactor: defaults.CPUOverbookingFactor, MemoryOverbookingFactor: defaults.MemoryOverbookingFactor, ReservedStorageBytes: defaults.ReservedStorageBytes, CreatedAt: now, UpdatedAt: now}
@@ -273,8 +297,8 @@ func (s *Service) SetHostSettings(ctx context.Context, actorID string, input Hos
 	if _, err := s.requireAdministrator(ctx, actorID); err != nil {
 		return domain.HostSettings{}, err
 	}
-	if !validHostSettings(input) || (input.HostStorageBytes > 0 && input.ReservedStorageBytes > input.HostStorageBytes) {
-		return domain.HostSettings{}, ErrInvalidQuota
+	if err := ValidateHostSettings(input); err != nil {
+		return domain.HostSettings{}, err
 	}
 	existing, err := s.store.FindHostSettings(ctx)
 	if errors.Is(err, repository.ErrNotFound) {
@@ -305,15 +329,29 @@ func (s *Service) requireAdministrator(ctx context.Context, actorID string) (dom
 	return user, nil
 }
 
-func validInput(input Input) bool {
-	return input.MaxCPUMillis >= 0 && input.MaxCPUMillis <= 1_000_000 && input.MaxMemoryBytes >= 0 && input.MaxMemoryBytes <= 1<<50 && input.MaxStorageBytes >= 0 && input.MaxStorageBytes <= 1<<60 && input.MaxWorkspaces >= 0 && input.MaxWorkspaces <= 1_000_000 && input.MaxRunningWorkspaces >= 0 && input.MaxRunningWorkspaces <= 1_000_000
-}
-
 // ValidateInput exposes the same bounds used by administrator quota changes
 // to validate server-side registration defaults during configuration loading.
+// Every rejected limit is attributed to its form control and they are reported
+// together, so one submission of the five-field quota editor marks each limit
+// that is out of range.
 func ValidateInput(input Input) error {
-	if !validInput(input) {
-		return ErrInvalidQuota
+	return domain.InvalidFields(
+		boundedLimit(FieldMaxCPUMillis, input.MaxCPUMillis, 1_000_000, "1000000 mCPU"),
+		boundedLimit(FieldMaxMemoryMiB, input.MaxMemoryBytes, 1<<50, "1073741824 MiB"),
+		boundedLimit(FieldMaxStorageGiB, input.MaxStorageBytes, 1<<60, "1073741824 GiB"),
+		boundedLimit(FieldMaxWorkspaces, input.MaxWorkspaces, 1_000_000, "1000000 workspaces"),
+		boundedLimit(FieldMaxRunningWorkspaces, input.MaxRunningWorkspaces, 1_000_000, "1000000 workspaces"),
+	)
+}
+
+// boundedLimit reports whether one quota limit sits in [0, limit]. Zero always
+// means unlimited, so it is never out of range.
+func boundedLimit(field string, value, limit int64, ceiling string) error {
+	if value < 0 {
+		return invalidQuotaField(field, "Enter zero for unlimited, or a positive value.")
+	}
+	if value > limit {
+		return invalidQuotaField(field, "Enter at most "+ceiling+", or zero for unlimited.")
 	}
 	return nil
 }
@@ -516,8 +554,36 @@ func (s *Scheduler) measureStorage(ctx context.Context, userWorkspaces []domain.
 	return total, nil
 }
 
-func validHostSettings(input HostSettingsInput) bool {
-	return input.HostStorageBytes >= 0 && input.HostStorageBytes <= 1<<60 && validOverbookingFactor(input.CPUOverbookingFactor) && validOverbookingFactor(input.MemoryOverbookingFactor) && input.ReservedStorageBytes >= 0 && input.ReservedStorageBytes <= 1<<60
+// ValidateHostSettings runs the same checks SetHostSettings runs, without
+// storing anything, so the web layer can ask what else a submission got wrong
+// when its own parsing already failed. It covers one rule more than
+// validateHostSettings: reserved storage has to fit inside the host total,
+// which only applies to an administrator's edit and not to the configured
+// startup defaults.
+func ValidateHostSettings(input HostSettingsInput) error {
+	problems := []error{validateHostSettings(input)}
+	if input.HostStorageBytes > 0 && input.ReservedStorageBytes > input.HostStorageBytes {
+		problems = append(problems, invalidQuotaField(FieldReservedStorageGiB, "Reserved storage cannot exceed the allocatable host storage."))
+	}
+	return domain.InvalidFields(problems...)
+}
+
+// validateHostSettings reports every host setting that is out of range, each
+// attributed to its form control.
+func validateHostSettings(input HostSettingsInput) error {
+	return domain.InvalidFields(
+		boundedLimit(FieldHostStorageGiB, input.HostStorageBytes, 1<<60, "1073741824 GiB"),
+		overbookingFactor(FieldCPUOverbookingFactor, input.CPUOverbookingFactor),
+		overbookingFactor(FieldMemoryOverbookingFactor, input.MemoryOverbookingFactor),
+		boundedLimit(FieldReservedStorageGiB, input.ReservedStorageBytes, 1<<60, "1073741824 GiB"),
+	)
+}
+
+func overbookingFactor(field string, value float64) error {
+	if !validOverbookingFactor(value) {
+		return invalidQuotaField(field, fmt.Sprintf("Enter a factor between %v and %v.", float64(MinOverbookingFactor), float64(MaxOverbookingFactor)))
+	}
+	return nil
 }
 
 func validOverbookingFactor(value float64) bool {

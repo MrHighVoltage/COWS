@@ -11,12 +11,15 @@
   <section class="form-panel" aria-labelledby="user-details-title">
     <h2 id="user-details-title">Account details</h2>
     <p class="muted">The username and role are not editable here. Changing the email address invalidates any invitation or reset link already sent to the old address, and cancels a message still waiting to go out to it.</p>
+    {{ if .Profile.Error }}<p class="alert alert-error" role="alert">{{ .Profile.Error }}</p>{{ end }}
     <form method="post" action="/admin/users/{{ .EditUser.ID }}/profile">
       <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
       <label for="email">Email address <span class="muted">optional; required for invitations and reset links</span></label>
-      <input id="email" name="email" type="email" value="{{ .EditUser.Email }}" maxlength="254" autocomplete="email">
+      <input id="email" name="email" type="email" value="{{ .Profile.Email }}" maxlength="254" autocomplete="email"{{ invalidField .Profile.FieldErrors "email" }}>
+      {{ template "field-error" (fieldError .Profile.FieldErrors "email") }}
       <label for="display-name">Display name</label>
-      <input id="display-name" name="display_name" type="text" value="{{ .EditUser.DisplayName }}" maxlength="120" autocomplete="name">
+      <input id="display-name" name="display_name" type="text" value="{{ .Profile.DisplayName }}" maxlength="120" autocomplete="name"{{ invalidField .Profile.FieldErrors "display_name" }}>
+      {{ template "field-error" (fieldError .Profile.FieldErrors "display_name") }}
       <div class="form-actions">
         <button class="primary-button" type="submit">Save account details</button>
       </div>
@@ -48,11 +51,11 @@
     <form method="post" action="/admin/users/{{ .EditUser.ID }}/quota">
       <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
       <div class="quota-form-grid">
-        <label>CPU while running <input name="max_cpu_millis" type="number" min="0" max="1000000" placeholder="mCPU" value="{{ .Quota.MaxCPUMillis }}" required><span>mCPU; 0 = unlimited</span></label>
-        <label>Memory while running <input name="max_memory_mib" type="number" min="0" placeholder="MiB" value="{{ .Quota.MaxMemoryMiB }}" required><span>MiB; 0 = unlimited</span></label>
-        <label>Storage allocated <input name="max_storage_gib" type="number" min="0" placeholder="GiB" value="{{ .Quota.MaxStorageGiB }}" required><span>GiB; 0 = unlimited</span></label>
-        <label>Total workspaces <input name="max_workspaces" type="number" min="0" max="1000000" placeholder="Count" value="{{ .Quota.MaxWorkspaces }}" required><span>Count; 0 = unlimited</span></label>
-        <label>Running workspaces <input name="max_running_workspaces" type="number" min="0" max="1000000" placeholder="Count" value="{{ .Quota.MaxRunningWorkspaces }}" required><span>Count; 0 = unlimited</span></label>
+        <label>CPU while running <input name="max_cpu_millis" type="number" min="0" max="1000000" placeholder="mCPU" value="{{ .Quota.MaxCPUMillis }}" required{{ invalidField .Quota.FieldErrors "max_cpu_millis" }}><span>mCPU; 0 = unlimited</span>{{ template "field-error" (fieldError .Quota.FieldErrors "max_cpu_millis") }}</label>
+        <label>Memory while running <input name="max_memory_mib" type="number" min="0" placeholder="MiB" value="{{ .Quota.MaxMemoryMiB }}" required{{ invalidField .Quota.FieldErrors "max_memory_mib" }}><span>MiB; 0 = unlimited</span>{{ template "field-error" (fieldError .Quota.FieldErrors "max_memory_mib") }}</label>
+        <label>Storage allocated <input name="max_storage_gib" type="number" min="0" placeholder="GiB" value="{{ .Quota.MaxStorageGiB }}" required{{ invalidField .Quota.FieldErrors "max_storage_gib" }}><span>GiB; 0 = unlimited</span>{{ template "field-error" (fieldError .Quota.FieldErrors "max_storage_gib") }}</label>
+        <label>Total workspaces <input name="max_workspaces" type="number" min="0" max="1000000" placeholder="Count" value="{{ .Quota.MaxWorkspaces }}" required{{ invalidField .Quota.FieldErrors "max_workspaces" }}><span>Count; 0 = unlimited</span>{{ template "field-error" (fieldError .Quota.FieldErrors "max_workspaces") }}</label>
+        <label>Running workspaces <input name="max_running_workspaces" type="number" min="0" max="1000000" placeholder="Count" value="{{ .Quota.MaxRunningWorkspaces }}" required{{ invalidField .Quota.FieldErrors "max_running_workspaces" }}><span>Count; 0 = unlimited</span>{{ template "field-error" (fieldError .Quota.FieldErrors "max_running_workspaces") }}</label>
       </div>
       <div class="form-actions">
         <button class="primary-button" type="submit">Save user quota</button>

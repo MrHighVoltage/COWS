@@ -11,7 +11,8 @@
   <div class="form-grid">
     <div>
       <label for="host-storage-gib">Allocatable host storage (GiB)</label>
-      <input id="host-storage-gib" name="host_storage_gib" type="number" min="0" max="1073741824" value="{{ .SettingsForm.HostStorageGiB }}" required>
+      <input id="host-storage-gib" name="host_storage_gib" type="number" min="0" max="1073741824" value="{{ .SettingsForm.HostStorageGiB }}" required{{ invalidField .SettingsForm.FieldErrors "host_storage_gib" }}>
+      {{ template "field-error" (fieldError .SettingsForm.FieldErrors "host_storage_gib") }}
       <span class="muted">Zero means unknown and blocks workspace creation.</span>
     </div>
     <div class="host-overbooking-settings" x-data="{ cpu: Number('{{ .SettingsForm.CPUOverbookingFactor }}') || 1, memory: Number('{{ .SettingsForm.MemoryOverbookingFactor }}') || 1 }">
@@ -21,13 +22,15 @@
           <label for="cpu-overbooking-factor-slider">CPU factor</label>
           <input id="cpu-overbooking-factor-slider" type="range" min="0.1" max="10" step="0.1" x-model.number="cpu" aria-label="CPU overbooking factor from 0.1 to 10">
           <label for="cpu-overbooking-factor">Factor</label>
-          <input id="cpu-overbooking-factor" name="cpu_overbooking_factor" type="number" min="0.1" max="1000" step="0.1" x-model.number="cpu" required>
+          <input id="cpu-overbooking-factor" name="cpu_overbooking_factor" type="number" min="0.1" max="1000" step="0.1" x-model.number="cpu" required{{ invalidField .SettingsForm.FieldErrors "cpu_overbooking_factor" }}>
+          {{ template "field-error" (fieldError .SettingsForm.FieldErrors "cpu_overbooking_factor") }}
         </div>
         <div class="host-overbooking-field">
           <label for="memory-overbooking-factor-slider">Memory factor</label>
           <input id="memory-overbooking-factor-slider" type="range" min="0.1" max="10" step="0.1" x-model.number="memory" aria-label="memory overbooking factor from 0.1 to 10">
           <label for="memory-overbooking-factor">Factor</label>
-          <input id="memory-overbooking-factor" name="memory_overbooking_factor" type="number" min="0.1" max="1000" step="0.1" x-model.number="memory" required>
+          <input id="memory-overbooking-factor" name="memory_overbooking_factor" type="number" min="0.1" max="1000" step="0.1" x-model.number="memory" required{{ invalidField .SettingsForm.FieldErrors "memory_overbooking_factor" }}>
+          {{ template "field-error" (fieldError .SettingsForm.FieldErrors "memory_overbooking_factor") }}
         </div>
         <span class="muted">Each slider covers 0.1 to 10. Use the fields for higher values. 1.0 uses physical capacity.</span>
         <p class="alert alert-warning" x-show="cpu &gt; 1 || memory &gt; 1" x-cloak role="alert">Overbooking above 1 can cause system lockups, especially when memory is overbooked.</p>
@@ -35,7 +38,8 @@
     </div>
     <div>
       <label for="reserved-storage-gib">Reserved storage (GiB)</label>
-      <input id="reserved-storage-gib" name="reserved_storage_gib" type="number" min="0" max="1073741824" value="{{ .SettingsForm.ReservedStorageGiB }}" required>
+      <input id="reserved-storage-gib" name="reserved_storage_gib" type="number" min="0" max="1073741824" value="{{ .SettingsForm.ReservedStorageGiB }}" required{{ invalidField .SettingsForm.FieldErrors "reserved_storage_gib" }}>
+      {{ template "field-error" (fieldError .SettingsForm.FieldErrors "reserved_storage_gib") }}
     </div>
   </div>
   <div class="form-actions"><button class="primary-button" type="submit">Save host settings</button></div>

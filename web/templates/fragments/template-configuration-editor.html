@@ -1,0 +1,153 @@
+{{/*
+  template-configuration-editor is the container-configuration part of the
+  workspace-template form, rendered inside that form on the page and on its own
+  as the answer to an editor action. "." is pageData; the editor is
+  .Template.Configuration and its marks are in .Template.FieldErrors.
+
+  Exactly one editor is rendered. Every action button posts the whole template
+  form to the editor endpoint, which converts or edits the configuration on the
+  server and answers with this fieldset, so the JSON and the form can never
+  disagree and no part of the schema is duplicated in the browser. The action
+  buttons are type="button", so they never save the template.
+*/}}
+{{ define "template-configuration-editor" }}
+{{- $editor := .Template.Configuration -}}
+{{- $errors := .Template.FieldErrors -}}
+<fieldset id="template-configuration" class="configuration-editor" hx-target="this" hx-swap="outerHTML">
+  <legend>Container configuration</legend>
+  <input type="hidden" name="configuration_mode" value="{{ $editor.Mode }}">
+  <div class="configuration-editor-bar">
+    <p class="muted">Administrator-only. Users can select this template but cannot edit or see the resolved values.</p>
+    <div class="editor-switch" role="group" aria-label="Configuration editor">
+      <button type="button" id="configuration-mode-form" name="configuration_action" value="mode:form" aria-pressed="{{ $editor.IsForm }}" hx-post="/admin/templates/configuration-editor">Form</button>
+      <button type="button" id="configuration-mode-json" name="configuration_action" value="mode:json" aria-pressed="{{ not $editor.IsForm }}" hx-post="/admin/templates/configuration-editor">JSON</button>
+    </div>
+  </div>
+  {{ if not $editor.IsForm }}
+  {{ if $editor.Notice }}<p class="alert alert-warning">{{ $editor.Notice }}</p>{{ end }}
+  <p class="muted">Typed JSON. Mounts use <code>volume</code> by default or COWS-created <code>directory</code> mounts. Directory mounts may set <code>file_manager:true</code>; names are generated from the workspace container name plus optional prefix and suffix. Use named secrets with <code>{{"{{"}}cows.secret.name{{"}}"}}</code>; generated secrets are resolved per workspace.</p>
+  <label for="configuration-json">Environment, mounts, desktop service, and command</label>
+  <textarea id="configuration-json" name="configuration_json" rows="16" maxlength="20000" spellcheck="false"{{ if eq $editor.Focus "configuration-json" }} autofocus{{ end }}{{ invalidField $errors "configuration_json" }}>{{ $editor.JSON }}</textarea>
+  {{ template "field-error" (fieldError $errors "configuration_json") }}
+  {{ if .Template.TerminalRootAllowed }}<p class="alert alert-warning">This template allows terminal access as UID 0 (root) inside the container. That grants full control over the workspace and all writable mounts.</p>{{ end }}
+  <p class="muted">Example: <code>{"command":["/bin/bash","-l"],"container_user":{"uid":1000,"gid":1000,"name":"{{"{{"}}cows.user.display_name{{"}}"}}","home":"/home/{{"{{"}}cows.user.username{{"}}"}}","shell":"/bin/bash"},"mounts":[{"name":"designs","type":"directory","container_path":"/foss/designs","read_only":false,"file_manager":true,"name_prefix":"workspace-","name_suffix":"-data"}]}</code></p>
+  <p class="muted">Optional <code>terminal_uids</code> is a list of numeric container UIDs users may select for terminal sessions. For example, <code>"terminal_uids":[1000,0]</code>. UID 0 enables root terminal access.</p>
+  {{ else }}
+  {{/* Shown only when a rejection has no control of its own in the form. */}}
+  {{ template "field-error" (fieldError $errors "configuration_json") }}
+
+  <div class="form-grid">
+    <div>
+      <label for="config_command">Command <span class="muted">optional, one argument per line</span></label>
+      <textarea id="config_command" name="config_command" rows="3" spellcheck="false" placeholder="/bin/bash&#10;-l"{{ invalidField $errors "config_command" }}>{{ $editor.Command }}</textarea>
+      {{ template "field-error" (fieldError $errors "config_command") }}
+      <span class="muted">Leave empty to run the image's own command.</span>
+    </div>
+    <div>
+      <label for="config_terminal_uids">Terminal UIDs <span class="muted">optional</span></label>
+      <input id="config_terminal_uids" name="config_terminal_uids" type="text" value="{{ $editor.TerminalUIDs }}" placeholder="1000, 0" spellcheck="false" autocomplete="off"{{ invalidField $errors "config_terminal_uids" }}>
+      {{ template "field-error" (fieldError $errors "config_terminal_uids") }}
+      <span class="muted">Container UIDs users may pick for terminal sessions, separated by commas. UID 0 enables root terminal access.</span>
+      {{ if .Template.TerminalRootAllowed }}<p class="alert alert-warning">This template allows terminal access as UID 0 (root) inside the container. That grants full control over the workspace and all writable mounts.</p>{{ end }}
+    </div>
+  </div>
+
+  <fieldset class="configuration-block" x-data="{ enabled: {{ if $editor.User.Enabled }}true{{ else }}false{{ end }} }"{{ invalidField $errors "config_user" }}>
+    <legend>Container user</legend>
+    {{ template "field-error" (fieldError $errors "config_user") }}
+    <label class="check-row"><input type="checkbox" name="config_user_enabled" x-model="enabled"{{ if $editor.User.Enabled }} checked{{ end }}> Run as a numeric container user with a passwd entry</label>
+    <div class="configuration-block-body" x-show="enabled" x-cloak>
+      <p class="muted">The passwd username is always the COWS username. Empty fields below use <code>{{"{{"}}cows.user.display_name{{"}}"}}</code>, <code>/home/&lt;username&gt;</code>, and <code>/bin/sh</code>.</p>
+      <div class="form-grid">
+        <div><label for="config_user_uid">UID</label><input id="config_user_uid" name="config_user_uid" type="text" inputmode="numeric" value="{{ $editor.User.UID }}" placeholder="1000" autocomplete="off"{{ invalidField $errors "config_user_uid" }}>{{ template "field-error" (fieldError $errors "config_user_uid") }}</div>
+        <div><label for="config_user_gid">GID</label><input id="config_user_gid" name="config_user_gid" type="text" inputmode="numeric" value="{{ $editor.User.GID }}" placeholder="1000" autocomplete="off"{{ invalidField $errors "config_user_gid" }}>{{ template "field-error" (fieldError $errors "config_user_gid") }}</div>
+        <div><label for="config_user_display_name">Display name</label><input id="config_user_display_name" name="config_user_display_name" type="text" value="{{ $editor.User.DisplayName }}" maxlength="256" placeholder="{{"{{"}}cows.user.display_name{{"}}"}}" spellcheck="false" autocomplete="off"{{ invalidField $errors "config_user_display_name" }}>{{ template "field-error" (fieldError $errors "config_user_display_name") }}</div>
+        <div><label for="config_user_home">Home directory</label><input id="config_user_home" name="config_user_home" type="text" value="{{ $editor.User.Home }}" maxlength="256" placeholder="/home/{{"{{"}}cows.user.username{{"}}"}}" spellcheck="false" autocomplete="off"{{ invalidField $errors "config_user_home" }}>{{ template "field-error" (fieldError $errors "config_user_home") }}</div>
+        <div><label for="config_user_shell">Shell</label><input id="config_user_shell" name="config_user_shell" type="text" value="{{ $editor.User.Shell }}" maxlength="256" placeholder="/bin/bash" spellcheck="false" autocomplete="off"{{ invalidField $errors "config_user_shell" }}>{{ template "field-error" (fieldError $errors "config_user_shell") }}</div>
+      </div>
+    </div>
+  </fieldset>
+
+  <fieldset class="configuration-list"{{ invalidField $errors "config_env" }}>
+    <legend>Environment variables</legend>
+    {{ template "field-error" (fieldError $errors "config_env") }}
+    <p class="muted">Values may use <code>{{"{{"}}cows.workspace_id{{"}}"}}</code>, <code>{{"{{"}}cows.workspace_name{{"}}"}}</code>, <code>{{"{{"}}cows.user.username{{"}}"}}</code>, <code>{{"{{"}}cows.user.display_name{{"}}"}}</code>, <code>{{"{{"}}cows.mount.&lt;name&gt;.path{{"}}"}}</code>, <code>{{"{{"}}cows.service.desktop.port{{"}}"}}</code>, and <code>{{"{{"}}cows.secret.&lt;name&gt;{{"}}"}}</code>.</p>
+    {{ range $editor.Environment }}{{ $name := .Field "name" }}{{ $value := .Field "value" }}
+    <div class="configuration-row">
+      <div><label for="{{ $name }}">Name</label><input id="{{ $name }}" name="{{ $name }}" type="text" value="{{ .Name }}" maxlength="128" placeholder="LANG" spellcheck="false" autocomplete="off"{{ if eq $editor.Focus $name }} autofocus{{ end }}{{ invalidField $errors $name }}>{{ template "field-error" (fieldError $errors $name) }}</div>
+      <div class="configuration-row-wide"><label for="{{ $value }}">Value</label><input id="{{ $value }}" name="{{ $value }}" type="text" value="{{ .Value }}" maxlength="4096" spellcheck="false" autocomplete="off"{{ invalidField $errors $value }}>{{ template "field-error" (fieldError $errors $value) }}</div>
+      <div class="configuration-row-footer">
+        <label class="check-row"><input type="checkbox" name="{{ .Field "sensitive" }}"{{ if .Sensitive }} checked{{ end }}> Sensitive value</label>
+        <button type="button" class="table-action danger-action" name="configuration_action" value="remove:env:{{ .Index }}" hx-post="/admin/templates/configuration-editor" aria-label="Remove environment variable {{ .Name }}">Remove</button>
+      </div>
+    </div>
+    {{ else }}<p class="muted">No environment variables.</p>{{ end }}
+    <div class="configuration-list-actions">
+      <button type="button" id="config-env-add" class="secondary-button" name="configuration_action" value="add:env" hx-post="/admin/templates/configuration-editor"{{ if not $editor.CanAddEnvironment }} disabled{{ end }}{{ if eq $editor.Focus "config-env-add" }} autofocus{{ end }}>Add variable</button>
+      {{ if not $editor.CanAddEnvironment }}<span class="muted">At most {{ $editor.MaxEnvironment }} variables.</span>{{ end }}
+    </div>
+  </fieldset>
+
+  <fieldset class="configuration-list"{{ invalidField $errors "config_secret" }}>
+    <legend>Secrets</legend>
+    {{ template "field-error" (fieldError $errors "config_secret") }}
+    <p class="muted">Use a secret as <code>{{"{{"}}cows.secret.&lt;name&gt;{{"}}"}}</code>. A generated secret gets a new random value of the given length for each workspace; any other secret uses the value entered here.</p>
+    {{ range $editor.Secrets }}{{ $name := .Field "name" }}{{ $value := .Field "value" }}{{ $length := .Field "length" }}
+    <div class="configuration-row">
+      <div><label for="{{ $name }}">Name</label><input id="{{ $name }}" name="{{ $name }}" type="text" value="{{ .Name }}" maxlength="64" placeholder="vnc" spellcheck="false" autocomplete="off"{{ if eq $editor.Focus $name }} autofocus{{ end }}{{ invalidField $errors $name }}>{{ template "field-error" (fieldError $errors $name) }}</div>
+      <div><label for="{{ $value }}">Value <span class="muted">not generated</span></label><input id="{{ $value }}" name="{{ $value }}" type="text" value="{{ .Value }}" maxlength="4096" spellcheck="false" autocomplete="off"{{ invalidField $errors $value }}>{{ template "field-error" (fieldError $errors $value) }}</div>
+      <div><label for="{{ $length }}">Length <span class="muted">generated</span></label><input id="{{ $length }}" name="{{ $length }}" type="text" inputmode="numeric" value="{{ .Length }}" placeholder="16" autocomplete="off"{{ invalidField $errors $length }}>{{ template "field-error" (fieldError $errors $length) }}</div>
+      <div class="configuration-row-footer">
+        <label class="check-row"><input type="checkbox" name="{{ .Field "generate" }}"{{ if .Generate }} checked{{ end }}> Generate per workspace</label>
+        <button type="button" class="table-action danger-action" name="configuration_action" value="remove:secret:{{ .Index }}" hx-post="/admin/templates/configuration-editor" aria-label="Remove secret {{ .Name }}">Remove</button>
+      </div>
+    </div>
+    {{ else }}<p class="muted">No secrets.</p>{{ end }}
+    <div class="configuration-list-actions">
+      <button type="button" id="config-secret-add" class="secondary-button" name="configuration_action" value="add:secret" hx-post="/admin/templates/configuration-editor"{{ if not $editor.CanAddSecret }} disabled{{ end }}{{ if eq $editor.Focus "config-secret-add" }} autofocus{{ end }}>Add secret</button>
+      {{ if not $editor.CanAddSecret }}<span class="muted">At most {{ $editor.MaxSecrets }} secrets.</span>{{ end }}
+    </div>
+  </fieldset>
+
+  <fieldset class="configuration-list"{{ invalidField $errors "config_mount" }}>
+    <legend>Mounts</legend>
+    {{ template "field-error" (fieldError $errors "config_mount") }}
+    <p class="muted">A mount is a named volume or a directory COWS creates for each workspace. Its storage name is the workspace container name plus the optional prefix, the mount name, and the optional suffix.</p>
+    {{ range $editor.Mounts }}{{ $name := .Field "name" }}{{ $type := .Field "type" }}{{ $path := .Field "container_path" }}{{ $prefix := .Field "name_prefix" }}{{ $suffix := .Field "name_suffix" }}
+    <div class="configuration-row">
+      <div><label for="{{ $name }}">Name</label><input id="{{ $name }}" name="{{ $name }}" type="text" value="{{ .Name }}" maxlength="64" placeholder="home" spellcheck="false" autocomplete="off"{{ if eq $editor.Focus $name }} autofocus{{ end }}{{ invalidField $errors $name }}>{{ template "field-error" (fieldError $errors $name) }}</div>
+      <div><label for="{{ $type }}">Type</label><select id="{{ $type }}" name="{{ $type }}"{{ invalidField $errors $type }}><option value="volume"{{ if eq .Type "volume" }} selected{{ end }}>Named volume</option><option value="directory"{{ if eq .Type "directory" }} selected{{ end }}>Managed directory</option></select>{{ template "field-error" (fieldError $errors $type) }}</div>
+      <div><label for="{{ $path }}">Container path</label><input id="{{ $path }}" name="{{ $path }}" type="text" value="{{ .ContainerPath }}" maxlength="256" placeholder="/home/user" spellcheck="false" autocomplete="off"{{ invalidField $errors $path }}>{{ template "field-error" (fieldError $errors $path) }}</div>
+      <div><label for="{{ $prefix }}">Name prefix <span class="muted">optional</span></label><input id="{{ $prefix }}" name="{{ $prefix }}" type="text" value="{{ .NamePrefix }}" maxlength="32" placeholder="workspace-" spellcheck="false" autocomplete="off"{{ invalidField $errors $prefix }}>{{ template "field-error" (fieldError $errors $prefix) }}</div>
+      <div><label for="{{ $suffix }}">Name suffix <span class="muted">optional</span></label><input id="{{ $suffix }}" name="{{ $suffix }}" type="text" value="{{ .NameSuffix }}" maxlength="32" placeholder="-data" spellcheck="false" autocomplete="off"{{ invalidField $errors $suffix }}>{{ template "field-error" (fieldError $errors $suffix) }}</div>
+      <div class="configuration-row-footer">
+        <label class="check-row"><input type="checkbox" name="{{ .Field "read_only" }}"{{ if .ReadOnly }} checked{{ end }}> Read-only</label>
+        <label class="check-row"><input type="checkbox" name="{{ .Field "file_manager" }}"{{ if .FileManager }} checked{{ end }}> Show in the browser file manager</label>
+        <button type="button" class="table-action danger-action" name="configuration_action" value="remove:mount:{{ .Index }}" hx-post="/admin/templates/configuration-editor" aria-label="Remove mount {{ .Name }}">Remove</button>
+      </div>
+    </div>
+    {{ else }}<p class="muted">No mounts.</p>{{ end }}
+    <div class="configuration-list-actions">
+      <button type="button" id="config-mount-add" class="secondary-button" name="configuration_action" value="add:mount" hx-post="/admin/templates/configuration-editor"{{ if not $editor.CanAddMount }} disabled{{ end }}{{ if eq $editor.Focus "config-mount-add" }} autofocus{{ end }}>Add mount</button>
+      {{ if not $editor.CanAddMount }}<span class="muted">At most {{ $editor.MaxMounts }} mounts.</span>{{ end }}
+    </div>
+  </fieldset>
+
+  <fieldset class="configuration-block" x-data="{ enabled: {{ if $editor.Desktop.Enabled }}true{{ else }}false{{ end }} }"{{ invalidField $errors "config_desktop" }}>
+    <legend>Desktop service</legend>
+    {{ template "field-error" (fieldError $errors "config_desktop") }}
+    <label class="check-row"><input type="checkbox" name="config_desktop_enabled" x-model="enabled"{{ if $editor.Desktop.Enabled }} checked{{ end }}> Provide the VNC service that graphical desktop access connects to</label>
+    <div class="configuration-block-body" x-show="enabled" x-cloak>
+      <p class="muted">Each workspace reserves a free host port from the range, bound to the loopback interface only; no two workspaces get the same port. The port pool is a name recorded with each reservation.</p>
+      <div class="form-grid">
+        <div><label for="config_desktop_container_port">VNC port in the container</label><input id="config_desktop_container_port" name="config_desktop_container_port" type="text" inputmode="numeric" value="{{ $editor.Desktop.ContainerPort }}" placeholder="5901" autocomplete="off"{{ invalidField $errors "config_desktop_container_port" }}>{{ template "field-error" (fieldError $errors "config_desktop_container_port") }}</div>
+        <div><label for="config_desktop_port_pool">Port pool</label><input id="config_desktop_port_pool" name="config_desktop_port_pool" type="text" value="{{ $editor.Desktop.PortPool }}" maxlength="64" placeholder="vnc" spellcheck="false" autocomplete="off"{{ invalidField $errors "config_desktop_port_pool" }}>{{ template "field-error" (fieldError $errors "config_desktop_port_pool") }}</div>
+        <div><label for="config_desktop_host_port_start">First host port</label><input id="config_desktop_host_port_start" name="config_desktop_host_port_start" type="text" inputmode="numeric" value="{{ $editor.Desktop.HostPortStart }}" placeholder="10000" autocomplete="off"{{ invalidField $errors "config_desktop_host_port_start" }}>{{ template "field-error" (fieldError $errors "config_desktop_host_port_start") }}</div>
+        <div><label for="config_desktop_host_port_end">Last host port</label><input id="config_desktop_host_port_end" name="config_desktop_host_port_end" type="text" inputmode="numeric" value="{{ $editor.Desktop.HostPortEnd }}" placeholder="10099" autocomplete="off"{{ invalidField $errors "config_desktop_host_port_end" }}>{{ template "field-error" (fieldError $errors "config_desktop_host_port_end") }}</div>
+        <div><label for="config_desktop_password_secret">Password secret</label><input id="config_desktop_password_secret" name="config_desktop_password_secret" type="text" value="{{ $editor.Desktop.PasswordSecret }}" maxlength="64" placeholder="vnc" spellcheck="false" autocomplete="off"{{ invalidField $errors "config_desktop_password_secret" }}>{{ template "field-error" (fieldError $errors "config_desktop_password_secret") }}<span class="muted">The name of a secret above that holds the VNC password. Graphical desktop access needs it.</span></div>
+      </div>
+    </div>
+  </fieldset>
+  {{ end }}
+</fieldset>
+{{ end }}

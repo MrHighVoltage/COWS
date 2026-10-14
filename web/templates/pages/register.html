@@ -8,15 +8,20 @@
   <form class="form-panel" method="post" action="/register">
     <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
     <label for="username">Username</label>
-    <input id="username" name="username" type="text" value="{{ .Registration.Username }}" pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,63}" maxlength="64" autocomplete="username" required autofocus>
+    <input id="username" name="username" type="text" value="{{ .Registration.Username }}" pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,63}" maxlength="64" autocomplete="username" required autofocus{{ invalidField .Registration.FieldErrors "username" }}>
+    {{ template "field-error" (fieldError .Registration.FieldErrors "username") }}
     <label for="email">Email address</label>
-    <input id="email" name="email" type="email" value="{{ .Registration.Email }}" maxlength="254" autocomplete="email" required>
+    <input id="email" name="email" type="email" value="{{ .Registration.Email }}" maxlength="254" autocomplete="email" required{{ invalidField .Registration.FieldErrors "email" }}>
+    {{ template "field-error" (fieldError .Registration.FieldErrors "email") }}
     <label for="display-name">Display name</label>
-    <input id="display-name" name="display_name" type="text" value="{{ .Registration.DisplayName }}" maxlength="120" autocomplete="name">
+    <input id="display-name" name="display_name" type="text" value="{{ .Registration.DisplayName }}" maxlength="120" autocomplete="name"{{ invalidField .Registration.FieldErrors "display_name" }}>
+    {{ template "field-error" (fieldError .Registration.FieldErrors "display_name") }}
     <label for="password">Password</label>
-    <input id="password" name="password" type="password" minlength="12" maxlength="72" autocomplete="new-password" required>
+    <input id="password" name="password" type="password" minlength="12" maxlength="72" autocomplete="new-password" required{{ invalidField .Registration.FieldErrors "password" }}>
+    {{ template "field-error" (fieldError .Registration.FieldErrors "password") }}
     <label for="confirm-password">Confirm password</label>
-    <input id="confirm-password" name="confirm_password" type="password" minlength="12" maxlength="72" autocomplete="new-password" required>
+    <input id="confirm-password" name="confirm_password" type="password" minlength="12" maxlength="72" autocomplete="new-password" required{{ invalidField .Registration.FieldErrors "confirm_password" }}>
+    {{ template "field-error" (fieldError .Registration.FieldErrors "confirm_password") }}
     <div class="form-actions">
       <a class="secondary-button button-link" href="/login">Cancel</a>
       <button class="primary-button" type="submit">Create account</button>

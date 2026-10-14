@@ -31,7 +31,8 @@
 <tr id="admin-template-row-{{ .ID }}">
   <td><strong>{{ .Name }}</strong><span class="table-subtext">{{ .Description }}</span></td>
   <td><code>{{ .ImageReference }}</code>{{ if .ImageDigest }}<span class="table-subtext">{{ .ImageDigest }}</span>{{ end }}{{ template "admin-template-image-status-content" . }}</td>
-  <td><span class="table-subtext">CPU {{ .DefaultCPUMillis }} / {{ .MaxCPUMillis }} mCPU</span><span class="table-subtext">Memory {{ mib .DefaultMemoryBytes }} / {{ mib .MaxMemoryBytes }} MiB</span><span class="table-subtext">{{ if .ResourcesConfigurable }}User selectable{{ else }}Fixed defaults{{ end }}</span></td>
+  {{/* A fixed template has no selectable range, so there is no second number to show. */}}
+  <td>{{ if .ResourcesConfigurable }}<span class="table-subtext">CPU {{ .DefaultCPUMillis }} / {{ .MaxCPUMillis }} mCPU</span><span class="table-subtext">Memory {{ mib .DefaultMemoryBytes }} / {{ mib .MaxMemoryBytes }} MiB</span><span class="table-subtext">User selectable</span>{{ else }}<span class="table-subtext">CPU {{ .DefaultCPUMillis }} mCPU</span><span class="table-subtext">Memory {{ mib .DefaultMemoryBytes }} MiB</span><span class="table-subtext">Fixed defaults</span>{{ end }}</td>
   <td><span class="table-subtext">{{ range .AccessMethods }}{{ . }} {{ end }}</span><span class="table-subtext">Roles: {{ range .AllowedRoles }}{{ . }} {{ end }}</span></td>
   <td>{{ if .RowError }}<p class="table-subtext status-disabled">{{ .RowError }}</p>{{ end }}{{ template "status-dot-view" (booleanStatusDot .Enabled "Enabled" "Disabled") }}</td>
   <td class="action-stack">

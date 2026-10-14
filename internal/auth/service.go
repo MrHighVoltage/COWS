@@ -39,6 +39,27 @@ var (
 	ErrSelfPasswordSet         = errors.New("administrator cannot set their own password from the user editor")
 )
 
+// Account form field names. Account validation attributes each rejected value
+// to one of these through domain.FieldError, and the create-user,
+// registration, and account-details forms all render controls under exactly
+// these names, so one set covers every form that submits account details.
+const (
+	FieldUsername             = "username"
+	FieldEmail                = "email"
+	FieldDisplayName          = "display_name"
+	FieldPassword             = "password"
+	FieldPasswordConfirmation = "confirm_password"
+	FieldRole                 = "role"
+	FieldGroupName            = "name"
+	FieldGroupDescription     = "description"
+)
+
+// invalidAccountField attributes a rejected account value to the form control
+// that carries it.
+func invalidAccountField(field, message string) error {
+	return domain.InvalidField(ErrInvalidInput, field, message)
+}
+
 const (
 	auditLoginSuccess   = "login.success"
 	auditLoginFailure   = "login.failure"
@@ -343,8 +364,15 @@ func (s *Service) Register(ctx context.Context, input RegisterUserInput) (domain
 	if !s.registration.Enabled {
 		return domain.User{}, ErrRegistrationDisabled
 	}
-	if input.Password != input.PasswordConfirmation || strings.TrimSpace(input.Email) == "" {
-		return domain.User{}, ErrInvalidInput
+	problems := make([]error, 0, 2)
+	if strings.TrimSpace(input.Email) == "" {
+		problems = append(problems, invalidAccountField(FieldEmail, "Enter your email address."))
+	}
+	if input.Password != input.PasswordConfirmation {
+		problems = append(problems, invalidAccountField(FieldPasswordConfirmation, "The two passwords do not match."))
+	}
+	if err := domain.InvalidFields(problems...); err != nil {
+		return domain.User{}, err
 	}
 	user, passwordHash, err := s.prepareUser(ctx, CreateUserInput{
 		Username: input.Username, Email: input.Email, DisplayName: input.DisplayName,
@@ -413,13 +441,25 @@ func (s *Service) CreateGroup(ctx context.Context, actorID, name, description st
 	}
 	name = strings.TrimSpace(name)
 	description = strings.TrimSpace(description)
-	if utf8.RuneCountInString(name) < 1 || utf8.RuneCountInString(name) > 100 || utf8.RuneCountInString(description) > 2000 {
-		return domain.Group{}, ErrInvalidGroup
-	}
-	for _, value := range name {
-		if value < 0x20 || value == 0x7f {
-			return domain.Group{}, ErrInvalidGroup
+	problems := make([]error, 0, 2)
+	switch {
+	case utf8.RuneCountInString(name) < 1:
+		problems = append(problems, domain.InvalidField(ErrInvalidGroup, FieldGroupName, "Enter a group name."))
+	case utf8.RuneCountInString(name) > 100:
+		problems = append(problems, domain.InvalidField(ErrInvalidGroup, FieldGroupName, "Use at most 100 characters."))
+	default:
+		for _, value := range name {
+			if value < 0x20 || value == 0x7f {
+				problems = append(problems, domain.InvalidField(ErrInvalidGroup, FieldGroupName, "Remove the control characters from the name."))
+				break
+			}
 		}
+	}
+	if utf8.RuneCountInString(description) > 2000 {
+		problems = append(problems, domain.InvalidField(ErrInvalidGroup, FieldGroupDescription, "Use at most 2000 characters."))
+	}
+	if err := domain.InvalidFields(problems...); err != nil {
+		return domain.Group{}, err
 	}
 	id, err := randomToken()
 	if err != nil {
@@ -530,8 +570,15 @@ func (s *Service) UpdateUserProfile(ctx context.Context, actorID, targetID, emai
 	}
 	email = strings.TrimSpace(email)
 	displayName = strings.TrimSpace(displayName)
-	if !validEmail(email) || !validDisplayName(displayName) {
-		return domain.User{}, ErrInvalidInput
+	profileProblems := make([]error, 0, 2)
+	if !validEmail(email) {
+		profileProblems = append(profileProblems, invalidAccountField(FieldEmail, "Enter a single valid email address of at most 254 characters, or leave this empty."))
+	}
+	if !validDisplayName(displayName) {
+		profileProblems = append(profileProblems, invalidAccountField(FieldDisplayName, "Use at most 120 characters."))
+	}
+	if err := domain.InvalidFields(profileProblems...); err != nil {
+		return domain.User{}, err
 	}
 	if available, err := s.emailAvailable(ctx, email, targetID); err != nil {
 		return domain.User{}, err
@@ -722,8 +769,26 @@ func (s *Service) createUser(ctx context.Context, input CreateUserInput) (domain
 
 func (s *Service) prepareUser(ctx context.Context, input CreateUserInput, mustChangePassword bool) (domain.User, string, error) {
 	username := normalizeUsername(input.Username)
-	if !validUsername(username) || !validEmail(input.Email) || !validDisplayName(input.DisplayName) || !validPassword(input.Password) || !input.Role.Valid() {
-		return domain.User{}, "", ErrInvalidInput
+	// Each rule names the control it rejects, and they are reported together,
+	// so one submission marks everything that needs fixing.
+	problems := make([]error, 0, 5)
+	if !validUsername(username) {
+		problems = append(problems, invalidAccountField(FieldUsername, "Use 3 to 64 characters: letters or digits, with dots, underscores, or dashes after the first."))
+	}
+	if !validEmail(input.Email) {
+		problems = append(problems, invalidAccountField(FieldEmail, "Enter a single valid email address of at most 254 characters."))
+	}
+	if !validDisplayName(input.DisplayName) {
+		problems = append(problems, invalidAccountField(FieldDisplayName, "Use at most 120 characters."))
+	}
+	if !validPassword(input.Password) {
+		problems = append(problems, invalidAccountField(FieldPassword, "Use between 12 and 72 characters."))
+	}
+	if !input.Role.Valid() {
+		problems = append(problems, invalidAccountField(FieldRole, "Choose one of the offered roles."))
+	}
+	if err := domain.InvalidFields(problems...); err != nil {
+		return domain.User{}, "", err
 	}
 	if input.DisplayName == "" {
 		input.DisplayName = username

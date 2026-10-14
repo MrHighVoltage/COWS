@@ -70,3 +70,12 @@ to Podman only through the runtime adapter. An empty list preserves the
 template's normal container-user shell behavior. UID 0 is allowed only when
 explicitly listed by an administrator and is treated as full control of the
 workspace.
+
+## Amendment: form editor
+
+Administrators can author the configuration through a form as well as the
+JSON document. This changes only the authoring surface: the form produces the
+same typed `TemplateConfiguration`, the server converts between the two editors,
+and saving runs the same validation. The form offers exactly this vocabulary,
+with the desktop service as its single service, and a configuration it cannot
+represent exactly opens in the JSON editor instead.

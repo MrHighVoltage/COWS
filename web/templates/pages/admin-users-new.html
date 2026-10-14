@@ -7,18 +7,23 @@
   <form class="form-panel" method="post" action="/admin/users">
     <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
     <label for="username">Username</label>
-    <input id="username" name="username" type="text" value="{{ .Form.Username }}" pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,63}" maxlength="64" autocomplete="username" required>
+    <input id="username" name="username" type="text" value="{{ .Form.Username }}" pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,63}" maxlength="64" autocomplete="username" required{{ invalidField .Form.FieldErrors "username" }}>
+    {{ template "field-error" (fieldError .Form.FieldErrors "username") }}
     <label for="email">Email address {{ if .InvitationsEnabled }}<span class="muted">required to send an invitation</span>{{ else }}<span class="muted">optional</span>{{ end }}</label>
-    <input id="email" name="email" type="email" value="{{ .Form.Email }}" maxlength="254" autocomplete="email">
+    <input id="email" name="email" type="email" value="{{ .Form.Email }}" maxlength="254" autocomplete="email"{{ invalidField .Form.FieldErrors "email" }}>
+    {{ template "field-error" (fieldError .Form.FieldErrors "email") }}
     <label for="display-name">Display name</label>
-    <input id="display-name" name="display_name" type="text" value="{{ .Form.DisplayName }}" maxlength="120" autocomplete="name">
+    <input id="display-name" name="display_name" type="text" value="{{ .Form.DisplayName }}" maxlength="120" autocomplete="name"{{ invalidField .Form.FieldErrors "display_name" }}>
+    {{ template "field-error" (fieldError .Form.FieldErrors "display_name") }}
     <label for="role">Role</label>
-    <select id="role" name="role">
+    <select id="role" name="role"{{ invalidField .Form.FieldErrors "role" }}>
       <option value="user"{{ if eq .Form.Role "user" }} selected{{ end }}>User</option>
       <option value="administrator"{{ if eq .Form.Role "administrator" }} selected{{ end }}>Administrator</option>
     </select>
+    {{ template "field-error" (fieldError .Form.FieldErrors "role") }}
     <label for="password">Temporary password {{ if .InvitationsEnabled }}<span class="muted">optional — leave blank to email an invitation</span>{{ end }}</label>
-    <input id="password" name="password" type="password" minlength="12" maxlength="72" autocomplete="new-password"{{ if not .InvitationsEnabled }} required{{ end }}>
+    <input id="password" name="password" type="password" minlength="12" maxlength="72" autocomplete="new-password"{{ if not .InvitationsEnabled }} required{{ end }}{{ invalidField .Form.FieldErrors "password" }}>
+    {{ template "field-error" (fieldError .Form.FieldErrors "password") }}
     <div class="form-actions">
       <a class="secondary-button button-link" href="/admin/users">Cancel</a>
       <button class="primary-button" type="submit">Create user</button>

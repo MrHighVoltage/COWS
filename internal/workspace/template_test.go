@@ -115,11 +115,16 @@ func TestTemplateServiceCRUDAndAuthorization(t *testing.T) {
 func TestTemplateValidationAndDuplicateName(t *testing.T) {
 	service, _, adminID, _ := testService(t)
 	ctx := context.Background()
+	// A maximum below the default is only a contradiction when users are
+	// allowed to pick inside that range; see
+	// TestFixedResourcesIgnoreTheSubmittedMaximum for the other case.
 	invalid := validTemplateInput()
+	invalid.ResourcesConfigurable = true
 	invalid.MaxCPUMillis = invalid.DefaultCPUMillis - 1
 	if _, err := service.CreateTemplate(ctx, adminID, invalid); !errors.Is(err, ErrInvalidTemplate) {
 		t.Fatalf("invalid resource limits error = %v", err)
 	}
+	assertFieldMarked(t, validateTemplate(invalid), FieldTemplateMaxCPU)
 	created, err := service.CreateTemplate(ctx, adminID, validTemplateInput())
 	if err != nil {
 		t.Fatalf("create first template: %v", err)
@@ -271,5 +276,126 @@ func TestGetWorkspaceWithUsageResolvesTemplateName(t *testing.T) {
 	}
 	if value.TemplateName != template.Name {
 		t.Fatalf("template name: got %q want %q", value.TemplateName, template.Name)
+	}
+}
+
+// TestValidateTemplateMarksEveryRejectedField covers the aggregation: this
+// form is long enough that reporting one problem per submission would make
+// fixing a template a guessing game.
+func TestValidateTemplateMarksEveryRejectedField(t *testing.T) {
+	input := TemplateInput{
+		Name:               "",
+		ImageReference:     "registry.example/has a space:1",
+		ImageDigest:        "sha256:nothex",
+		DefaultCPUMillis:   1000,
+		MaxCPUMillis:       500,
+		DefaultMemoryBytes: 2 << 20,
+		MaxMemoryBytes:     1 << 20,
+		AccessMethods:      nil,
+		AllowedRoles:       nil,
+		GroupAccessMode:    "sometimes",
+		AllowedGroupIDs:    []string{"group", "group"},
+	}
+	err := validateTemplate(input)
+	if !errors.Is(err, ErrInvalidTemplate) {
+		t.Fatalf("validateTemplate error = %v, want ErrInvalidTemplate", err)
+	}
+	assertFieldMarked(t, err,
+		FieldTemplateName, FieldTemplateImageReference, FieldTemplateImageDigest,
+		FieldTemplateMaxCPU, FieldTemplateMaxMemory, FieldTemplateAccessMethods,
+		FieldTemplateAllowedRoles, FieldTemplateGroupAccessMode, FieldTemplateAllowedGroupIDs,
+	)
+}
+
+// TestFileManagerAccessMarksBothSidesOfTheRule records that a rule spanning
+// two controls marks both, because either one can be changed to satisfy it.
+func TestFileManagerAccessMarksBothSidesOfTheRule(t *testing.T) {
+	input := TemplateInput{
+		Name:               "Files",
+		ImageReference:     "registry.example/research:1",
+		DefaultCPUMillis:   1000,
+		MaxCPUMillis:       1000,
+		DefaultMemoryBytes: 1 << 20,
+		MaxMemoryBytes:     1 << 20,
+		AccessMethods:      []domain.AccessMethod{domain.AccessFiles},
+		AllowedRoles:       []domain.Role{domain.RoleUser},
+	}
+	err := validateTemplate(input)
+	if !errors.Is(err, ErrInvalidTemplate) {
+		t.Fatalf("validateTemplate error = %v, want ErrInvalidTemplate", err)
+	}
+	assertFieldMarked(t, err, FieldTemplateAccessMethods, FieldConfigurationMounts)
+}
+
+// TestValidTemplateIsNotMarked guards against a rule that rejects a template
+// the form should accept.
+func TestValidTemplateIsNotMarked(t *testing.T) {
+	input := TemplateInput{
+		Name:               "Research environment",
+		Description:        "Approved research environment",
+		ImageReference:     "registry.example/research:1",
+		DefaultCPUMillis:   1000,
+		MaxCPUMillis:       4000,
+		DefaultMemoryBytes: 2048 << 20,
+		MaxMemoryBytes:     8192 << 20,
+		AccessMethods:      []domain.AccessMethod{domain.AccessTerminal},
+		AllowedRoles:       []domain.Role{domain.RoleUser},
+		GroupAccessMode:    domain.GroupAccessExclude,
+	}
+	if err := validateTemplate(input); err != nil {
+		t.Fatalf("valid template rejected: %v (%v)", err, domain.FieldNames(domain.FieldMessages(err)))
+	}
+}
+
+// TestFixedResourcesIgnoreTheSubmittedMaximum covers a template whose
+// resources users cannot choose: it has no selectable range, the form freezes
+// its maximum controls, so a stale maximum below the default must neither be
+// rejected nor stored. Rejecting it used to name a control the administrator
+// was not allowed to edit, leaving no way to raise a fixed default.
+func TestFixedResourcesIgnoreTheSubmittedMaximum(t *testing.T) {
+	service, _, adminID, _ := testService(t)
+	ctx := context.Background()
+	input := validTemplateInput()
+	input.ResourcesConfigurable = false
+	input.DefaultCPUMillis = 8000
+	input.MaxCPUMillis = 4000
+	input.DefaultMemoryBytes = 16 << 30
+	input.MaxMemoryBytes = 8 << 30
+
+	created, err := service.CreateTemplate(ctx, adminID, input)
+	if err != nil {
+		t.Fatalf("fixed template rejected: %v (%v)", err, domain.FieldNames(domain.FieldMessages(err)))
+	}
+	if created.MaxCPUMillis != 8000 || created.MaxMemoryBytes != 16<<30 {
+		t.Fatalf("stored maximums = %d mCPU / %d bytes, want them collapsed onto the defaults", created.MaxCPUMillis, created.MaxMemoryBytes)
+	}
+
+	// The same values on an update, and the same collapse.
+	input.MaxCPUMillis = 1
+	input.MaxMemoryBytes = 1
+	updated, err := service.UpdateTemplate(ctx, adminID, created.ID, input)
+	if err != nil {
+		t.Fatalf("fixed template update rejected: %v", err)
+	}
+	if updated.MaxCPUMillis != 8000 || updated.MaxMemoryBytes != 16<<30 {
+		t.Fatalf("updated maximums = %d mCPU / %d bytes, want them collapsed onto the defaults", updated.MaxCPUMillis, updated.MaxMemoryBytes)
+	}
+}
+
+// TestFixedResourcesReportTheCeilingOnTheDefault checks that the absolute
+// ceiling is still enforced for a fixed template, and reported on the control
+// that carries the value rather than on its frozen maximum.
+func TestFixedResourcesReportTheCeilingOnTheDefault(t *testing.T) {
+	input := validTemplateInput()
+	input.ResourcesConfigurable = false
+	input.DefaultCPUMillis = 2_000_000
+	input.DefaultMemoryBytes = 2 << 50
+	err := ValidateTemplateInput(input)
+	if !errors.Is(err, ErrInvalidTemplate) {
+		t.Fatalf("out-of-range fixed resources error = %v, want ErrInvalidTemplate", err)
+	}
+	assertFieldMarked(t, err, FieldTemplateDefaultCPU, FieldTemplateDefaultMemory)
+	if messages := domain.FieldMessages(err); messages[FieldTemplateMaxCPU] != "" || messages[FieldTemplateMaxMemory] != "" {
+		t.Fatalf("a frozen maximum control was marked: %v", messages)
 	}
 }

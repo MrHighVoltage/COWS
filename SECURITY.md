@@ -55,6 +55,17 @@ partial operations, and compromised or misconfigured images.
 - User-facing state contains stable COWS error categories only. Detailed Podman,
   filesystem, and database errors remain administrator-side diagnostic data and
   must not be rendered to workspace owners.
+- Form validation messages are the one exception, and only because they never
+  come from the runtime, the filesystem, or the database: each is written by the
+  rule it reports and describes the value the submitter just typed. The
+  template editor's container-configuration field additionally relays the JSON
+  decoder's position or key, which is still a reading of the administrator's own
+  submitted text. Do not widen this to relay an error from any other source.
+- The template configuration form editor and the JSON editor accept the same
+  typed vocabulary and pass through the same server-side validation. The
+  editor endpoint behind switching modes and adding rows only converts the
+  submitted configuration and stores nothing. Both editors show stored secret
+  and environment values to administrators, as the JSON editor always has.
 - Login failures are rate-limited per source by the single COWS process. A
   multi-instance deployment must move this control to shared infrastructure.
 - `/healthz` is a liveness and database-connectivity check only. It does not
