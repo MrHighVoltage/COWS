@@ -32,7 +32,9 @@ systemd unit yet, so the supervisor must set the working directory, the COWS
 environment, the rootless Podman socket, and restrictive file permissions.
 Point the supervisor's and reverse proxy's readiness probe at `GET /readyz`,
 which checks both SQLite and rootless-Podman connectivity; use `GET /healthz`
-only for liveness, since it does not verify the Podman socket.
+only for liveness, since it does not verify the Podman socket. `/readyz` also
+reports the runtime as unavailable when Podman is older than the required
+4.1.0.
 
 ## Backup and restore
 

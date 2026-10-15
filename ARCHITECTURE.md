@@ -87,12 +87,17 @@ application username as the default container username and resolves the
 administrator-controlled UID, GID, display name, home, and shell into a
 passwd entry. Users cannot change these values when creating a workspace.
 Rootless Podman receives a controlled UID:GID selection. It uses the
-Libpod create API for the additional passwd entry and sends explicit UID/GID
-mappings derived from Podman's subordinate-ID map. The mapping deliberately
-leaves the COWS host account outside the container and maps container
-identities into subordinate IDs. Writable bind mounts ask Podman to prepare
-ownership for the selected container identity. The Podman adapter owns that
-runtime-specific operation.
+Libpod create API for the additional passwd entry, which is why the adapter
+refuses Podman releases older than 4.1.0: they silently drop that field (ADR
+0028). It also requests a private user namespace (`userns.nsmode=private`)
+with explicit `idmappings` derived from Podman's subordinate-ID map; Libpod
+ignores the mappings without the private mode. The mapping deliberately leaves
+the COWS host account outside the container: container ID `n` is ID `n+1` in
+Podman's rootless namespace, so container root is a subordinate host ID rather
+than the COWS account. Writable bind mounts and named volumes ask Podman to
+prepare ownership for the selected container identity. The Podman adapter owns
+that runtime-specific operation. Templates without a `container_user` use the
+image identity in Podman's default rootless namespace.
 
 Terminal, desktop, and file-manager sessions are authenticated COWS sessions whose
 targets are selected from server-side workspace records and template policy.
@@ -151,7 +156,10 @@ stop, delete, and timeout cleanup. Streamed downloads retain the lock until
 they close.
 Rootless Podman starts the local COWS file helper through `podman unshare`,
 enters the server-selected source directory, drops to the mapped container
-UID/GID, and then operates through rooted filesystem calls. Named volumes are
+UID/GID, and then operates through rooted filesystem calls. For a template
+`container_user`, the adapter translates that identity through the same
+explicit mapping (`n` becomes `n+1` in the `podman unshare` namespace), so
+uploaded files belong to the user the container sees. Named volumes are
 resolved through the runtime adapter, never by browser-visible storage paths.
 Directory downloads can be streamed as bounded ZIP archives without
 temporary files; bounded uploads are implemented, while archive extraction and

@@ -137,12 +137,18 @@ partial operations, and compromised or misconfigured images.
   marked for the file manager are exposed through rooted runtime operations.
 - The optional template `container_user` block is administrator-controlled. It
   is resolved from the server-side COWS username and validated UID/GID, home,
-  shell, and display-name fields. Rootless Podman uses explicit UID/GID
-  mappings derived from its subordinate-ID map. The COWS host account is
-  intentionally not mapped into the container; container-owned mount contents
-  therefore use subordinate host IDs. The per-container parent remains
+  shell, and display-name fields. Rootless Podman runs such a workspace in a
+  private user namespace with explicit UID/GID mappings derived from its
+  subordinate-ID map. The COWS host account is intentionally not mapped into
+  the container, so container root, including a UID 0 terminal, is a
+  subordinate host ID; container-owned mount contents therefore use
+  subordinate host IDs, and the file helper acts as the same translated
+  identity. The opt-in live Podman test verifies the applied mapping, because
+  Libpod silently ignores request fields it does not apply. The per-container parent remains
   COWS-owned for lifecycle moves. Rootless Podman resolves the passwd-entry
-  extension server-side; users never select it.
+  extension server-side; users never select it. The adapter fails closed on
+  Podman releases older than 4.1.0, which would silently ignore the passwd
+  entry instead of rejecting it.
 - A template may explicitly allow terminal sessions for selected container UIDs
   through `terminal_uids`. The browser may request one of those values, but the
   backend revalidates the allowlist before the Podman exec request. Allowing UID

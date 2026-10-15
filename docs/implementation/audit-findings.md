@@ -23,7 +23,7 @@ to them.
 - `ROADMAP.md` exit criteria are the acceptance bar. When you close a finding,
   update `ROADMAP.md` and, if a boundary or data flow changed,
   `ARCHITECTURE.md` / `SECURITY.md` in the same commit. Add a decision record
-  (`docs/decisions/NNNN-*.md`, next number: 0027) when behavior or policy
+  (`docs/decisions/NNNN-*.md`, next number: 0029) when behavior or policy
   changes.
 - Standard checks after any change:
 
@@ -185,6 +185,15 @@ to them.
   `.cows-test/`. Start with adapter contract behaviors the fake can't prove:
   label matching, loopback port mapping verification, exec streaming and
   cleanup ordering, isolated network attach/cleanup.
+- **Update (2026-10-14):** the first opt-in test exists:
+  `internal/runtime/podman/live_podman_test.go` (`//go:build
+  podman_integration`, image from `COWS_PODMAN_TEST_IMAGE`, data in a
+  temporary directory outside the repository, as `AGENTS.md` allows). It
+  covers a configured container user: the applied UID/GID map, the passwd
+  entry, directory and named-volume ownership, and file-helper uploads.
+  `live_network_test.go` covers isolated network attachment, loopback desktop
+  publishing, and cross-workspace isolation on both create paths. Label
+  matching, exec streaming, and cleanup ordering are still open.
 
 ### C2. Symlink-race coverage is unit-level only
 
@@ -318,6 +327,96 @@ as CLI flags, and the absent Content-Security-Policy header. Note also that
 `users.email` has no unique index (migration `0004` adds it as plain
 `TEXT NOT NULL DEFAULT ''`), so the uniqueness invariant currently rests on an
 application-level check-then-act.
+
+**2026-10-14.** Libpod decodes container-create requests without rejecting
+unknown fields, and several COWS fields were silently ignored on the Libpod
+path used for templates with a `container_user`. Each was confirmed against a
+live Podman 6.1.2:
+
+- Named volumes were sent in `mounts`, which Libpod treats as host bind
+  sources, so every start failed. They now go in `volumes`. Fixed.
+- `passwd_entry` does not exist before Podman 4.1.0, which then writes its
+  fallback `1000:*:...:container user` line. The adapter now refuses older
+  Podman (decision 0028). Fixed.
+- The explicit UID/GID mapping was nested in `userns`, which only accepts
+  `nsmode`/`value`. Containers ran in Podman's default rootless namespace,
+  where container root is the COWS host account, contrary to decision 0009.
+  The adapter now sends `userns.nsmode=private` with `idmappings`, and the
+  file helper translates a configured identity through the same mapping.
+  Fixed; the live test above fails on the old request.
+- The isolated network was sent as `newNetworks`, which Libpod also ignores.
+  A `container_user` workspace with `COWS_NETWORK_ISOLATION_ENABLED` joined
+  the default `podman` network, with outbound access, instead of its internal
+  network, so decision 0023 did not hold for those workspaces. The adapter now
+  sends the untagged SpecGenerator key `Networks`; loopback desktop port
+  publishing works on the internal network. Fixed; the compatibility path
+  (no `container_user`) was already correct. Affected workspaces must be
+  recreated.
+- **Operational cost of the private user namespace:** rootless overlay
+  storage cannot shift IDs at mount time, so the first container per image
+  makes containers/storage build a re-owned copy of the whole image
+  (`storage-chown-by-maps`). For the 14.6 GB `iic-osic-tools` image this took
+  about twenty minutes, held Podman's image-store lock, and stalled every
+  Podman API request, including COWS reconciliation and `/readyz`, until it
+  finished. Because every workspace uses the same mapping, the copy is made
+  once per image version: later creates took under 0.1 s, also after every
+  container using the copy had been removed. **Open:** COWS's ten-second
+  Podman client timeout fails the first create while Podman finishes it,
+  leaving an unrecorded managed container behind. Candidate fix: build the
+  copy during the explicit administrator image pull (decision 0019) and give
+  container creation a longer timeout.
+- **Open:** a self-service volume reattachment (decision 0025) whose
+  workspace creation later fails loses the retained-volume tombstone. Seen
+  when the timeout above rolled back a workspace reattaching
+  `cows-WNVhCjcisobnjVsHVOf_sF16-designs` on the testing instance: the volume
+  and its data remain, but neither self-service reattachment nor
+  administrator recovery lists it any more. Directories have this guarantee
+  (`TestDirectoryReattachmentSurvivesLaterFailure`); volumes need the same
+  restore-on-failure path and test.
+- **Open:** reconciliation records a `runtime.orphaned_container` audit event
+  for the same orphan on every pass (every 30 s), about fifty identical
+  events in 25 minutes. It should record each orphan once.
+
+**2026-10-15.** Follow-up on the `storage-chown-by-maps` stall, measured
+against a separate throwaway Podman 6.1.2 store and API service whose image
+and layer locks were held, with a four-second limit per request:
+
+- Why it stalls everything: containers/storage `CreateContainer` holds the
+  layer-store and image-store write locks for the whole re-owned copy, and
+  Podman's compatibility `/version` handler reads image counts from storage.
+  The adapter calls `/version` before every request (`Adapter.get`,
+  `Adapter.request`), so all COWS runtime calls wait.
+- Still answering: `/_ping` and `/libpod/_ping`; `/_ping` reports the API
+  version in its `Api-Version` and `Libpod-Api-Version` headers. Running
+  containers and already-open desktop and terminal streams are unaffected.
+- Waiting: `/version`, `/info`, `/libpod/info`, container list (both APIs),
+  container inspect, stats, image inspect, exec create (new terminals), and
+  container create, start, and stop.
+- Not avoidable inside one store. Rootless overlay cannot shift IDs at
+  mount time (containers/storage tries idmapped lower layers only as real
+  root; metacopy is unavailable rootless), and the testing host's ext4
+  storage cannot reflink, so the copy duplicates every byte.
+- Ways to shorten or move it, none implemented: fuse-overlayfs as
+  `mount_program` supports ID shifting for contiguous mappings and makes no
+  copy, at a FUSE read cost for every container of the account (not
+  benchmarked); Podman storage on XFS with reflink or btrfs should let
+  overlay copy-up clone blocks instead of copying them (not measured); a
+  copy prepared in a separate staging store and listed in
+  `additionalimagestores` was reused by the live store, which created only
+  the container layer with correct ownership, but the stall returned when
+  the staging store was written while already listed, so each image version
+  would need a fresh store, a Podman service restart to pick it up (storage
+  configuration is read at service start; not tested), and cleanup of old
+  stores. Kernel idmapped mounts need a rootful runtime and are ruled out.
+- COWS-side mitigation, independent of the above: take the API version from
+  `/_ping` or cache it instead of calling `/version` before every request,
+  and report a busy runtime rather than an unavailable one. Workspace starts,
+  stops, and new terminals would still wait for the copy.
+- Recommended direction, pending a decision: build the copy during the
+  explicit administrator image pull (amending decision 0019), give container
+  creation a longer timeout, add the COWS-side mitigation, and recommend
+  reflink-capable Podman storage; take the staging-store design only if a
+  stall-free first create is required.
 
 Findings A2 and C3 above were updated 2026-08-11 to reflect commits made
 after the 2026-08-04 audit (`a6549c5`, `3ed253a`, `95ecb05`, `5876ec8`,

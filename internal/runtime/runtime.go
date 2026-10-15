@@ -201,7 +201,11 @@ type FileAccessSpec struct {
 	ContainerPath string
 	ContainerUID  int64
 	ContainerGID  int64
-	ReadOnly      bool
+	// ConfiguredUser marks ContainerUID/GID as a template container_user
+	// identity. Runtimes that give such workspaces their own user namespace
+	// translate it; other IDs are used in the runtime's own namespace.
+	ConfiguredUser bool
+	ReadOnly       bool
 }
 
 type FileEntry struct {

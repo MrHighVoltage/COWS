@@ -29,7 +29,20 @@ const (
 	maxResponseBytes      = 1 << 20
 )
 
-var apiVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+$`)
+// Podman 4.1.0 is the first release whose Libpod create API accepts every
+// field COWS sends; older releases silently drop unknown fields such as
+// passwd_entry, so a workspace would start with Podman's fallback "1000"
+// passwd entry instead of failing.
+const (
+	minimumPodmanMajor   = 4
+	minimumPodmanMinor   = 1
+	minimumPodmanVersion = "4.1.0"
+)
+
+var (
+	apiVersionPattern    = regexp.MustCompile(`^[0-9]+\.[0-9]+$`)
+	podmanVersionPattern = regexp.MustCompile(`^([0-9]{1,6})\.([0-9]{1,6})(?:[.+~-]|$)`)
+)
 
 type Adapter struct {
 	client           *http.Client
@@ -69,8 +82,8 @@ func (a *Adapter) Name(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !info.Rootless {
-		return "", fmt.Errorf("%w: COWS requires rootless Podman", runtime.ErrNotSupported)
+	if err := requireSupportedPodman(info); err != nil {
+		return "", err
 	}
 	return runtimeName(info), nil
 }
@@ -80,8 +93,8 @@ func (a *Adapter) Capabilities(ctx context.Context) (runtime.Capabilities, error
 	if err != nil {
 		return runtime.Capabilities{}, err
 	}
-	if !info.Rootless {
-		return runtime.Capabilities{}, fmt.Errorf("%w: COWS requires rootless Podman", runtime.ErrNotSupported)
+	if err := requireSupportedPodman(info); err != nil {
+		return runtime.Capabilities{}, err
 	}
 	// Podman's compatibility API reports legacy CFS fields for cgroup v1. On
 	// cgroup v2, Podman reports those fields as false even when cpu.max is
@@ -457,15 +470,22 @@ func (a *Adapter) createPodmanWorkspace(ctx context.Context, spec runtime.Worksp
 		Destination string   `json:"destination"`
 		Options     []string `json:"options,omitempty"`
 	}
+	// Libpod takes named volumes separately from mounts: an entry in mounts
+	// is a raw OCI mount whose source Podman resolves as a host path.
+	type namedVolume struct {
+		Name    string   `json:"Name"`
+		Dest    string   `json:"Dest"`
+		Options []string `json:"Options,omitempty"`
+	}
 	type portMapping struct {
 		ContainerPort int    `json:"container_port"`
 		HostPort      int    `json:"host_port"`
 		HostIP        string `json:"host_ip"`
 		Protocol      string `json:"protocol"`
 	}
-	type userNamespace struct {
-		UIDMappings []idMapping `json:"uidmapping,omitempty"`
-		GIDMappings []idMapping `json:"gidmapping,omitempty"`
+	type idMappingOptions struct {
+		UIDMap []idMapping `json:"UIDMap"`
+		GIDMap []idMapping `json:"GIDMap"`
 	}
 	body := struct {
 		Name           string              `json:"name,omitempty"`
@@ -475,10 +495,12 @@ func (a *Adapter) createPodmanWorkspace(ctx context.Context, spec runtime.Worksp
 		Labels         map[string]string   `json:"labels,omitempty"`
 		User           string              `json:"user,omitempty"`
 		PasswdEntry    string              `json:"passwd_entry,omitempty"`
-		UserNS         *userNamespace      `json:"userns,omitempty"`
+		UserNS         map[string]string   `json:"userns,omitempty"`
+		IDMappings     *idMappingOptions   `json:"idmappings,omitempty"`
 		NetNS          map[string]string   `json:"netns,omitempty"`
-		Networks       map[string]struct{} `json:"newNetworks,omitempty"`
+		Networks       map[string]struct{} `json:"Networks,omitempty"`
 		Mounts         []podmanMount       `json:"mounts,omitempty"`
+		Volumes        []namedVolume       `json:"volumes,omitempty"`
 		PortMappings   []portMapping       `json:"portmappings,omitempty"`
 		ResourceLimits struct {
 			CPU struct {
@@ -497,9 +519,10 @@ func (a *Adapter) createPodmanWorkspace(ctx context.Context, spec runtime.Worksp
 	body.User = strconv.FormatInt(spec.User.UID, 10) + ":" + strconv.FormatInt(spec.User.GID, 10)
 	body.NetNS = map[string]string{"nsmode": networkMode}
 	if validWorkspaceNetworkName(networkMode) {
-		// Libpod separates the network namespace mode from the named networks.
-		// Sending the network name as nsmode works with neither recent Podman
-		// nor the API's typed ContainerNetworkConfig.
+		// Libpod separates the network namespace mode from the named networks,
+		// which it reads only from the untagged SpecGenerator "Networks" field.
+		// A network name as nsmode is rejected, and any other key is silently
+		// ignored, which would attach the default network with outbound access.
 		body.NetNS["nsmode"] = "bridge"
 		body.Networks = map[string]struct{}{networkMode: {}}
 	}
@@ -520,7 +543,11 @@ func (a *Adapter) createPodmanWorkspace(ctx context.Context, spec runtime.Worksp
 		if err != nil {
 			return runtime.WorkspaceHandle{}, err
 		}
-		body.UserNS = &userNamespace{UIDMappings: uidMappings, GIDMappings: gidMappings}
+		// Libpod applies idmappings only with a private user namespace; without
+		// nsmode it silently runs the container in Podman's default rootless
+		// namespace, where container root is the COWS host account.
+		body.UserNS = map[string]string{"nsmode": "private"}
+		body.IDMappings = &idMappingOptions{UIDMap: uidMappings, GIDMap: gidMappings}
 	}
 	body.ResourceLimits.CPU.Quota = spec.Limits.CPUMillis * 100
 	body.ResourceLimits.CPU.Period = 100000
@@ -531,11 +558,12 @@ func (a *Adapter) createPodmanWorkspace(ctx context.Context, spec runtime.Worksp
 		if source == "" {
 			source = "cows-" + spec.WorkspaceID + "-" + value.Name
 		}
-		mountType := value.Type
-		if mountType == "" {
-			mountType = "volume"
+		options := readOnlyOptions(value.ReadOnly, value.RemapOwnership)
+		if value.Type == "" || value.Type == "volume" {
+			body.Volumes = append(body.Volumes, namedVolume{Name: source, Dest: value.ContainerPath, Options: options})
+			continue
 		}
-		body.Mounts = append(body.Mounts, podmanMount{Type: mountType, Source: source, Destination: value.ContainerPath, Options: readOnlyOptions(value.ReadOnly, value.RemapOwnership)})
+		body.Mounts = append(body.Mounts, podmanMount{Type: value.Type, Source: source, Destination: value.ContainerPath, Options: options})
 	}
 	for _, value := range spec.Ports {
 		body.PortMappings = append(body.PortMappings, portMapping{ContainerPort: value.ContainerPort, HostPort: value.HostPort, HostIP: value.HostIP, Protocol: value.Protocol})
@@ -582,6 +610,22 @@ func explicitRootlessMapping(mappings []idMapping, containerID int64) ([]idMappi
 		return nil, fmt.Errorf("%w: container identity %d is outside the available subordinate ID range", runtime.ErrNotSupported, containerID)
 	}
 	return []idMapping{{ContainerID: 0, HostID: 1, Size: total - 1}}, nil
+}
+
+// explicitNamespaceID translates a container ID of a workspace created with
+// explicitRootlessMapping into the rootless namespace that podman unshare
+// enters, so host-side helpers act as the same identity the container sees.
+func explicitNamespaceID(mappings []idMapping, containerID int64) (int64, error) {
+	explicit, err := explicitRootlessMapping(mappings, containerID)
+	if err != nil {
+		return 0, err
+	}
+	for _, mapping := range explicit {
+		if containerID >= mapping.ContainerID && containerID-mapping.ContainerID < mapping.Size {
+			return mapping.HostID + containerID - mapping.ContainerID, nil
+		}
+	}
+	return 0, fmt.Errorf("%w: container identity %d is outside the explicit mapping", runtime.ErrNotSupported, containerID)
 }
 
 func validRuntimeConfiguration(spec runtime.WorkspaceSpec) bool {
@@ -1112,6 +1156,7 @@ type hostInfo struct {
 	CPUCFSPeriod    bool       `json:"CpuCfsPeriod"`
 	CgroupVersion   string     `json:"CgroupVersion"`
 	Rootless        bool       `json:"Rootless"`
+	ServerVersion   string     `json:"ServerVersion"`
 	SecurityOptions []string   `json:"SecurityOptions"`
 	IDMappings      idMappings `json:"IDMappings"`
 }
@@ -1125,6 +1170,24 @@ func (a *Adapter) hostInfo(ctx context.Context) (hostInfo, error) {
 		return hostInfo{}, fmt.Errorf("%w: runtime returned invalid host capacity", runtime.ErrInvalidObservation)
 	}
 	return info, nil
+}
+
+// requireSupportedPodman fails closed when the runtime is not rootless or
+// does not report a parseable Podman release of at least 4.1.0.
+func requireSupportedPodman(info hostInfo) error {
+	if !info.Rootless {
+		return fmt.Errorf("%w: COWS requires rootless Podman", runtime.ErrNotSupported)
+	}
+	match := podmanVersionPattern.FindStringSubmatch(info.ServerVersion)
+	if match == nil {
+		return fmt.Errorf("%w: COWS requires Podman %s or newer; the runtime reported no recognizable version", runtime.ErrNotSupported, minimumPodmanVersion)
+	}
+	major, majorErr := strconv.Atoi(match[1])
+	minor, minorErr := strconv.Atoi(match[2])
+	if majorErr != nil || minorErr != nil || major < minimumPodmanMajor || (major == minimumPodmanMajor && minor < minimumPodmanMinor) {
+		return fmt.Errorf("%w: COWS requires Podman %s or newer; found %s.%s", runtime.ErrNotSupported, minimumPodmanVersion, match[1], match[2])
+	}
+	return nil
 }
 
 func runtimeName(info hostInfo) string {

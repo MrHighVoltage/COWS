@@ -619,13 +619,14 @@ func (s *Service) openRuntimeAccess(ctx context.Context, mount workspace.FileMou
 		return nil, ErrFileManagerAccess
 	}
 	access, err := s.runtime.OpenFileAccess(ctx, runtime.FileAccessSpec{
-		RuntimeID:     mount.RuntimeID,
-		MountType:     mount.MountType,
-		Source:        mount.Source,
-		ContainerPath: mount.ContainerPath,
-		ContainerUID:  mount.ContainerUID,
-		ContainerGID:  mount.ContainerGID,
-		ReadOnly:      mount.ReadOnly,
+		RuntimeID:      mount.RuntimeID,
+		MountType:      mount.MountType,
+		Source:         mount.Source,
+		ContainerPath:  mount.ContainerPath,
+		ContainerUID:   mount.ContainerUID,
+		ContainerGID:   mount.ContainerGID,
+		ConfiguredUser: mount.ConfiguredUser,
+		ReadOnly:       mount.ReadOnly,
 	})
 	if err != nil {
 		return nil, mapRuntimeError(err)

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/cows-project/cows/internal/auth"
 	"github.com/cows-project/cows/internal/domain"
@@ -439,5 +440,43 @@ func TestRestoreDirectoryMountsRollsBackPartialMoveOnFailure(t *testing.T) {
 	}
 	if string(content) != "content-alpha" {
 		t.Fatalf("rolled-back alpha content = %q, want original content", content)
+	}
+}
+
+func TestListFileMountsMarksConfiguredContainerUser(t *testing.T) {
+	ctx := context.Background()
+	_, authService, adminID, store := testService(t)
+	service := NewWithRuntimeAndMountRoots(store, &lifecycleRuntime{}, t.TempDir(), t.TempDir())
+	owner := newReattachUser(t, authService, adminID, "file-mount-owner")
+	tests := []struct {
+		name           string
+		input          TemplateInput
+		wantUID        int64
+		configuredUser bool
+	}{
+		{name: "container user", input: volumeTemplateInput("Configured User Template", "data", 1000), wantUID: 1000, configuredUser: true},
+		{name: "image identity", input: directoryTemplateInput("Image Identity Template", "data"), wantUID: 0},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			template, err := service.CreateTemplate(ctx, adminID, test.input)
+			if err != nil {
+				t.Fatalf("create template: %v", err)
+			}
+			created, err := service.CreateWorkspace(ctx, owner.ID, CreateWorkspaceInput{Name: test.name, TemplateID: template.ID})
+			if err != nil {
+				t.Fatalf("create workspace: %v", err)
+			}
+			if err := service.UpdateObservedState(ctx, created.ID, "stopped", "runtime-"+created.ID, "", time.Now()); err != nil {
+				t.Fatalf("mark workspace stopped: %v", err)
+			}
+			mounts, err := service.ListFileMounts(ctx, owner.ID, created.ID)
+			if err != nil {
+				t.Fatalf("list file mounts: %v", err)
+			}
+			if len(mounts) != 1 || mounts[0].ContainerUID != test.wantUID || mounts[0].ContainerGID != test.wantUID || mounts[0].ConfiguredUser != test.configuredUser {
+				t.Fatalf("file mounts = %+v, want UID/GID %d and configured user %v", mounts, test.wantUID, test.configuredUser)
+			}
+		})
 	}
 }

@@ -164,6 +164,13 @@ current single-server procedure and its named-volume limitations.
 
 ## Rootless Podman requirements
 
+- Podman 4.1.0 or newer. Check with `podman version`. COWS reads the version
+  from the socket and refuses older releases, such as the 3.4.4 package in
+  Ubuntu 22.04: they silently ignore the passwd entry COWS sends for a
+  template `container_user`, so workspaces would start with the UID as their
+  username. On an older Podman, `GET /readyz` reports the runtime as
+  `unavailable` and COWS does not create workspaces. See
+  [ADR 0028](decisions/0028-minimum-podman-version.md).
 - COWS and the Podman user service run as the same Linux user.
 - The configured socket is a rootless Podman user socket, not a rootful socket
   or Docker socket.
@@ -174,12 +181,26 @@ current single-server procedure and its named-volume limitations.
 - The SQLite database is on local supported storage, not an unsupported shared
   network filesystem.
 
+The first workspace created from an image whose template sets a
+`container_user` makes Podman build a re-owned copy of the whole image for
+the private user namespace. On storage without reflink support this copies
+every byte: about twenty minutes for a 14.6 GB image. Until it finishes,
+Podman answers almost no API request, so COWS reports the runtime as
+unavailable, and workspace starts, stops, and new terminals wait. Running
+workspaces and open sessions keep working. Later workspaces from the same
+image version reuse the copy, so create one workspace from a large new image
+outside busy hours. COWS's first create can time out during the copy and
+leave an unrecorded container behind; see the 2026-10-14 and 2026-10-15
+entries in [audit findings](implementation/audit-findings.md).
+
 COWS uses `none` networking for templates without the desktop service. A
 desktop-enabled template uses loopback-only host mapping. When
 `COWS_NETWORK_ISOLATION_ENABLED=true`, each newly created desktop-enabled
 workspace gets a server-generated internal Podman network. COWS fails closed if
 it cannot create that network. Existing workspaces must be recreated; this is
-not complete host-level egress policy. See
+not complete host-level egress policy. Workspaces from templates with a
+`container_user` that were created before 2026-10-14 were attached to Podman's
+default network despite this setting and must be recreated as well. See
 [SECURITY.md](../SECURITY.md).
 
 ## Production configuration

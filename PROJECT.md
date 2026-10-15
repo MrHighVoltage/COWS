@@ -129,7 +129,8 @@ recovery implementation, before treating the installation as recoverable.
 ## Deployment assumptions
 
 - One Linux server and one active COWS control-plane process.
-- One local rootless Podman runtime and user service socket.
+- One local rootless Podman runtime, version 4.1.0 or newer, and user service
+  socket.
 - One SQLite database on local supported storage.
 - A reverse proxy may terminate HTTPS.
 - Frontend assets are embedded or served locally; no CDN is required.

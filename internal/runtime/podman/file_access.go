@@ -21,6 +21,10 @@ type fileAccess struct {
 	adapter *Adapter
 	spec    runtime.FileAccessSpec
 	root    string
+	// uid and gid are the helper identity inside the podman unshare
+	// namespace, which differs from the container ID for a configured user.
+	uid int64
+	gid int64
 }
 
 func (a *Adapter) OpenFileAccess(ctx context.Context, spec runtime.FileAccessSpec) (runtime.FileAccess, error) {
@@ -51,7 +55,20 @@ func (a *Adapter) OpenFileAccess(ctx context.Context, spec runtime.FileAccessSpe
 	if !info.Rootless {
 		return nil, fmt.Errorf("%w: host file access is only implemented for rootless Podman", runtime.ErrNotSupported)
 	}
-	return &fileAccess{adapter: a, spec: spec, root: root}, nil
+	uid, gid := spec.ContainerUID, spec.ContainerGID
+	if spec.ConfiguredUser {
+		mappings, err := a.podmanIDMappings(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if uid, err = explicitNamespaceID(mappings.UIDMap, spec.ContainerUID); err != nil {
+			return nil, err
+		}
+		if gid, err = explicitNamespaceID(mappings.GIDMap, spec.ContainerGID); err != nil {
+			return nil, err
+		}
+	}
+	return &fileAccess{adapter: a, spec: spec, root: root, uid: uid, gid: gid}, nil
 }
 
 func (a *Adapter) volumePath(ctx context.Context, name string) (string, error) {
@@ -74,7 +91,7 @@ func (a *Adapter) fileCommand(ctx context.Context, access *fileAccess, operation
 	if !isCleanAbsolutePath(access.root) {
 		return nil, runtime.ErrConflict
 	}
-	args := []string{"unshare", access.adapter.helperExecutable, "file-helper", "--uid", strconv.FormatInt(access.spec.ContainerUID, 10), "--gid", strconv.FormatInt(access.spec.ContainerGID, 10), "--root", access.root, "--op", operation, "--path", relativePath}
+	args := []string{"unshare", access.adapter.helperExecutable, "file-helper", "--uid", strconv.FormatInt(access.uid, 10), "--gid", strconv.FormatInt(access.gid, 10), "--root", access.root, "--op", operation, "--path", relativePath}
 	if access.spec.ReadOnly {
 		args = append(args, "--read-only")
 	}

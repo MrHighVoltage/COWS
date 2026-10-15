@@ -38,6 +38,8 @@ Optional network isolation changes must follow
 `docs/decisions/0023-optional-workspace-network-isolation.md`.
 Health and readiness endpoint changes must follow
 `docs/decisions/0024-runtime-aware-readiness-endpoint.md`.
+Supported Podman version changes must follow
+`docs/decisions/0028-minimum-podman-version.md`.
 Implementation status and the prioritized fix queue are tracked in
 `docs/implementation/audit-findings.md`; read it before selecting the next
 hardening task.
@@ -152,6 +154,13 @@ gofmt -w $(rg --files -g '*.go')
 go test ./...
 go vet ./...
 go build -o bin/cows ./cmd/cows
+```
+
+When changing a Podman request, also run the opt-in live test, which needs a
+locally present image without a UID 2000 user:
+
+```sh
+COWS_PODMAN_TEST_IMAGE=<local image> go test -tags podman_integration ./internal/runtime/podman/
 ```
 
 If an optional analyzer is installed, run it too. Podman must not be

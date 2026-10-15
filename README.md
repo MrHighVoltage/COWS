@@ -55,10 +55,11 @@ analog design environment, accessed entirely through the browser.
 This gets a COWS instance running locally in a few minutes. For a real
 deployment, read [docs/deployment.md](docs/deployment.md) instead.
 
-**1. Check the prerequisites.** Linux, Go 1.26 or newer, and a rootless Podman
-user socket:
+**1. Check the prerequisites.** Linux, Go 1.26 or newer, and a rootless
+Podman 4.1.0 or newer user socket. COWS refuses older Podman releases:
 
 ```sh
+podman version
 systemctl --user enable --now podman.socket
 systemctl --user status podman.socket
 ```

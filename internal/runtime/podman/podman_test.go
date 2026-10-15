@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -124,7 +125,7 @@ func TestLifecycleUsesApprovedPodmanRequests(t *testing.T) {
 		case "/version":
 			body = `{"ApiVersion":"1.45"}`
 		case "/v1.45/info":
-			body = `{"NCPU":8,"MemTotal":8589934592,"MemoryLimit":true,"PidsLimit":true,"CpuCfsQuota":true,"CpuCfsPeriod":true,"Rootless":true}`
+			body = `{"NCPU":8,"MemTotal":8589934592,"ServerVersion":"4.9.3","MemoryLimit":true,"PidsLimit":true,"CpuCfsQuota":true,"CpuCfsPeriod":true,"Rootless":true}`
 		case "/v1.45/containers/create":
 			body = `{"Id":"abcdef0123456789"}`
 		case "/v1.45/containers/abcdef0123456789/start", "/v1.45/containers/abcdef0123456789/stop", "/v1.45/containers/abcdef0123456789":
@@ -162,7 +163,7 @@ func TestCapabilitiesDetectRootlessPodmanAndMissingCPULimits(t *testing.T) {
 		case "/version":
 			body = `{"ApiVersion":"1.44"}`
 		case "/v1.44/info":
-			body = `{"NCPU":8,"MemTotal":8589934592,"MemoryLimit":true,"PidsLimit":true,"CpuCfsQuota":false,"CpuCfsPeriod":false,"Rootless":true}`
+			body = `{"NCPU":8,"MemTotal":8589934592,"ServerVersion":"4.9.3","MemoryLimit":true,"PidsLimit":true,"CpuCfsQuota":false,"CpuCfsPeriod":false,"Rootless":true}`
 		default:
 			return &http.Response{StatusCode: http.StatusNotFound, Status: "404 Not Found", Body: io.NopCloser(strings.NewReader("not found")), Header: make(http.Header)}, nil
 		}
@@ -192,7 +193,7 @@ func TestCapabilitiesDetectCgroupV2ResourceLimits(t *testing.T) {
 		case "/version":
 			body = `{"ApiVersion":"1.44"}`
 		case "/v1.44/info":
-			body = `{"NCPU":8,"MemTotal":8589934592,"MemoryLimit":true,"PidsLimit":true,"CpuCfsQuota":false,"CpuCfsPeriod":false,"CgroupVersion":"2","Rootless":true}`
+			body = `{"NCPU":8,"MemTotal":8589934592,"ServerVersion":"4.9.3","MemoryLimit":true,"PidsLimit":true,"CpuCfsQuota":false,"CpuCfsPeriod":false,"CgroupVersion":"2","Rootless":true}`
 		default:
 			return podmanResponse(http.StatusNotFound, `not found`), nil
 		}
@@ -204,6 +205,64 @@ func TestCapabilitiesDetectCgroupV2ResourceLimits(t *testing.T) {
 	}
 	if !capabilities.SupportsCPUResourceLimits || !capabilities.SupportsResourceLimits {
 		t.Fatalf("unexpected cgroup v2 capabilities: %+v", capabilities)
+	}
+}
+
+func TestPodmanVersionGateFailsClosedBelowMinimum(t *testing.T) {
+	tests := []struct {
+		version   string
+		supported bool
+	}{
+		{version: "3.4.4"},
+		{version: "4.0.3"},
+		{version: ""},
+		{version: "unknown"},
+		{version: "4"},
+		{version: "4.1.0", supported: true},
+		{version: "4.1.0-dev", supported: true},
+		{version: "4.9.3", supported: true},
+		{version: "5.0.0-rc1", supported: true},
+		{version: "6.1.2", supported: true},
+		{version: "10.0", supported: true},
+	}
+	for _, test := range tests {
+		t.Run(test.version, func(t *testing.T) {
+			info, err := json.Marshal(map[string]any{"NCPU": 8, "MemTotal": 8589934592, "ServerVersion": test.version, "MemoryLimit": true, "PidsLimit": true, "CgroupVersion": "2", "Rootless": true})
+			if err != nil {
+				t.Fatalf("encode info: %v", err)
+			}
+			created := false
+			adapter := &Adapter{client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				switch request.URL.Path {
+				case "/version":
+					return podmanResponse(http.StatusOK, `{"ApiVersion":"1.41"}`), nil
+				case "/v1.41/info":
+					return podmanResponse(http.StatusOK, string(info)), nil
+				case "/v1.41/containers/create":
+					created = true
+					return podmanResponse(http.StatusCreated, `{"Id":"abcdef0123456789"}`), nil
+				default:
+					return podmanResponse(http.StatusNotFound, `not found`), nil
+				}
+			})}}
+			_, nameErr := adapter.Name(context.Background())
+			_, capabilitiesErr := adapter.Capabilities(context.Background())
+			_, createErr := adapter.CreateWorkspace(context.Background(), runtime.WorkspaceSpec{WorkspaceID: "workspace-123", Image: runtime.Image{Reference: "registry.example/research:1"}, Limits: runtime.ResourceLimits{CPUMillis: 1000, MemoryBytes: 2 << 30}})
+			if test.supported {
+				if nameErr != nil || capabilitiesErr != nil || createErr != nil || !created {
+					t.Fatalf("Podman %q rejected: name=%v capabilities=%v create=%v created=%v", test.version, nameErr, capabilitiesErr, createErr, created)
+				}
+				return
+			}
+			for _, err := range []error{nameErr, capabilitiesErr, createErr} {
+				if !errors.Is(err, runtime.ErrNotSupported) || !strings.Contains(err.Error(), "Podman 4.1.0 or newer") {
+					t.Fatalf("Podman %q error = %v, want unsupported version", test.version, err)
+				}
+			}
+			if created {
+				t.Fatalf("Podman %q created a container despite the version gate", test.version)
+			}
+		})
 	}
 }
 
@@ -439,7 +498,7 @@ func TestCreateWorkspaceMapsTypedConfiguration(t *testing.T) {
 		case "/version":
 			return podmanResponse(http.StatusOK, `{"ApiVersion":"1.45"}`), nil
 		case "/v1.45/info":
-			return podmanResponse(http.StatusOK, `{"NCPU":8,"MemTotal":8589934592,"MemoryLimit":true,"PidsLimit":true,"CpuCfsQuota":true,"CpuCfsPeriod":true,"Rootless":true}`), nil
+			return podmanResponse(http.StatusOK, `{"NCPU":8,"MemTotal":8589934592,"ServerVersion":"4.9.3","MemoryLimit":true,"PidsLimit":true,"CpuCfsQuota":true,"CpuCfsPeriod":true,"Rootless":true}`), nil
 		case "/v1.45/containers/create":
 			var body struct {
 				Cmd        []string `json:"Cmd"`
@@ -487,25 +546,18 @@ func TestCreateWorkspaceUsesPodmanLibpodForPasswdEntry(t *testing.T) {
 		case "/version":
 			return podmanResponse(http.StatusOK, `{"ApiVersion":"4.9"}`), nil
 		case "/v4.9/info":
-			return podmanResponse(http.StatusOK, `{"NCPU":8,"MemTotal":8589934592,"MemoryLimit":true,"PidsLimit":true,"CgroupVersion":"2","Rootless":true,"IDMappings":{"UIDMap":[{"ContainerID":0,"HostID":100000,"Size":65536}],"GIDMap":[{"ContainerID":0,"HostID":100000,"Size":65536}]}}`), nil
+			return podmanResponse(http.StatusOK, `{"NCPU":8,"MemTotal":8589934592,"ServerVersion":"4.9.3","MemoryLimit":true,"PidsLimit":true,"CgroupVersion":"2","Rootless":true,"IDMappings":{"UIDMap":[{"ContainerID":0,"HostID":100000,"Size":65536}],"GIDMap":[{"ContainerID":0,"HostID":100000,"Size":65536}]}}`), nil
 		case "/v4.9/libpod/info":
 			return podmanResponse(http.StatusOK, `{"host":{"idMappings":{"uidmap":[{"container_id":0,"host_id":1000,"size":1},{"container_id":1,"host_id":100000,"size":65536}],"gidmap":[{"container_id":0,"host_id":1000,"size":1},{"container_id":1,"host_id":100000,"size":65536}]}}}`), nil
 		case "/v4.9/libpod/containers/create":
 			var body struct {
-				User        string `json:"user"`
-				PasswdEntry string `json:"passwd_entry"`
-				UserNS      struct {
-					UIDMappings []struct {
-						ContainerID int64 `json:"container_id"`
-						HostID      int64 `json:"host_id"`
-						Size        int64 `json:"size"`
-					} `json:"uidmapping"`
-					GIDMappings []struct {
-						ContainerID int64 `json:"container_id"`
-						HostID      int64 `json:"host_id"`
-						Size        int64 `json:"size"`
-					} `json:"gidmapping"`
-				} `json:"userns"`
+				User        string            `json:"user"`
+				PasswdEntry string            `json:"passwd_entry"`
+				UserNS      map[string]string `json:"userns"`
+				IDMappings  struct {
+					UIDMap []idMapping `json:"UIDMap"`
+					GIDMap []idMapping `json:"GIDMap"`
+				} `json:"idmappings"`
 				NetNS struct {
 					Mode string `json:"nsmode"`
 				} `json:"netns"`
@@ -514,8 +566,14 @@ func TestCreateWorkspaceUsesPodmanLibpodForPasswdEntry(t *testing.T) {
 			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 				t.Fatalf("decode Podman create request: %v", err)
 			}
-			if body.User != "1000:1001" || body.PasswdEntry != "alice:x:1000:1001:Alice:/home/alice:/bin/bash" || len(body.UserNS.UIDMappings) != 1 || len(body.UserNS.GIDMappings) != 1 || body.UserNS.UIDMappings[0].ContainerID != 0 || body.UserNS.UIDMappings[0].HostID != 1 || body.UserNS.UIDMappings[0].Size != 65536 || body.UserNS.GIDMappings[0].HostID != 1 || body.NetNS.Mode != "none" {
+			if body.User != "1000:1001" || body.PasswdEntry != "alice:x:1000:1001:Alice:/home/alice:/bin/bash" || body.NetNS.Mode != "none" {
 				t.Fatalf("unexpected Podman identity configuration: %+v", body)
+			}
+			// Libpod ignores idmappings unless the user namespace is private,
+			// and ignores mapping lists nested inside userns entirely.
+			wantMapping := []idMapping{{ContainerID: 0, HostID: 1, Size: 65536}}
+			if !reflect.DeepEqual(body.UserNS, map[string]string{"nsmode": "private"}) || !reflect.DeepEqual(body.IDMappings.UIDMap, wantMapping) || !reflect.DeepEqual(body.IDMappings.GIDMap, wantMapping) {
+				t.Fatalf("user namespace = %#v, idmappings = %+v, want private namespace with %+v", body.UserNS, body.IDMappings, wantMapping)
 			}
 			return podmanResponse(http.StatusCreated, `{"Id":"abcdef0123456789"}`), nil
 		default:
@@ -539,24 +597,32 @@ func TestCreateWorkspaceUsesNamedNetworkForPodmanLibpod(t *testing.T) {
 		case "/version":
 			return podmanResponse(http.StatusOK, `{"ApiVersion":"4.9"}`), nil
 		case "/v4.9/info":
-			return podmanResponse(http.StatusOK, `{"NCPU":8,"MemTotal":8589934592,"MemoryLimit":true,"PidsLimit":true,"CgroupVersion":"2","Rootless":true,"IDMappings":{"UIDMap":[{"ContainerID":0,"HostID":100000,"Size":65536}],"GIDMap":[{"ContainerID":0,"HostID":100000,"Size":65536}]}}`), nil
+			return podmanResponse(http.StatusOK, `{"NCPU":8,"MemTotal":8589934592,"ServerVersion":"4.9.3","MemoryLimit":true,"PidsLimit":true,"CgroupVersion":"2","Rootless":true,"IDMappings":{"UIDMap":[{"ContainerID":0,"HostID":100000,"Size":65536}],"GIDMap":[{"ContainerID":0,"HostID":100000,"Size":65536}]}}`), nil
 		case "/v4.9/libpod/info":
 			return podmanResponse(http.StatusOK, `{"host":{"idMappings":{"uidmap":[{"container_id":0,"host_id":1000,"size":1},{"container_id":1,"host_id":100000,"size":65536}],"gidmap":[{"container_id":0,"host_id":1000,"size":1},{"container_id":1,"host_id":100000,"size":65536}]}}}`), nil
 		case "/v4.9/libpod/containers/create":
-			var body struct {
-				NetNS struct {
-					Mode string `json:"nsmode"`
-				} `json:"netns"`
-				Networks map[string]struct{} `json:"newNetworks"`
-			}
-			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			// Decode the raw keys: encoding/json matches field names
+			// case-insensitively, but Libpod silently ignores any key other
+			// than "Networks" and attaches the default network instead.
+			var fields map[string]json.RawMessage
+			if err := json.NewDecoder(request.Body).Decode(&fields); err != nil {
 				t.Fatalf("decode Podman create request: %v", err)
 			}
-			if body.NetNS.Mode != "bridge" {
-				t.Fatalf("network namespace mode = %q, want bridge", body.NetNS.Mode)
+			var netns struct {
+				Mode string `json:"nsmode"`
 			}
-			if _, ok := body.Networks["cows-net-workspace-123"]; !ok || len(body.Networks) != 1 {
-				t.Fatalf("named networks = %#v", body.Networks)
+			if err := json.Unmarshal(fields["netns"], &netns); err != nil || netns.Mode != "bridge" {
+				t.Fatalf("network namespace = %s, want bridge mode", fields["netns"])
+			}
+			var networks map[string]struct{}
+			if err := json.Unmarshal(fields["Networks"], &networks); err != nil || len(networks) != 1 {
+				t.Fatalf("Networks = %s, want only the workspace network", fields["Networks"])
+			}
+			if _, ok := networks["cows-net-workspace-123"]; !ok {
+				t.Fatalf("named networks = %#v", networks)
+			}
+			if _, ok := fields["newNetworks"]; ok {
+				t.Fatal("request still sends the ignored newNetworks key")
 			}
 			return podmanResponse(http.StatusCreated, `{"Id":"abcdef0123456789"}`), nil
 		default:
@@ -572,6 +638,137 @@ func TestCreateWorkspaceUsesNamedNetworkForPodmanLibpod(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("create Podman workspace with named network: %v", err)
+	}
+}
+
+func TestCreateWorkspaceSendsNamedVolumesSeparatelyForPodmanLibpod(t *testing.T) {
+	type podmanMount struct {
+		Type        string   `json:"type"`
+		Source      string   `json:"source"`
+		Destination string   `json:"destination"`
+		Options     []string `json:"options"`
+	}
+	type namedVolume struct {
+		Name    string   `json:"Name"`
+		Dest    string   `json:"Dest"`
+		Options []string `json:"Options"`
+	}
+	tests := []struct {
+		name        string
+		mounts      []runtime.Mount
+		wantMounts  []podmanMount
+		wantVolumes []namedVolume
+	}{
+		{
+			name:        "managed volume",
+			mounts:      []runtime.Mount{{Name: "designs", Type: "volume", Source: "cows-workspace-123-designs", ContainerPath: "/foss/designs", RemapOwnership: true}},
+			wantVolumes: []namedVolume{{Name: "cows-workspace-123-designs", Dest: "/foss/designs", Options: []string{"U"}}},
+		},
+		{
+			name:        "untyped mount defaults to derived volume",
+			mounts:      []runtime.Mount{{Name: "data", ContainerPath: "/data", ReadOnly: true}},
+			wantVolumes: []namedVolume{{Name: "cows-workspace-123-data", Dest: "/data", Options: []string{"ro"}}},
+		},
+		{
+			name: "directory and volume together",
+			mounts: []runtime.Mount{
+				{Name: "home", Type: "bind", Source: "/srv/cows/mounts/home", ContainerPath: "/home/alice", RemapOwnership: true},
+				{Name: "designs", Type: "volume", Source: "cows-workspace-123-designs", ContainerPath: "/foss/designs", RemapOwnership: true},
+			},
+			wantMounts:  []podmanMount{{Type: "bind", Source: "/srv/cows/mounts/home", Destination: "/home/alice", Options: []string{"U"}}},
+			wantVolumes: []namedVolume{{Name: "cows-workspace-123-designs", Dest: "/foss/designs", Options: []string{"U"}}},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			adapter := &Adapter{client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				switch request.URL.Path {
+				case "/version":
+					return podmanResponse(http.StatusOK, `{"ApiVersion":"4.9"}`), nil
+				case "/v4.9/info":
+					return podmanResponse(http.StatusOK, `{"NCPU":8,"MemTotal":8589934592,"ServerVersion":"4.9.3","MemoryLimit":true,"PidsLimit":true,"CgroupVersion":"2","Rootless":true,"IDMappings":{"UIDMap":[{"ContainerID":0,"HostID":100000,"Size":65536}],"GIDMap":[{"ContainerID":0,"HostID":100000,"Size":65536}]}}`), nil
+				case "/v4.9/libpod/info":
+					return podmanResponse(http.StatusOK, `{"host":{"idMappings":{"uidmap":[{"container_id":0,"host_id":1000,"size":1},{"container_id":1,"host_id":100000,"size":65536}],"gidmap":[{"container_id":0,"host_id":1000,"size":1},{"container_id":1,"host_id":100000,"size":65536}]}}}`), nil
+				case "/v4.9/libpod/containers/create":
+					var body struct {
+						Mounts  []podmanMount `json:"mounts"`
+						Volumes []namedVolume `json:"volumes"`
+					}
+					if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+						t.Fatalf("decode Podman create request: %v", err)
+					}
+					if !reflect.DeepEqual(body.Mounts, test.wantMounts) {
+						t.Fatalf("mounts = %+v, want %+v", body.Mounts, test.wantMounts)
+					}
+					if !reflect.DeepEqual(body.Volumes, test.wantVolumes) {
+						t.Fatalf("volumes = %+v, want %+v", body.Volumes, test.wantVolumes)
+					}
+					return podmanResponse(http.StatusCreated, `{"Id":"abcdef0123456789"}`), nil
+				default:
+					return podmanResponse(http.StatusNotFound, `not found`), nil
+				}
+			})}}
+			_, err := adapter.CreateWorkspace(context.Background(), runtime.WorkspaceSpec{
+				WorkspaceID: "workspace-123",
+				Image:       runtime.Image{Reference: "registry.example/research:1"},
+				Limits:      runtime.ResourceLimits{CPUMillis: 1000, MemoryBytes: 2 << 30},
+				Mounts:      test.mounts,
+				User:        &runtime.ContainerUser{Username: "alice", UID: 1000, GID: 1001, Name: "Alice", Home: "/home/alice", Shell: "/bin/bash", PasswdEntry: "alice:x:1000:1001:Alice:/home/alice:/bin/bash"},
+			})
+			if err != nil {
+				t.Fatalf("create Podman workspace with mounts: %v", err)
+			}
+		})
+	}
+}
+
+func TestFileAccessUsesNamespaceIdentityOfConfiguredUser(t *testing.T) {
+	tests := []struct {
+		name             string
+		spec             runtime.FileAccessSpec
+		wantUID, wantGID string
+		wantUnsupported  bool
+	}{
+		{name: "configured user is shifted past the unmapped host account", spec: runtime.FileAccessSpec{ContainerUID: 1000, ContainerGID: 1001, ConfiguredUser: true}, wantUID: "1001", wantGID: "1002"},
+		{name: "configured root is not namespace root", spec: runtime.FileAccessSpec{ContainerUID: 0, ContainerGID: 0, ConfiguredUser: true}, wantUID: "1", wantGID: "1"},
+		{name: "image identity keeps namespace IDs", spec: runtime.FileAccessSpec{ContainerUID: 0, ContainerGID: 0}, wantUID: "0", wantGID: "0"},
+		{name: "configured user outside subordinate range", spec: runtime.FileAccessSpec{ContainerUID: 65536, ContainerGID: 1000, ConfiguredUser: true}, wantUnsupported: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			adapter := &Adapter{helperExecutable: "/usr/local/bin/cows", podmanBinary: "podman", client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				switch request.URL.Path {
+				case "/version":
+					return podmanResponse(http.StatusOK, `{"ApiVersion":"4.9"}`), nil
+				case "/v4.9/info":
+					return podmanResponse(http.StatusOK, `{"NCPU":8,"MemTotal":8589934592,"ServerVersion":"4.9.3","Rootless":true}`), nil
+				case "/v4.9/libpod/info":
+					return podmanResponse(http.StatusOK, `{"host":{"idMappings":{"uidmap":[{"container_id":0,"host_id":1000,"size":1},{"container_id":1,"host_id":100000,"size":65536}],"gidmap":[{"container_id":0,"host_id":1000,"size":1},{"container_id":1,"host_id":100000,"size":65536}]}}}`), nil
+				default:
+					return podmanResponse(http.StatusNotFound, `not found`), nil
+				}
+			})}}
+			spec := test.spec
+			spec.MountType, spec.Source = "directory", "/srv/cows/mounts/cows-workspace-123/data"
+			access, err := adapter.OpenFileAccess(context.Background(), spec)
+			if test.wantUnsupported {
+				if !errors.Is(err, runtime.ErrNotSupported) {
+					t.Fatalf("open file access error = %v, want unsupported identity", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("open file access: %v", err)
+			}
+			command, err := adapter.fileCommand(context.Background(), access.(*fileAccess), "list", ".")
+			if err != nil {
+				t.Fatalf("file command: %v", err)
+			}
+			args := strings.Join(command.Args, " ")
+			if !strings.Contains(args, " --uid "+test.wantUID+" --gid "+test.wantGID+" ") {
+				t.Fatalf("file helper arguments = %q, want --uid %s --gid %s", args, test.wantUID, test.wantGID)
+			}
+		})
 	}
 }
 

@@ -20,15 +20,16 @@ import (
 var ErrMountUnavailable = errors.New("workspace mount is unavailable")
 
 type FileMount struct {
-	Name          string
-	ContainerPath string
-	Root          string
-	RuntimeID     string
-	MountType     string
-	Source        string
-	ContainerUID  int64
-	ContainerGID  int64
-	ReadOnly      bool
+	Name           string
+	ContainerPath  string
+	Root           string
+	RuntimeID      string
+	MountType      string
+	Source         string
+	ContainerUID   int64
+	ContainerGID   int64
+	ConfiguredUser bool
+	ReadOnly       bool
 }
 
 func (s *Service) ListFileMounts(ctx context.Context, actorID, workspaceID string) ([]FileMount, error) {
@@ -89,7 +90,7 @@ func (s *Service) ListFileMounts(ctx context.Context, actorID, workspaceID strin
 		if resolved.User != nil {
 			uid, gid = resolved.User.UID, resolved.User.GID
 		}
-		mounts = append(mounts, FileMount{Name: mount.Name, ContainerPath: mount.ContainerPath, Root: mountRoot, RuntimeID: value.RuntimeID, MountType: mountType, Source: source, ContainerUID: uid, ContainerGID: gid, ReadOnly: mount.ReadOnly})
+		mounts = append(mounts, FileMount{Name: mount.Name, ContainerPath: mount.ContainerPath, Root: mountRoot, RuntimeID: value.RuntimeID, MountType: mountType, Source: source, ContainerUID: uid, ContainerGID: gid, ConfiguredUser: resolved.User != nil, ReadOnly: mount.ReadOnly})
 	}
 	if len(mounts) == 0 {
 		return nil, ErrFileManagerNotAvailable

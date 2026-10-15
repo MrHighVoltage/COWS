@@ -81,9 +81,11 @@ These are the next pre-production tasks, ordered by operational risk:
    supported export path exists.
 2. Define restart recovery and non-destructive repair policy for every lifecycle
    partial failure before adding automatic repair actions.
-3. Add opt-in rootless-Podman integration tests for labels, lifecycle state,
-   terminal cleanup, desktop loopback mapping, private-network setup, and
-   rooted file access. Keep them out of the ordinary unit-test suite.
+3. Extend the opt-in rootless-Podman integration tests
+   (`internal/runtime/podman/live_*_test.go`, which cover configured container
+   identity, mount ownership, rooted file access, private-network setup, and
+   desktop loopback publishing) to labels, lifecycle state, and terminal
+   cleanup. Keep these tests out of the ordinary unit-test suite.
 
 ## Milestone 0: Project foundation — complete
 

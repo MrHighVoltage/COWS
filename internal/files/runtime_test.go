@@ -27,13 +27,17 @@ func TestServiceUsesRuntimeFileAccessForMountedRoots(t *testing.T) {
 		entries: []runtime.FileEntry{{Name: "hello.txt", Size: 5}},
 		content: "hello",
 	}
+	var opened runtime.FileAccessSpec
 	service := New(fakeMountResolver{mounts: []workspace.FileMount{{
-		Name: "data", RuntimeID: "runtime-1", MountType: "volume", Source: "volume-1", ContainerUID: 1000, ContainerGID: 1000,
-	}}}, fakeFileAccessRuntime{access: fake})
+		Name: "data", RuntimeID: "runtime-1", MountType: "volume", Source: "volume-1", ContainerUID: 1000, ContainerGID: 1001, ConfiguredUser: true,
+	}}}, fakeFileAccessRuntime{access: fake, spec: &opened})
 
 	listing, err := service.List(context.Background(), "user-1", "workspace-1", "data", ".")
 	if err != nil || len(listing.Items) != 1 || listing.Items[0].Name != "hello.txt" {
 		t.Fatalf("runtime listing = %+v, error = %v", listing, err)
+	}
+	if opened.ContainerUID != 1000 || opened.ContainerGID != 1001 || !opened.ConfiguredUser {
+		t.Fatalf("runtime file access spec = %+v, want configured user 1000:1001", opened)
 	}
 	file, info, err := service.OpenDownload(context.Background(), "user-1", "workspace-1", "data", "hello.txt")
 	if err != nil {
@@ -52,9 +56,15 @@ func TestServiceUsesRuntimeFileAccessForMountedRoots(t *testing.T) {
 	}
 }
 
-type fakeFileAccessRuntime struct{ access runtime.FileAccess }
+type fakeFileAccessRuntime struct {
+	access runtime.FileAccess
+	spec   *runtime.FileAccessSpec
+}
 
-func (f fakeFileAccessRuntime) OpenFileAccess(context.Context, runtime.FileAccessSpec) (runtime.FileAccess, error) {
+func (f fakeFileAccessRuntime) OpenFileAccess(_ context.Context, spec runtime.FileAccessSpec) (runtime.FileAccess, error) {
+	if f.spec != nil {
+		*f.spec = spec
+	}
 	return f.access, nil
 }
 
