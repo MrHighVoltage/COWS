@@ -18,6 +18,18 @@ if (shell) {
     });
   }
 
+  // A request without a usable session is redirected to a whole page, such as
+  // the sign-in form. fetch follows that redirect, so navigate to the page
+  // instead of placing it inside the tab.
+  async function fetchPanel(url) {
+    const response = await fetch(url, { credentials: "same-origin", headers: { "Accept": "text/html" } });
+    if (response.redirected) {
+      window.location.assign(response.url);
+      return null;
+    }
+    return response;
+  }
+
   async function activateService(tab) {
     if (loaded.has(tab)) return;
     try {
@@ -37,7 +49,8 @@ if (shell) {
           const query = new URLSearchParams();
           if (params.get("mount")) query.set("mount", params.get("mount"));
           if (params.get("path")) query.set("path", params.get("path"));
-          const response = await fetch(shell.dataset.filesUrl + (query.toString() ? "?" + query.toString() : ""), { credentials: "same-origin", headers: { "Accept": "text/html" } });
+          const response = await fetchPanel(shell.dataset.filesUrl + (query.toString() ? "?" + query.toString() : ""));
+          if (!response) return;
           target.innerHTML = await response.text();
           if (window.Alpine) window.Alpine.initTree(target);
           if (!response.ok) throw new Error("file listing request failed");
@@ -45,7 +58,8 @@ if (shell) {
         window.CowsFiles.init(target);
       } else if (tab === "logs") {
         const target = shell.querySelector("[data-access-logs]");
-        const response = await fetch(shell.dataset.logsUrl, { credentials: "same-origin", headers: { "Accept": "text/html" } });
+        const response = await fetchPanel(shell.dataset.logsUrl);
+        if (!response) return;
         target.innerHTML = await response.text();
         if (window.htmx) window.htmx.process(target);
         if (!response.ok) throw new Error("log request failed");

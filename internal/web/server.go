@@ -4317,11 +4317,11 @@ func (s *Server) requireAdministrator(w http.ResponseWriter, r *http.Request) (d
 		return domain.User{}, false
 	}
 	if user == nil {
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		redirectPage(w, r, "/login")
 		return domain.User{}, false
 	}
 	if user.MustChangePassword {
-		http.Redirect(w, r, "/account/password", http.StatusSeeOther)
+		redirectPage(w, r, "/account/password")
 		return domain.User{}, false
 	}
 	if !user.IsAdministrator() {
@@ -4338,11 +4338,11 @@ func (s *Server) requireUser(w http.ResponseWriter, r *http.Request) (*domain.Us
 		return nil, false
 	}
 	if user == nil {
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		redirectPage(w, r, "/login")
 		return nil, false
 	}
 	if user.MustChangePassword {
-		http.Redirect(w, r, "/account/password", http.StatusSeeOther)
+		redirectPage(w, r, "/account/password")
 		return nil, false
 	}
 	if user.Disabled {
@@ -4350,6 +4350,19 @@ func (s *Server) requireUser(w http.ResponseWriter, r *http.Request) (*domain.Us
 		return nil, false
 	}
 	return user, true
+}
+
+// redirectPage sends the browser to a whole page, such as the sign-in form
+// after a session expired. htmx follows a plain redirect inside its request
+// and would swap the target page into the polled or clicked fragment, so an
+// htmx request gets HX-Redirect, which makes htmx navigate instead.
+func redirectPage(w http.ResponseWriter, r *http.Request, location string) {
+	if isHTMXRequest(r) {
+		w.Header().Set("HX-Redirect", location)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	http.Redirect(w, r, location, http.StatusSeeOther)
 }
 
 func (s *Server) currentUser(r *http.Request) (*domain.User, error) {

@@ -714,6 +714,61 @@ func TestAdministratorRouteRedirectsUnauthenticatedUsers(t *testing.T) {
 	}
 }
 
+// TestSessionRedirectNavigatesHTMXRequests covers polled and clicked htmx
+// requests that arrive without a usable session. htmx follows a plain
+// redirect inside its request and would swap the sign-in form into the
+// fragment, so those requests must get HX-Redirect instead, while ordinary
+// navigation keeps the 303.
+func TestSessionRedirectNavigatesHTMXRequests(t *testing.T) {
+	server, authService := testServer(t)
+	if _, err := authService.BootstrapAdministrator(context.Background(), auth.CreateUserInput{Username: "admin", Password: "correct horse battery staple"}); err != nil {
+		t.Fatalf("bootstrap administrator: %v", err)
+	}
+	// A bootstrapped administrator must change the password first.
+	_, pendingToken, err := authService.Authenticate(context.Background(), "admin", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate administrator: %v", err)
+	}
+	pendingPassword := &http.Cookie{Name: "cows_session", Value: pendingToken}
+	expired := &http.Cookie{Name: "cows_session", Value: "no-longer-a-session"}
+	tests := []struct {
+		name     string
+		method   string
+		path     string
+		session  *http.Cookie
+		location string
+	}{
+		{name: "polled workspace list without session", method: http.MethodGet, path: "/fragments/workspaces", location: "/login"},
+		{name: "polled detail header with expired session", method: http.MethodGet, path: "/workspaces/missing/access/header", session: expired, location: "/login"},
+		{name: "polled administrator capacity with expired session", method: http.MethodGet, path: "/admin/runtime/capacity", session: expired, location: "/login"},
+		{name: "workspace action without session", method: http.MethodPost, path: "/workspaces/missing/stop", location: "/login"},
+		{name: "user fragment pending password change", method: http.MethodGet, path: "/fragments/workspaces", session: pendingPassword, location: "/account/password"},
+		{name: "administrator fragment pending password change", method: http.MethodGet, path: "/admin/runtime/capacity", session: pendingPassword, location: "/account/password"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, htmx := range []bool{true, false} {
+				request := httptest.NewRequest(test.method, test.path, nil)
+				if test.session != nil {
+					request.AddCookie(test.session)
+				}
+				if htmx {
+					request.Header.Set("HX-Request", "true")
+				}
+				recorder := httptest.NewRecorder()
+				server.Handler().ServeHTTP(recorder, request)
+				redirect, location := recorder.Header().Get("HX-Redirect"), recorder.Header().Get("Location")
+				if htmx && (recorder.Code != http.StatusOK || redirect != test.location || location != "" || recorder.Body.Len() != 0) {
+					t.Fatalf("htmx: status=%d HX-Redirect=%q Location=%q body=%q", recorder.Code, redirect, location, recorder.Body.String())
+				}
+				if !htmx && (recorder.Code != http.StatusSeeOther || location != test.location || redirect != "") {
+					t.Fatalf("page: status=%d Location=%q HX-Redirect=%q", recorder.Code, location, redirect)
+				}
+			}
+		})
+	}
+}
+
 func TestNonAdministratorCannotOpenAdministratorUI(t *testing.T) {
 	server, authService := testServer(t)
 	ctx := context.Background()
