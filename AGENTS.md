@@ -167,6 +167,14 @@ locally present image without a UID 2000 user:
 COWS_PODMAN_TEST_IMAGE=<local image> go test -tags podman_integration ./internal/runtime/podman/
 ```
 
+For user-facing HTTP, file, terminal, quota, and storage flows, run the opt-in
+multi-user end-to-end suite described in
+`docs/implementation/end-to-end-test-plan.md`:
+
+```sh
+COWS_E2E_IMAGE=<local image> go test -tags e2e -count=1 ./internal/e2e
+```
+
 If an optional analyzer is installed, run it too. Podman must not be
 required for the ordinary unit-test suite. Keep live rootless-Podman test data
 in the ignored `.cows-test/` directory or outside the repository; do not place

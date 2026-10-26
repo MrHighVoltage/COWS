@@ -203,6 +203,14 @@ The broader B1/B2 repair and backup/restore work remains open.
   `live_network_test.go` covers isolated network attachment, loopback desktop
   publishing, and cross-workspace isolation on both create paths. Label
   matching, exec streaming, and cleanup ordering are still open.
+- **Update (2026-10-26):** added an opt-in multi-user end-to-end suite in
+  `internal/e2e` (`//go:build e2e`). It drives the real HTTP forms, uploads,
+  downloads, WebSockets, quota pages, and storage reattachment against a real
+  rootless-Podman-backed cows process, including parallel users and a
+  per-operation latency report. See
+  [the end-to-end test plan](end-to-end-test-plan.md). It is excluded from the
+  ordinary unit suite and still needs the scenarios listed there for desktop,
+  timeout expiry, browser-side admin setup, email, races, and crash/reconcile.
 
 ### C2. Symlink-race coverage is unit-level only
 

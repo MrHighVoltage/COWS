@@ -64,7 +64,9 @@ Not implemented or incomplete:
 - a defined, administrator-gated repair policy for missing records, orphaned
   containers, and interrupted operations;
 - broader abuse, session-invalidation, import-failure, and filesystem race
-  tests, plus further tagged rootless-Podman coverage;
+  tests, plus further tagged rootless-Podman coverage and the opt-in
+  multi-user end-to-end flows in `internal/e2e` (see
+  `docs/implementation/end-to-end-test-plan.md`);
 - arbitrary application/service exposure; this is intentionally out of scope;
 - email verification, OpenID Connect, and institutional identity provisioning;
 - metrics history and operational alerting beyond the live administrator view;
@@ -88,11 +90,12 @@ These are the next pre-production tasks, ordered by operational risk:
    supported export path exists.
 2. Define restart recovery and non-destructive repair policy for every lifecycle
    partial failure before adding automatic repair actions.
-3. Extend the opt-in rootless-Podman integration tests
-   (`internal/runtime/podman/live_*_test.go`, which cover configured container
-   identity, mount ownership, rooted file access, private-network setup, and
-   desktop loopback publishing) to labels, lifecycle state, and terminal
-   cleanup. Keep these tests out of the ordinary unit-test suite.
+3. Extend the opt-in runtime and end-to-end suites
+   (`internal/runtime/podman/live_*_test.go` and `internal/e2e`, with the plan
+   in `docs/implementation/end-to-end-test-plan.md`) to label matching,
+   desktop/noVNC, timeout expiry, browser-side admin setup, self-registration
+   and email, reattachment races, and crash/reconciliation cases. Keep these
+   tests out of the ordinary unit-test suite.
 
 ## Milestone 0: Project foundation — complete
 
