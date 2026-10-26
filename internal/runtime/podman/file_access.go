@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"net/url"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -25,6 +26,11 @@ type fileAccess struct {
 	// namespace, which differs from the container ID for a configured user.
 	uid int64
 	gid int64
+	// hostUID and hostGID are the same identity outside every user namespace.
+	// The helper verifies /proc/self/{uid,gid}_map before dropping privileges.
+	hostUID            int64
+	hostGID            int64
+	allowNamespaceRoot bool
 }
 
 func (a *Adapter) OpenFileAccess(ctx context.Context, spec runtime.FileAccessSpec) (runtime.FileAccess, error) {
@@ -56,11 +62,12 @@ func (a *Adapter) OpenFileAccess(ctx context.Context, spec runtime.FileAccessSpe
 		return nil, fmt.Errorf("%w: host file access is only implemented for rootless Podman", runtime.ErrNotSupported)
 	}
 	uid, gid := spec.ContainerUID, spec.ContainerGID
+	allowNamespaceRoot := !spec.ConfiguredUser && uid == 0 && gid == 0
+	mappings, err := a.podmanIDMappings(ctx)
+	if err != nil {
+		return nil, err
+	}
 	if spec.ConfiguredUser {
-		mappings, err := a.podmanIDMappings(ctx)
-		if err != nil {
-			return nil, err
-		}
 		if uid, err = explicitNamespaceID(mappings.UIDMap, spec.ContainerUID); err != nil {
 			return nil, err
 		}
@@ -68,7 +75,15 @@ func (a *Adapter) OpenFileAccess(ctx context.Context, spec runtime.FileAccessSpe
 			return nil, err
 		}
 	}
-	return &fileAccess{adapter: a, spec: spec, root: root, uid: uid, gid: gid}, nil
+	hostUID, err := rootlessHostID(mappings.UIDMap, uid)
+	if err != nil {
+		return nil, err
+	}
+	hostGID, err := rootlessHostID(mappings.GIDMap, gid)
+	if err != nil {
+		return nil, err
+	}
+	return &fileAccess{adapter: a, spec: spec, root: root, uid: uid, gid: gid, hostUID: hostUID, hostGID: hostGID, allowNamespaceRoot: allowNamespaceRoot}, nil
 }
 
 func (a *Adapter) volumePath(ctx context.Context, name string) (string, error) {
@@ -91,7 +106,17 @@ func (a *Adapter) fileCommand(ctx context.Context, access *fileAccess, operation
 	if !isCleanAbsolutePath(access.root) {
 		return nil, runtime.ErrConflict
 	}
-	args := []string{"unshare", access.adapter.helperExecutable, "file-helper", "--uid", strconv.FormatInt(access.uid, 10), "--gid", strconv.FormatInt(access.gid, 10), "--root", access.root, "--op", operation, "--path", relativePath}
+	args := []string{"unshare", access.adapter.helperExecutable, "file-helper",
+		"--uid", strconv.FormatInt(access.uid, 10),
+		"--gid", strconv.FormatInt(access.gid, 10),
+		"--expected-host-uid", strconv.FormatInt(access.hostUID, 10),
+		"--expected-host-gid", strconv.FormatInt(access.hostGID, 10),
+		"--root", access.root,
+		"--op", operation,
+		"--path", relativePath}
+	if access.allowNamespaceRoot {
+		args = append(args, "--allow-namespace-root")
+	}
 	if access.spec.ReadOnly {
 		args = append(args, "--read-only")
 	}
@@ -101,7 +126,38 @@ func (a *Adapter) fileCommand(ctx context.Context, access *fileAccess, operation
 		}
 		args = append(args, value)
 	}
-	return exec.CommandContext(ctx, access.adapter.podmanBinary, args...), nil
+	command := exec.CommandContext(ctx, access.adapter.podmanBinary, args...)
+	// The helper runs inside podman unshare and needs none of the COWS service
+	// environment, which may contain SMTP, bootstrap, or future secrets.
+	command.Env = helperEnvironment(os.Environ())
+	return command, nil
+}
+
+// helperEnvironment keeps the variables podman unshare needs to enter the
+// user namespace while dropping COWS configuration and credential material.
+func helperEnvironment(environ []string) []string {
+	filtered := make([]string, 0, len(environ))
+	for _, entry := range environ {
+		name, _, ok := strings.Cut(entry, "=")
+		if !ok || name == "" {
+			continue
+		}
+		upper := strings.ToUpper(name)
+		compact := strings.ReplaceAll(upper, "_", "")
+		if strings.HasPrefix(upper, "COWS_") ||
+			strings.Contains(compact, "PASSWORD") ||
+			strings.Contains(compact, "PASSWD") ||
+			strings.Contains(compact, "SECRET") ||
+			strings.Contains(compact, "TOKEN") ||
+			strings.Contains(compact, "CREDENTIAL") ||
+			strings.Contains(compact, "PRIVATEKEY") ||
+			strings.Contains(compact, "ACCESSKEY") ||
+			strings.Contains(compact, "APIKEY") {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
 }
 
 func (a *fileAccess) List(ctx context.Context, relativePath string) ([]runtime.FileEntry, error) {

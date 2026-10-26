@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -596,11 +597,11 @@ func explicitRootlessMapping(mappings []idMapping, containerID int64) ([]idMappi
 	if containerID < 0 {
 		return nil, fmt.Errorf("%w: container identity must not be negative", runtime.ErrNotSupported)
 	}
+	if err := validateRootlessMapStructure(mappings); err != nil {
+		return nil, err
+	}
 	var total int64
 	for _, mapping := range mappings {
-		if mapping.Size <= 0 || mapping.ContainerID < 0 || mapping.HostID < 0 {
-			return nil, fmt.Errorf("%w: invalid rootless ID mapping", runtime.ErrNotSupported)
-		}
 		total += mapping.Size
 	}
 	// Podman's rootless mapping reserves intermediate ID 0 for the invoking
@@ -610,6 +611,87 @@ func explicitRootlessMapping(mappings []idMapping, containerID int64) ([]idMappi
 		return nil, fmt.Errorf("%w: container identity %d is outside the available subordinate ID range", runtime.ErrNotSupported, containerID)
 	}
 	return []idMapping{{ContainerID: 0, HostID: 1, Size: total - 1}}, nil
+}
+
+const maxRootlessID int64 = 1<<63 - 1
+
+// validateRootlessMapStructure rejects mappings that cannot back the explicit
+// {0,1,total-1} container map. It never trusts the order reported by Podman:
+// container ID ranges must start at zero and stay contiguous, and host ranges
+// must not overlap. A gap or overlap would make the explicit map point at an
+// unmapped or incorrect namespace ID.
+func validateRootlessMapStructure(mappings []idMapping) error {
+	if len(mappings) == 0 {
+		return fmt.Errorf("%w: Podman reported no rootless ID mapping", runtime.ErrNotSupported)
+	}
+	ordered := append([]idMapping(nil), mappings...)
+	sort.Slice(ordered, func(left, right int) bool {
+		return ordered[left].ContainerID < ordered[right].ContainerID
+	})
+	var next int64
+	for index, mapping := range ordered {
+		if mapping.ContainerID < 0 || mapping.HostID < 0 || mapping.Size <= 0 {
+			return fmt.Errorf("%w: invalid rootless ID mapping", runtime.ErrNotSupported)
+		}
+		if mapping.ContainerID > maxRootlessID-mapping.Size || mapping.HostID > maxRootlessID-mapping.Size {
+			return fmt.Errorf("%w: rootless ID mapping overflows", runtime.ErrNotSupported)
+		}
+		if index == 0 {
+			if mapping.ContainerID != 0 {
+				return fmt.Errorf("%w: rootless ID mapping must start at container ID 0", runtime.ErrNotSupported)
+			}
+		} else if mapping.ContainerID != next {
+			return fmt.Errorf("%w: rootless ID mapping has a gap or overlap", runtime.ErrNotSupported)
+		}
+		next = mapping.ContainerID + mapping.Size
+	}
+	for left := range ordered {
+		for right := left + 1; right < len(ordered); right++ {
+			if idRangesOverlap(ordered[left].HostID, ordered[left].Size, ordered[right].HostID, ordered[right].Size) {
+				return fmt.Errorf("%w: rootless host ID mappings overlap", runtime.ErrNotSupported)
+			}
+		}
+	}
+	return nil
+}
+
+// validateRootlessMap also checks the invariant the explicit map relies on:
+// namespace ID 0 is a single slot for the invoking account, and no subordinate
+// range still maps the COWS account. Without that, container root could map
+// back to the COWS host account despite private user-namespace mode.
+func validateRootlessMap(mappings []idMapping, account int64, kind string) error {
+	if err := validateRootlessMapStructure(mappings); err != nil {
+		return err
+	}
+	ordered := append([]idMapping(nil), mappings...)
+	sort.Slice(ordered, func(left, right int) bool {
+		return ordered[left].ContainerID < ordered[right].ContainerID
+	})
+	if ordered[0].Size != 1 {
+		return fmt.Errorf("%w: rootless %s map must reserve exactly one ID for the invoking account", runtime.ErrNotSupported, kind)
+	}
+	for _, mapping := range ordered[1:] {
+		if account >= mapping.HostID && account-mapping.HostID < mapping.Size {
+			return fmt.Errorf("%w: rootless %s map includes the COWS account", runtime.ErrNotSupported, kind)
+		}
+	}
+	return nil
+}
+
+func idRangesOverlap(left, leftSize, right, rightSize int64) bool {
+	return left < right+rightSize && right < left+leftSize
+}
+
+// rootlessHostID translates an ID inside Podman's rootless namespace to the
+// host ID visible outside it. The file helper verifies this same value from
+// /proc/self/uid_map before dropping privileges.
+func rootlessHostID(mappings []idMapping, id int64) (int64, error) {
+	for _, mapping := range mappings {
+		if id >= mapping.ContainerID && id-mapping.ContainerID < mapping.Size {
+			return mapping.HostID + id - mapping.ContainerID, nil
+		}
+	}
+	return 0, fmt.Errorf("%w: identity %d is outside the rootless ID mapping", runtime.ErrNotSupported, id)
 }
 
 // explicitNamespaceID translates a container ID of a workspace created with
@@ -1176,8 +1258,11 @@ func (a *Adapter) podmanIDMappings(ctx context.Context) (idMappings, error) {
 	if err := a.get(ctx, "/libpod/info", &info); err != nil {
 		return idMappings{}, err
 	}
-	if len(info.Host.IDMappings.UIDMap) == 0 || len(info.Host.IDMappings.GIDMap) == 0 {
-		return idMappings{}, fmt.Errorf("%w: Podman did not report rootless UID/GID mappings", runtime.ErrNotSupported)
+	if err := validateRootlessMap(info.Host.IDMappings.UIDMap, int64(os.Getuid()), "UID"); err != nil {
+		return idMappings{}, err
+	}
+	if err := validateRootlessMap(info.Host.IDMappings.GIDMap, int64(os.Getgid()), "GID"); err != nil {
+		return idMappings{}, err
 	}
 	return info.Host.IDMappings, nil
 }

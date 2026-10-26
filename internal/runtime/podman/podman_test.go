@@ -826,14 +826,16 @@ func TestCreateWorkspaceSendsNamedVolumesSeparatelyForPodmanLibpod(t *testing.T)
 
 func TestFileAccessUsesNamespaceIdentityOfConfiguredUser(t *testing.T) {
 	tests := []struct {
-		name             string
-		spec             runtime.FileAccessSpec
-		wantUID, wantGID string
-		wantUnsupported  bool
+		name                     string
+		spec                     runtime.FileAccessSpec
+		wantUID, wantGID         string
+		wantHostUID, wantHostGID string
+		wantAllowNamespaceRoot   bool
+		wantUnsupported          bool
 	}{
-		{name: "configured user is shifted past the unmapped host account", spec: runtime.FileAccessSpec{ContainerUID: 1000, ContainerGID: 1001, ConfiguredUser: true}, wantUID: "1001", wantGID: "1002"},
-		{name: "configured root is not namespace root", spec: runtime.FileAccessSpec{ContainerUID: 0, ContainerGID: 0, ConfiguredUser: true}, wantUID: "1", wantGID: "1"},
-		{name: "image identity keeps namespace IDs", spec: runtime.FileAccessSpec{ContainerUID: 0, ContainerGID: 0}, wantUID: "0", wantGID: "0"},
+		{name: "configured user is shifted past the unmapped host account", spec: runtime.FileAccessSpec{ContainerUID: 1000, ContainerGID: 1001, ConfiguredUser: true}, wantUID: "1001", wantGID: "1002", wantHostUID: "101000", wantHostGID: "101001"},
+		{name: "configured root is not namespace root", spec: runtime.FileAccessSpec{ContainerUID: 0, ContainerGID: 0, ConfiguredUser: true}, wantUID: "1", wantGID: "1", wantHostUID: "100000", wantHostGID: "100000"},
+		{name: "image identity keeps namespace IDs", spec: runtime.FileAccessSpec{ContainerUID: 0, ContainerGID: 0}, wantUID: "0", wantGID: "0", wantHostUID: "1000", wantHostGID: "1000", wantAllowNamespaceRoot: true},
 		{name: "configured user outside subordinate range", spec: runtime.FileAccessSpec{ContainerUID: 65536, ContainerGID: 1000, ConfiguredUser: true}, wantUnsupported: true},
 	}
 	for _, test := range tests {
@@ -870,7 +872,74 @@ func TestFileAccessUsesNamespaceIdentityOfConfiguredUser(t *testing.T) {
 			if !strings.Contains(args, " --uid "+test.wantUID+" --gid "+test.wantGID+" ") {
 				t.Fatalf("file helper arguments = %q, want --uid %s --gid %s", args, test.wantUID, test.wantGID)
 			}
+			if !strings.Contains(args, " --expected-host-uid "+test.wantHostUID+" --expected-host-gid "+test.wantHostGID+" ") {
+				t.Fatalf("file helper arguments = %q, want host identity %s:%s", args, test.wantHostUID, test.wantHostGID)
+			}
+			if got := strings.Contains(args, " --allow-namespace-root"); got != test.wantAllowNamespaceRoot {
+				t.Fatalf("allow-namespace-root = %t, want %t in %q", got, test.wantAllowNamespaceRoot, args)
+			}
+			for _, entry := range command.Env {
+				name, _, _ := strings.Cut(entry, "=")
+				if strings.HasPrefix(strings.ToUpper(name), "COWS_") {
+					t.Fatalf("file helper inherited COWS environment %q", name)
+				}
+			}
 		})
+	}
+}
+
+func TestRootlessIDMappingValidation(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		mappings []idMapping
+		account  int64
+		wantErr  bool
+	}{
+		{"valid", []idMapping{{ContainerID: 0, HostID: 1000, Size: 1}, {ContainerID: 1, HostID: 100000, Size: 65536}}, 1000, false},
+		{"unsorted valid", []idMapping{{ContainerID: 1, HostID: 100000, Size: 65536}, {ContainerID: 0, HostID: 1000, Size: 1}}, 1000, false},
+		{"empty", nil, 1000, true},
+		{"does not start at zero", []idMapping{{ContainerID: 1, HostID: 100000, Size: 65536}}, 1000, true},
+		{"first slot is too large", []idMapping{{ContainerID: 0, HostID: 1000, Size: 2}, {ContainerID: 2, HostID: 100000, Size: 65534}}, 1000, true},
+		{"container gap", []idMapping{{ContainerID: 0, HostID: 1000, Size: 1}, {ContainerID: 2, HostID: 100000, Size: 65534}}, 1000, true},
+		{"container overlap", []idMapping{{ContainerID: 0, HostID: 1000, Size: 1}, {ContainerID: 1, HostID: 100000, Size: 65536}, {ContainerID: 100, HostID: 200000, Size: 10}}, 1000, true},
+		{"host overlap", []idMapping{{ContainerID: 0, HostID: 1000, Size: 1}, {ContainerID: 1, HostID: 100000, Size: 65536}, {ContainerID: 65537, HostID: 160000, Size: 10}}, 1000, true},
+		{"account in subordinate range", []idMapping{{ContainerID: 0, HostID: 2000, Size: 1}, {ContainerID: 1, HostID: 1000, Size: 65536}}, 1000, true},
+		{"zero size", []idMapping{{ContainerID: 0, HostID: 1000, Size: 1}, {ContainerID: 1, HostID: 100000, Size: 0}}, 1000, true},
+		{"negative host ID", []idMapping{{ContainerID: 0, HostID: 1000, Size: 1}, {ContainerID: 1, HostID: -1, Size: 10}}, 1000, true},
+		{"overflowing range", []idMapping{{ContainerID: 0, HostID: 1000, Size: 1}, {ContainerID: 1, HostID: maxRootlessID, Size: 2}}, 1000, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateRootlessMap(test.mappings, test.account, "UID")
+			if (err != nil) != test.wantErr {
+				t.Fatalf("validateRootlessMap() error = %v, wantErr %t", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestHelperEnvironmentDropsServiceSecrets(t *testing.T) {
+	environment := helperEnvironment([]string{
+		"PATH=/usr/bin",
+		"HOME=/home/cows",
+		"XDG_RUNTIME_DIR=/run/user/1000",
+		"LANG=C.UTF-8",
+		"COWS_SMTP_PASSWORD=secret",
+		"COWS_BOOTSTRAP_ADMIN_PASSWORD=secret",
+		"COWS_DATABASE_PATH=/var/lib/cows/cows.db",
+		"MYSQL_PASSWORD=secret",
+		"API_KEY=secret",
+		"ORDINARY=value",
+	})
+	joined := strings.Join(environment, "\n")
+	for _, want := range []string{"PATH=/usr/bin", "HOME=/home/cows", "XDG_RUNTIME_DIR=/run/user/1000", "LANG=C.UTF-8", "ORDINARY=value"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("helper environment lost %q: %q", want, joined)
+		}
+	}
+	for _, unwanted := range []string{"COWS_", "PASSWORD", "API_KEY"} {
+		if strings.Contains(joined, unwanted) {
+			t.Fatalf("helper environment retained %q: %q", unwanted, joined)
+		}
 	}
 }
 

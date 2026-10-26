@@ -35,6 +35,15 @@ type options struct {
 	OldName   string
 	NewName   string
 	ReadOnly  bool
+	// ExpectedHostUID and ExpectedHostGID are the host IDs the adapter derived
+	// from Podman's rootless mapping. The helper verifies /proc/self maps the
+	// requested namespace IDs to exactly these values before dropping.
+	ExpectedHostUID int64
+	ExpectedHostGID int64
+	// AllowNamespaceRoot is set only for image-identity file access, where the
+	// container itself runs in Podman's default rootless namespace, and for
+	// administrator recovery. It must not be set for a configured container user.
+	AllowNamespaceRoot bool
 }
 
 type entry struct {
@@ -54,10 +63,23 @@ func Run(args []string, input io.Reader, output, errorOutput io.Writer) error {
 	if err := validateOptions(parsed); err != nil {
 		return err
 	}
+	if err := verifyNamespaceIdentity(parsed); err != nil {
+		return fmt.Errorf("verify user namespace: %w", err)
+	}
+	info, err := os.Lstat(parsed.Root)
+	if err != nil {
+		return fmt.Errorf("inspect file root: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("file root must not be a symbolic link")
+	}
+	if !info.IsDir() {
+		return errors.New("file root must be a directory")
+	}
 	if err := os.Chdir(parsed.Root); err != nil {
 		return fmt.Errorf("enter file root: %w", err)
 	}
-	if err := dropToIdentity(parsed.UID, parsed.GID); err != nil {
+	if err := dropToIdentity(parsed.UID, parsed.GID, parsed.AllowNamespaceRoot); err != nil {
 		return fmt.Errorf("set mapped file identity: %w", err)
 	}
 	root, err := os.OpenRoot(".")
@@ -119,6 +141,9 @@ func parseOptions(args []string, errorOutput io.Writer) (options, error) {
 	flags.StringVar(&value.OldName, "old-name", "", "old entry name")
 	flags.StringVar(&value.NewName, "new-name", "", "new entry name")
 	flags.BoolVar(&value.ReadOnly, "read-only", false, "read-only mount")
+	flags.Int64Var(&value.ExpectedHostUID, "expected-host-uid", -1, "expected host UID outside the user namespace")
+	flags.Int64Var(&value.ExpectedHostGID, "expected-host-gid", -1, "expected host GID outside the user namespace")
+	flags.BoolVar(&value.AllowNamespaceRoot, "allow-namespace-root", false, "explicitly allow namespace-root file access")
 	if err := flags.Parse(args); err != nil {
 		return options{}, err
 	}
@@ -129,8 +154,17 @@ func parseOptions(args []string, errorOutput io.Writer) (options, error) {
 }
 
 func validateOptions(value options) error {
+	const maxHostID = 1<<32 - 2
 	if value.UID < 0 || value.UID > 2147483647 || value.GID < 0 || value.GID > 2147483647 {
 		return errors.New("invalid mapped file identity")
+	}
+	if !value.AllowNamespaceRoot && (value.UID == 0 || value.GID == 0) {
+		return errors.New("namespace-root file identity requires explicit authorization")
+	}
+	for _, id := range []int64{value.ExpectedHostUID, value.ExpectedHostGID} {
+		if id < -1 || id > maxHostID {
+			return errors.New("invalid expected host identity")
+		}
 	}
 	if value.Root == "" || !isAbsoluteCleanPath(value.Root) {
 		return errors.New("file root must be a clean absolute path")

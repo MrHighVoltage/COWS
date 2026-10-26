@@ -25,7 +25,7 @@ func TestRunUsesRootedOperationsAndStreamsArchives(t *testing.T) {
 		t.Fatalf("write nested file: %v", err)
 	}
 
-	identity := []string{"--uid", strconv.Itoa(os.Getuid()), "--gid", strconv.Itoa(os.Getgid()), "--root", root}
+	identity := []string{"--uid", strconv.Itoa(os.Getuid()), "--gid", strconv.Itoa(os.Getgid()), "--allow-namespace-root", "--root", root}
 	args := append(identity, "--op", "list", "--path", ".")
 	var listing bytes.Buffer
 	if err := runWithCurrentDirectory(args, nil, &listing); err != nil {
@@ -103,7 +103,7 @@ func TestRunRejectsTraversalAndSymlink(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
 		t.Fatalf("create symlink: %v", err)
 	}
-	base := []string{"--uid", strconv.Itoa(os.Getuid()), "--gid", strconv.Itoa(os.Getgid()), "--root", root, "--op", "stat"}
+	base := []string{"--uid", strconv.Itoa(os.Getuid()), "--gid", strconv.Itoa(os.Getgid()), "--allow-namespace-root", "--root", root, "--op", "stat"}
 	if err := runWithCurrentDirectory(append(base, "--path", "../outside.txt"), nil, io.Discard); err == nil {
 		t.Fatal("path traversal was accepted")
 	}
@@ -132,6 +132,61 @@ func TestListingRejectsSymlinkedBaseDirectory(t *testing.T) {
 	output.Reset()
 	if err := list(root, "alias", &output); err == nil || output.Len() != 0 {
 		t.Fatalf("symlinked listing base error=%v output=%q", err, output.String())
+	}
+}
+
+func TestRunRejectsNamespaceRootWithoutAuthorization(t *testing.T) {
+	root := t.TempDir()
+	args := []string{"--uid", "0", "--gid", "0", "--root", root, "--op", "list"}
+	if err := runWithCurrentDirectory(args, nil, io.Discard); err == nil {
+		t.Fatal("namespace-root file identity was accepted without explicit authorization")
+	}
+}
+
+func TestRunRejectsSymlinkedRoot(t *testing.T) {
+	parent := t.TempDir()
+	target := t.TempDir()
+	root := filepath.Join(parent, "root")
+	if err := os.Symlink(target, root); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--uid", strconv.Itoa(os.Getuid()), "--gid", strconv.Itoa(os.Getgid()), "--allow-namespace-root", "--root", root, "--op", "list"}
+	if err := runWithCurrentDirectory(args, nil, io.Discard); err == nil {
+		t.Fatal("symlinked file root was accepted")
+	}
+}
+
+func TestNamespaceHostIDParsesProcMap(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "uid_map")
+	if err := os.WriteFile(path, []byte("0 1000 1\n1 100000 65536\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		id   int64
+		want int64
+	}{
+		{id: 0, want: 1000},
+		{id: 1, want: 100000},
+		{id: 1001, want: 101000},
+	} {
+		got, err := namespaceHostID(path, test.id)
+		if err != nil || got != test.want {
+			t.Fatalf("namespaceHostID(%d) = %d, %v; want %d", test.id, got, err, test.want)
+		}
+	}
+	if _, err := namespaceHostID(path, 65537); err == nil {
+		t.Fatal("unmapped namespace identity was accepted")
+	}
+}
+
+func TestDropToIdentityRejectsNamespaceRootUnlessAllowed(t *testing.T) {
+	if err := dropToIdentity(0, 0, false); err == nil {
+		t.Fatal("namespace-root identity was accepted")
+	}
+	if os.Getuid() != 0 {
+		if err := dropToIdentity(int64(os.Getuid()), int64(os.Getgid()), false); err != nil {
+			t.Fatalf("dropping to the current non-root identity: %v", err)
+		}
 	}
 }
 
