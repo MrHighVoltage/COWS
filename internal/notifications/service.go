@@ -2,6 +2,8 @@ package notifications
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"net/url"
 	"strings"
@@ -88,7 +90,7 @@ func (s *Service) EnqueuePasswordReset(ctx context.Context, userID, recipient, r
 		return err
 	}
 	subject, body := PasswordResetMessage(resetURL, expiresAt)
-	return s.queue(ctx, domain.EmailKindPasswordReset, userID, recipient, subject, body, "")
+	return s.queue(ctx, domain.EmailKindPasswordReset, userID, recipient, subject, body, "", credentialTokenHash(rawToken))
 }
 
 func (s *Service) EnqueueInvitation(ctx context.Context, userID, recipient, displayName, rawToken, baseURL string, expiresAt time.Time) error {
@@ -100,7 +102,7 @@ func (s *Service) EnqueueInvitation(ctx context.Context, userID, recipient, disp
 		return err
 	}
 	subject, body := InvitationMessage(displayName, acceptURL, expiresAt)
-	return s.queue(ctx, domain.EmailKindInvitation, userID, recipient, subject, body, "")
+	return s.queue(ctx, domain.EmailKindInvitation, userID, recipient, subject, body, "", credentialTokenHash(rawToken))
 }
 
 func (s *Service) EnqueueWelcome(ctx context.Context, userID, recipient, displayName, baseURL string) error {
@@ -111,11 +113,21 @@ func (s *Service) EnqueueWelcome(ctx context.Context, userID, recipient, display
 	return s.queue(ctx, domain.EmailKindWelcome, userID, recipient, subject, body, "")
 }
 
-func (s *Service) queue(ctx context.Context, kind, userID, recipient, subject, body, dedupeKey string) error {
+func credentialTokenHash(rawToken string) string {
+	hash := sha256.Sum256([]byte(rawToken))
+	return base64.RawURLEncoding.EncodeToString(hash[:])
+}
+
+func (s *Service) queue(ctx context.Context, kind, userID, recipient, subject, body, dedupeKey string, tokenHash ...string) error {
 	now := s.now().UTC()
+	credentialHash := ""
+	if len(tokenHash) > 0 {
+		credentialHash = tokenHash[0]
+	}
 	return s.store.UpsertEmailMessage(ctx, domain.EmailMessage{
 		Kind: kind, UserID: userID, Recipient: recipient, Subject: subject, Body: body,
 		DedupeKey: dedupeKey, Status: "pending", NextAttemptAt: now, CreatedAt: now,
+		CredentialTokenHash: credentialHash,
 	})
 }
 

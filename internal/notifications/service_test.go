@@ -134,6 +134,12 @@ func TestOneShotMessagesCarryNoTokenBeyondTheirOwnLink(t *testing.T) {
 	if err := service.EnqueueWelcome(ctx, "owner-1", "owner@example.test", "Owner", "https://cows.example.test"); err != nil {
 		t.Fatalf("enqueue welcome: %v", err)
 	}
+	if err := store.CreatePasswordResetToken(ctx, domain.PasswordResetToken{
+		TokenHash: credentialTokenHash("raw-invitation-token"), UserID: "owner-1", Recipient: "owner@example.test",
+		Purpose: domain.TokenPurposeInvitation, CreatedAt: base, ExpiresAt: base.Add(24 * time.Hour),
+	}); err != nil {
+		t.Fatalf("create invitation token: %v", err)
+	}
 	if err := service.EnqueueInvitation(ctx, "owner-1", "owner@example.test", "Owner", "raw-invitation-token", "https://cows.example.test", base.Add(24*time.Hour)); err != nil {
 		t.Fatalf("enqueue invitation: %v", err)
 	}

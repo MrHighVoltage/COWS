@@ -203,9 +203,14 @@ func TestResetRequestsAreThrottledWithoutRevealingIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
+	prior, err := service.RequestPasswordReset(ctx, user.Username)
+	if err != nil || prior.Token == "" {
+		t.Fatalf("issue prior reset: %+v, %v", prior, err)
+	}
 	if err := store.UpsertEmailMessage(ctx, domain.EmailMessage{
 		Kind: domain.EmailKindPasswordReset, UserID: user.ID, Recipient: user.Email,
 		Subject: "reset", Body: "link", Status: "pending", NextAttemptAt: base, CreatedAt: base,
+		CredentialTokenHash: hashToken(prior.Token),
 	}); err != nil {
 		t.Fatalf("queue prior reset: %v", err)
 	}

@@ -9,8 +9,9 @@ import (
 )
 
 var (
-	ErrNotFound = errors.New("repository: not found")
-	ErrConflict = errors.New("repository: conflict")
+	ErrNotFound   = errors.New("repository: not found")
+	ErrConflict   = errors.New("repository: conflict")
+	ErrEmailInUse = errors.New("email address already belongs to another account")
 )
 
 type UserRecord struct {
@@ -39,7 +40,9 @@ type UserRepository interface {
 	ImportUsers(ctx context.Context, entries []UserImportEntry) error
 	RegisterUser(ctx context.Context, user domain.User, passwordHash string, groupIDs []string, userQuota domain.UserQuota) error
 	DeleteUser(ctx context.Context, id string) error
-	UpdateUserPassword(ctx context.Context, id, passwordHash string, mustChangePassword bool) error
+	// ReplaceUserPassword compares the observed credential version, replaces the
+	// password, and revokes other sessions and credential links in one transaction.
+	ReplaceUserPassword(ctx context.Context, id, passwordHash string, mustChangePassword bool, credentialVersion int64, keepTokenHash string) error
 	// UpdateUserProfile changes an existing account's email and display name.
 	// An email change also invalidates that account's outstanding invitation
 	// and reset tokens, which were mailed to the previous address.
@@ -63,6 +66,8 @@ type GroupRepository interface {
 }
 
 type SessionRepository interface {
+	// CreateSession succeeds only if the enabled account still has the supplied
+	// credential version used to authenticate the password.
 	CreateSession(ctx context.Context, session domain.Session) error
 	FindSessionUser(ctx context.Context, tokenHash string, nowUnix int64) (domain.User, error)
 	DeleteSession(ctx context.Context, tokenHash string) error
@@ -77,12 +82,15 @@ type AuditRepository interface {
 }
 
 type PasswordResetRepository interface {
+	// CreatePasswordResetToken requires the caller's observed account version
+	// and recipient to remain current. MinInterval applies to the same purpose.
 	CreatePasswordResetToken(ctx context.Context, token domain.PasswordResetToken) error
 }
 
 type EmailOutboxRepository interface {
 	// UpsertEmailMessage queues a message. A non-empty DedupeKey updates any
 	// existing row with that key instead of inserting a second one.
+	// Credential mail is queued only while its token and recipient remain valid.
 	UpsertEmailMessage(ctx context.Context, message domain.EmailMessage) error
 	ListPendingEmailMessages(ctx context.Context, now time.Time, limit int) ([]domain.EmailMessage, error)
 	MarkEmailMessageSent(ctx context.Context, id int64, sentAt time.Time) error
@@ -121,6 +129,8 @@ type WorkspaceRepository interface {
 	ListRetainedWorkspaceVolumes(ctx context.Context, workspaceID string) ([]domain.RetainedWorkspaceVolume, error)
 	ListAllRetainedWorkspaceVolumes(ctx context.Context) ([]domain.RetainedWorkspaceVolume, error)
 	ListRetainedWorkspaceVolumesForOwner(ctx context.Context, ownerUserID string) ([]domain.RetainedWorkspaceVolume, error)
+	// DeleteRetainedWorkspaceVolume is administrator-only. Self-service callers
+	// must use the owner-scoped retained-storage methods below.
 	DeleteRetainedWorkspaceVolume(ctx context.Context, volumeName string) error
 	// ConsumeRetainedWorkspaceVolume looks up the tombstone for (workspaceID,
 	// mountName) scoped to ownerUserID and deletes it in the same call,

@@ -10,9 +10,12 @@ const (
 )
 
 type PasswordResetToken struct {
-	TokenHash string
-	UserID    string
-	Purpose   string
-	ExpiresAt time.Time
-	CreatedAt time.Time
+	TokenHash         string
+	UserID            string
+	Purpose           string
+	ExpiresAt         time.Time
+	CreatedAt         time.Time
+	CredentialVersion int64
+	Recipient         string
+	MinInterval       time.Duration
 }

@@ -156,7 +156,7 @@ func (s *Service) ImportUsers(ctx context.Context, actorID string, inputs []Impo
 		return nil, err
 	}
 	for _, index := range invited {
-		rawToken, expiresAt, tokenErr := s.issueToken(ctx, results[index].UserID, domain.TokenPurposeInvitation, s.invitationLifetime)
+		rawToken, expiresAt, tokenErr := s.issueToken(ctx, results[index].Invitation.User, domain.TokenPurposeInvitation, s.invitationLifetime)
 		if tokenErr != nil {
 			return nil, tokenErr
 		}
@@ -191,7 +191,7 @@ func (s *Service) validateImportInputs(ctx context.Context, inputs []ImportUserI
 			return ErrInvalidUserImport
 		}
 		seenUsers[username] = struct{}{}
-		email := strings.ToLower(strings.TrimSpace(input.Email))
+		email := domain.EmailKey(input.Email)
 		if email == "" {
 			continue
 		}

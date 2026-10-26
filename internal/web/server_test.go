@@ -1178,7 +1178,7 @@ func TestAdminDirectoriesRecoversStorageAfterOwnerDeleted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("authenticate administrator: %v", err)
 	}
-	if err := authService.ChangePassword(ctx, admin.ID, "correct horse battery staple", "changed correct horse battery staple"); err != nil {
+	if err := authService.ChangePassword(ctx, admin.ID, "correct horse battery staple", "changed correct horse battery staple", adminToken); err != nil {
 		t.Fatalf("change administrator password: %v", err)
 	}
 	target, err := authService.CreateUser(ctx, admin.ID, auth.CreateUserInput{Username: "orphan-owner", Password: "another correct password", Role: domain.RoleUser})
@@ -1437,7 +1437,7 @@ func TestAdministratorEditsAccountEmailAndPassword(t *testing.T) {
 	if !signedIn.MustChangePassword {
 		t.Fatal("a password set by an administrator must be changed at next sign-in")
 	}
-	if err := authService.ChangePassword(ctx, student.ID, "an administrator chosen password", "a password of their own"); err != nil {
+	if err := authService.ChangePassword(ctx, student.ID, "an administrator chosen password", "a password of their own", studentToken); err != nil {
 		t.Fatalf("student changes their password: %v", err)
 	}
 	for _, path := range []string{"/profile", "/password"} {

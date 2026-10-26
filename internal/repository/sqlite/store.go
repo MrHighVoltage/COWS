@@ -38,19 +38,19 @@ func (s *Store) CountActiveAdministrators(ctx context.Context) (int, error) {
 }
 
 func (s *Store) FindUserByUsername(ctx context.Context, username string) (repository.UserRecord, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, username, email, display_name, password_hash, role, disabled, must_change_password, created_at, updated_at
+	row := s.db.QueryRowContext(ctx, `SELECT id, username, email, display_name, password_hash, role, disabled, must_change_password, created_at, updated_at, credential_version
 		FROM users WHERE username = ?`, username)
 	return scanUserRecord(row)
 }
 
 func (s *Store) FindUserByEmail(ctx context.Context, email string) (repository.UserRecord, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, username, email, display_name, password_hash, role, disabled, must_change_password, created_at, updated_at
-		FROM users WHERE lower(email) = lower(?)`, email)
+	row := s.db.QueryRowContext(ctx, `SELECT id, username, email, display_name, password_hash, role, disabled, must_change_password, created_at, updated_at, credential_version
+		FROM users WHERE email_key = ?`, domain.EmailKey(email))
 	return scanUserRecord(row)
 }
 
 func (s *Store) FindUserByID(ctx context.Context, id string) (domain.User, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, username, email, display_name, password_hash, role, disabled, must_change_password, created_at, updated_at
+	row := s.db.QueryRowContext(ctx, `SELECT id, username, email, display_name, password_hash, role, disabled, must_change_password, created_at, updated_at, credential_version
 		FROM users WHERE id = ?`, id)
 	record, err := scanUserRecord(row)
 	if err != nil {
@@ -60,13 +60,13 @@ func (s *Store) FindUserByID(ctx context.Context, id string) (domain.User, error
 }
 
 func (s *Store) FindUserCredentialsByID(ctx context.Context, id string) (repository.UserRecord, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, username, email, display_name, password_hash, role, disabled, must_change_password, created_at, updated_at
+	row := s.db.QueryRowContext(ctx, `SELECT id, username, email, display_name, password_hash, role, disabled, must_change_password, created_at, updated_at, credential_version
 		FROM users WHERE id = ?`, id)
 	return scanUserRecord(row)
 }
 
 func (s *Store) ListUsers(ctx context.Context) ([]domain.User, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, username, email, display_name, password_hash, role, disabled, must_change_password, created_at, updated_at
+	rows, err := s.db.QueryContext(ctx, `SELECT id, username, email, display_name, password_hash, role, disabled, must_change_password, created_at, updated_at, credential_version
 		FROM users ORDER BY username`)
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
@@ -89,11 +89,11 @@ func (s *Store) ListUsers(ctx context.Context) ([]domain.User, error) {
 
 func (s *Store) CreateUser(ctx context.Context, user domain.User, passwordHash string) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO users
-		(id, username, email, display_name, password_hash, role, disabled, must_change_password, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, user.ID, user.Username, user.Email, user.DisplayName, passwordHash,
+		(id, username, email, email_key, display_name, password_hash, role, disabled, must_change_password, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, user.ID, user.Username, user.Email, domain.EmailKey(user.Email), user.DisplayName, passwordHash,
 		user.Role, boolInt(user.Disabled), boolInt(user.MustChangePassword), user.CreatedAt.Unix(), user.UpdatedAt.Unix())
 	if err != nil {
-		return fmt.Errorf("create user: %w", err)
+		return userWriteError("create user", err)
 	}
 	return nil
 }
@@ -108,17 +108,26 @@ func (s *Store) ImportUsers(ctx context.Context, entries []repository.UserImport
 		user := entry.User
 		if !entry.Existing {
 			if _, err := tx.ExecContext(ctx, `INSERT INTO users
-				(id, username, email, display_name, password_hash, role, disabled, must_change_password, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, user.ID, user.Username, user.Email, user.DisplayName,
+				(id, username, email, email_key, display_name, password_hash, role, disabled, must_change_password, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, user.ID, user.Username, user.Email, domain.EmailKey(user.Email), user.DisplayName,
 				entry.PasswordHash, user.Role, boolInt(user.Disabled), boolInt(user.MustChangePassword),
 				user.CreatedAt.Unix(), user.UpdatedAt.Unix()); err != nil {
-				return fmt.Errorf("create imported user: %w", err)
+				return userWriteError("create imported user", err)
 			}
 		} else {
-			result, err := tx.ExecContext(ctx, `UPDATE users SET email = CASE WHEN ? <> '' THEN ? ELSE email END, updated_at = ? WHERE id = ?`,
-				user.Email, user.Email, user.UpdatedAt.Unix(), user.ID)
+			var currentEmail string
+			if err := tx.QueryRowContext(ctx, "SELECT email FROM users WHERE id = ?", user.ID).Scan(&currentEmail); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return repository.ErrNotFound
+				}
+				return fmt.Errorf("load imported user: %w", err)
+			}
+			emailChanged := user.Email != "" && user.Email != currentEmail
+			result, err := tx.ExecContext(ctx, `UPDATE users SET email = CASE WHEN ? <> '' THEN ? ELSE email END,
+				email_key = CASE WHEN ? <> '' THEN ? ELSE email_key END, updated_at = ? WHERE id = ?`,
+				user.Email, user.Email, user.Email, domain.EmailKey(user.Email), user.UpdatedAt.Unix(), user.ID)
 			if err != nil {
-				return fmt.Errorf("update imported user: %w", err)
+				return userWriteError("update imported user", err)
 			}
 			count, err := result.RowsAffected()
 			if err != nil {
@@ -126,6 +135,14 @@ func (s *Store) ImportUsers(ctx context.Context, entries []repository.UserImport
 			}
 			if count == 0 {
 				return repository.ErrNotFound
+			}
+			if emailChanged {
+				if _, err := tx.ExecContext(ctx, "UPDATE users SET credential_version = credential_version + 1 WHERE id = ?", user.ID); err != nil {
+					return fmt.Errorf("advance imported credential version: %w", err)
+				}
+				if err := invalidateCredentialTokensTx(ctx, tx, user.ID); err != nil {
+					return err
+				}
 			}
 		}
 		for _, groupID := range entry.GroupIDs {
@@ -147,10 +164,10 @@ func (s *Store) RegisterUser(ctx context.Context, user domain.User, passwordHash
 	}
 	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO users
-		(id, username, email, display_name, password_hash, role, disabled, must_change_password, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, user.ID, user.Username, user.Email, user.DisplayName, passwordHash,
+		(id, username, email, email_key, display_name, password_hash, role, disabled, must_change_password, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, user.ID, user.Username, user.Email, domain.EmailKey(user.Email), user.DisplayName, passwordHash,
 		user.Role, boolInt(user.Disabled), boolInt(user.MustChangePassword), user.CreatedAt.Unix(), user.UpdatedAt.Unix()); err != nil {
-		return fmt.Errorf("create registered user: %w", err)
+		return userWriteError("create registered user", err)
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO user_quotas
 		(user_id, max_cpu_millis, max_memory_bytes, max_storage_bytes, max_workspaces, max_running_workspaces, created_at, updated_at)
@@ -187,9 +204,9 @@ func (s *Store) UpdateUserProfile(ctx context.Context, id, email, displayName st
 		}
 		return fmt.Errorf("load user profile: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, "UPDATE users SET email = ?, display_name = ?, updated_at = ? WHERE id = ?",
-		email, displayName, updatedAt.Unix(), id); err != nil {
-		return fmt.Errorf("update user profile: %w", err)
+	if _, err := tx.ExecContext(ctx, "UPDATE users SET email = ?, email_key = ?, display_name = ?, updated_at = ?, credential_version = credential_version + ? WHERE id = ?",
+		email, domain.EmailKey(email), displayName, updatedAt.Unix(), boolInt(currentEmail != email), id); err != nil {
+		return userWriteError("update user profile", err)
 	}
 	if currentEmail != email {
 		// The old address keeps neither the link nor the message carrying it:
@@ -239,8 +256,14 @@ func invalidateCredentialTokensTx(ctx context.Context, tx *sql.Tx, userID string
 	return nil
 }
 
-func (s *Store) UpdateUserPassword(ctx context.Context, id, passwordHash string, mustChangePassword bool) error {
-	result, err := s.db.ExecContext(ctx, "UPDATE users SET password_hash = ?, must_change_password = ?, updated_at = ? WHERE id = ?", passwordHash, boolInt(mustChangePassword), time.Now().UTC().Unix(), id)
+func (s *Store) ReplaceUserPassword(ctx context.Context, id, passwordHash string, mustChangePassword bool, credentialVersion int64, keepTokenHash string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin password replacement: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE users SET password_hash = ?, must_change_password = ?, updated_at = ?, credential_version = credential_version + 1
+		WHERE id = ? AND disabled = 0 AND credential_version = ?`, passwordHash, boolInt(mustChangePassword), time.Now().UTC().Unix(), id, credentialVersion)
 	if err != nil {
 		return fmt.Errorf("update user password: %w", err)
 	}
@@ -249,7 +272,16 @@ func (s *Store) UpdateUserPassword(ctx context.Context, id, passwordHash string,
 		return fmt.Errorf("check user password update: %w", err)
 	}
 	if count == 0 {
-		return repository.ErrNotFound
+		return repository.ErrConflict
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?", id, keepTokenHash); err != nil {
+		return fmt.Errorf("revoke replaced credential sessions: %w", err)
+	}
+	if err := invalidateCredentialTokensTx(ctx, tx, id); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit password replacement: %w", err)
 	}
 	return nil
 }
@@ -261,7 +293,7 @@ func (s *Store) ResetPasswordUsingToken(ctx context.Context, tokenHash, purpose,
 	}
 	defer tx.Rollback()
 	row := tx.QueryRowContext(ctx, `SELECT u.id, u.username, u.email, u.display_name, u.password_hash, u.role,
-		u.disabled, u.must_change_password, u.created_at, u.updated_at
+		u.disabled, u.must_change_password, u.created_at, u.updated_at, u.credential_version
 		FROM password_reset_tokens t JOIN users u ON u.id = t.user_id
 		WHERE t.token_hash = ? AND t.purpose = ? AND t.used_at IS NULL AND t.expires_at > ?`, tokenHash, purpose, now.Unix())
 	record, err := scanUserRecord(row)
@@ -271,13 +303,13 @@ func (s *Store) ResetPasswordUsingToken(ctx context.Context, tokenHash, purpose,
 	if record.User.Disabled {
 		return domain.User{}, repository.ErrNotFound
 	}
-	if _, err := tx.ExecContext(ctx, "UPDATE users SET password_hash = ?, must_change_password = 0, updated_at = ? WHERE id = ?", passwordHash, now.Unix(), record.User.ID); err != nil {
+	if _, err := tx.ExecContext(ctx, "UPDATE users SET password_hash = ?, must_change_password = 0, updated_at = ?, credential_version = credential_version + 1 WHERE id = ?", passwordHash, now.Unix(), record.User.ID); err != nil {
 		return domain.User{}, fmt.Errorf("update reset password: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE user_id = ?", record.User.ID); err != nil {
 		return domain.User{}, fmt.Errorf("invalidate reset sessions: %w", err)
 	}
-	result, err := tx.ExecContext(ctx, "UPDATE password_reset_tokens SET used_at = ? WHERE token_hash = ? AND used_at IS NULL", now.Unix(), tokenHash)
+	result, err := tx.ExecContext(ctx, "UPDATE password_reset_tokens SET used_at = ? WHERE token_hash = ? AND purpose = ? AND expires_at > ? AND used_at IS NULL", now.Unix(), tokenHash, purpose, now.Unix())
 	if err != nil {
 		return domain.User{}, fmt.Errorf("consume password reset token: %w", err)
 	}
@@ -296,6 +328,7 @@ func (s *Store) ResetPasswordUsingToken(ctx context.Context, tokenHash, purpose,
 		return domain.User{}, fmt.Errorf("commit password reset: %w", err)
 	}
 	record.User.MustChangePassword = false
+	record.User.CredentialVersion++
 	record.User.UpdatedAt = now
 	return record.User, nil
 }
@@ -306,7 +339,7 @@ func (s *Store) SetUserDisabled(ctx context.Context, id string, disabled bool) e
 		return fmt.Errorf("begin user status update: %w", err)
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, "UPDATE users SET disabled = ?, updated_at = ? WHERE id = ?", boolInt(disabled), time.Now().UTC().Unix(), id)
+	result, err := tx.ExecContext(ctx, "UPDATE users SET disabled = ?, updated_at = ?, credential_version = credential_version + ? WHERE id = ?", boolInt(disabled), time.Now().UTC().Unix(), boolInt(disabled), id)
 	if err != nil {
 		return fmt.Errorf("set user disabled: %w", err)
 	}
@@ -460,17 +493,23 @@ func (s *Store) DeleteGroup(ctx context.Context, id string) error {
 }
 
 func (s *Store) CreateSession(ctx context.Context, session domain.Session) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO sessions
-		(token_hash, user_id, created_at, expires_at, last_seen_at) VALUES (?, ?, ?, ?, ?)`,
-		session.TokenHash, session.UserID, session.CreatedAt.Unix(), session.ExpiresAt.Unix(), session.LastSeen.Unix())
+	result, err := s.db.ExecContext(ctx, `INSERT INTO sessions
+		(token_hash, user_id, created_at, expires_at, last_seen_at)
+		SELECT ?, id, ?, ?, ? FROM users WHERE id = ? AND disabled = 0 AND credential_version = ?`,
+		session.TokenHash, session.CreatedAt.Unix(), session.ExpiresAt.Unix(), session.LastSeen.Unix(), session.UserID, session.CredentialVersion)
 	if err != nil {
 		return fmt.Errorf("create session: %w", err)
+	}
+	if count, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("check session creation: %w", err)
+	} else if count == 0 {
+		return repository.ErrConflict
 	}
 	return nil
 }
 
 func (s *Store) FindSessionUser(ctx context.Context, tokenHash string, nowUnix int64) (domain.User, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT u.id, u.username, u.email, u.display_name, u.password_hash, u.role, u.disabled, u.must_change_password, u.created_at, u.updated_at
+	row := s.db.QueryRowContext(ctx, `SELECT u.id, u.username, u.email, u.display_name, u.password_hash, u.role, u.disabled, u.must_change_password, u.created_at, u.updated_at, u.credential_version
 		FROM sessions AS s JOIN users AS u ON u.id = s.user_id
 		WHERE s.token_hash = ? AND s.expires_at > ? AND u.disabled = 0`, tokenHash, nowUnix)
 	record, err := scanUserRecord(row)
@@ -1136,6 +1175,26 @@ func (s *Store) CreatePasswordResetToken(ctx context.Context, token domain.Passw
 		return fmt.Errorf("begin password reset token: %w", err)
 	}
 	defer tx.Rollback()
+	var eligible bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM users
+		WHERE id = ? AND disabled = 0 AND credential_version = ? AND email = ? AND email <> '')`,
+		token.UserID, token.CredentialVersion, token.Recipient).Scan(&eligible); err != nil {
+		return fmt.Errorf("check credential token account: %w", err)
+	}
+	if !eligible {
+		return repository.ErrConflict
+	}
+	if token.MinInterval > 0 {
+		var recent bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM password_reset_tokens
+			WHERE user_id = ? AND purpose = ? AND created_at >= ?)`, token.UserID, token.Purpose,
+			token.CreatedAt.Add(-token.MinInterval).Unix()).Scan(&recent); err != nil {
+			return fmt.Errorf("check credential token throttle: %w", err)
+		}
+		if recent {
+			return repository.ErrConflict
+		}
+	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM password_reset_tokens WHERE user_id = ? AND purpose = ?", token.UserID, token.Purpose); err != nil {
 		return fmt.Errorf("replace password reset token: %w", err)
 	}
@@ -1480,6 +1539,12 @@ func (s *Store) UpsertHostSettings(ctx context.Context, settings domain.HostSett
 }
 
 func (s *Store) UpsertEmailMessage(ctx context.Context, message domain.EmailMessage) error {
+	purpose := ""
+	if message.Kind == domain.EmailKindPasswordReset {
+		purpose = domain.TokenPurposeReset
+	} else if message.Kind == domain.EmailKindInvitation {
+		purpose = domain.TokenPurposeInvitation
+	}
 	var dedupe any
 	if message.DedupeKey != "" {
 		dedupe = message.DedupeKey
@@ -1498,7 +1563,10 @@ func (s *Store) UpsertEmailMessage(ctx context.Context, message domain.EmailMess
 	// already-sent or already-retrying row alone.
 	_, err := s.db.ExecContext(ctx, `INSERT INTO email_messages
 		(kind, user_id, recipient, subject, body, dedupe_key, status, attempts, next_attempt_at, last_error_code, created_at, sent_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, '', ?, 0)
+		SELECT ?, ?, ?, ?, ?, ?, ?, 0, ?, '', ?, 0
+		WHERE ? = '' OR EXISTS (SELECT 1 FROM password_reset_tokens t JOIN users u ON u.id = t.user_id
+			WHERE t.token_hash = ? AND t.purpose = ? AND t.user_id = ? AND t.used_at IS NULL
+			AND t.expires_at > ? AND u.email = ? AND u.disabled = 0)
 		ON CONFLICT(dedupe_key) WHERE dedupe_key IS NOT NULL DO UPDATE SET
 		kind = excluded.kind, user_id = excluded.user_id, recipient = excluded.recipient,
 		subject = excluded.subject, body = excluded.body,
@@ -1508,7 +1576,8 @@ func (s *Store) UpsertEmailMessage(ctx context.Context, message domain.EmailMess
 		last_error_code = CASE WHEN email_messages.body != excluded.body OR email_messages.recipient != excluded.recipient THEN '' ELSE email_messages.last_error_code END,
 		sent_at = CASE WHEN email_messages.body != excluded.body OR email_messages.recipient != excluded.recipient THEN 0 ELSE email_messages.sent_at END`,
 		message.Kind, userID, message.Recipient, message.Subject, message.Body, dedupe, status,
-		unixOrZero(message.NextAttemptAt), unixOrZero(message.CreatedAt))
+		unixOrZero(message.NextAttemptAt), unixOrZero(message.CreatedAt), purpose, message.CredentialTokenHash,
+		purpose, message.UserID, unixOrZero(message.CreatedAt), message.Recipient)
 	if err != nil {
 		return fmt.Errorf("queue email message: %w", err)
 	}
@@ -1774,7 +1843,7 @@ func scanUserRecord(row scanner) (repository.UserRecord, error) {
 		updatedUnix int64
 	)
 	if err := row.Scan(&record.User.ID, &record.User.Username, &record.User.Email, &record.User.DisplayName, &record.PasswordHash,
-		&role, &disabled, &mustChange, &createdUnix, &updatedUnix); err != nil {
+		&role, &disabled, &mustChange, &createdUnix, &updatedUnix, &record.User.CredentialVersion); err != nil {
 		if err == sql.ErrNoRows {
 			return repository.UserRecord{}, repository.ErrNotFound
 		}
@@ -1786,6 +1855,17 @@ func scanUserRecord(row scanner) (repository.UserRecord, error) {
 	record.User.CreatedAt = time.Unix(createdUnix, 0).UTC()
 	record.User.UpdatedAt = time.Unix(updatedUnix, 0).UTC()
 	return record, nil
+}
+
+func userWriteError(operation string, err error) error {
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "unique constraint failed") {
+		if strings.Contains(message, "users_email_unique") || strings.Contains(message, "users.email_key") {
+			return repository.ErrEmailInUse
+		}
+		return repository.ErrConflict
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }
 
 func boolInt(value bool) int {

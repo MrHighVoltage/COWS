@@ -37,8 +37,8 @@ func TestDedupeKeyCollapsesMailWhileOneShotMailDoesNot(t *testing.T) {
 	// A NULL dedupe key must never collide, however many are queued.
 	for range 2 {
 		if err := store.UpsertEmailMessage(ctx, domain.EmailMessage{
-			Kind: domain.EmailKindPasswordReset, UserID: "owner-1", Recipient: "owner@example.test",
-			Subject: "reset", Body: "link", Status: "pending", NextAttemptAt: now, CreatedAt: now,
+			Kind: domain.EmailKindWelcome, UserID: "owner-1", Recipient: "owner@example.test",
+			Subject: "welcome", Body: "welcome", Status: "pending", NextAttemptAt: now, CreatedAt: now,
 		}); err != nil {
 			t.Fatalf("upsert reset message: %v", err)
 		}
@@ -123,9 +123,17 @@ func TestCountRecentEmailMessagesBacksThrottling(t *testing.T) {
 	ctx := context.Background()
 	store := outboxTestStore(t)
 	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	user := domain.User{ID: "owner-1", Username: "owner", Email: "owner@example.test", Role: domain.RoleUser, CreatedAt: now, UpdatedAt: now}
+	if err := store.CreateUser(ctx, user, "hash"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreatePasswordResetToken(ctx, domain.PasswordResetToken{TokenHash: "reset-hash", UserID: user.ID, Recipient: user.Email, Purpose: domain.TokenPurposeReset, CreatedAt: now, ExpiresAt: now.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.UpsertEmailMessage(ctx, domain.EmailMessage{
 		Kind: domain.EmailKindPasswordReset, UserID: "owner-1", Recipient: "owner@example.test",
 		Subject: "reset", Body: "link", Status: "pending", NextAttemptAt: now, CreatedAt: now,
+		CredentialTokenHash: "reset-hash",
 	}); err != nil {
 		t.Fatalf("queue reset: %v", err)
 	}
@@ -158,14 +166,20 @@ func TestChangingAnEmailRetiresItsCredentialLinksAndQueuedMail(t *testing.T) {
 		if err := store.CreatePasswordResetToken(ctx, domain.PasswordResetToken{
 			TokenHash: "hash-" + purpose, UserID: user.ID, Purpose: purpose,
 			ExpiresAt: now.Add(time.Hour), CreatedAt: now,
+			Recipient: user.Email, CredentialVersion: user.CredentialVersion,
 		}); err != nil {
 			t.Fatalf("create %s token: %v", purpose, err)
 		}
 	}
 	for _, kind := range []string{domain.EmailKindInvitation, domain.EmailKindPasswordReset, domain.EmailKindWorkspaceDeleted} {
+		tokenHash := "hash-" + domain.TokenPurposeReset
+		if kind == domain.EmailKindInvitation {
+			tokenHash = "hash-" + domain.TokenPurposeInvitation
+		}
 		if err := store.UpsertEmailMessage(ctx, domain.EmailMessage{
 			Kind: kind, UserID: user.ID, Recipient: user.Email, Subject: kind, Body: "body",
 			Status: "pending", NextAttemptAt: now, CreatedAt: now,
+			CredentialTokenHash: tokenHash,
 		}); err != nil {
 			t.Fatalf("queue %s message: %v", kind, err)
 		}
@@ -191,9 +205,14 @@ func TestChangingAnEmailRetiresItsCredentialLinksAndQueuedMail(t *testing.T) {
 	}
 
 	// Rewriting the same address is not a change and retires nothing.
+	user, err = store.FindUserByID(ctx, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := store.CreatePasswordResetToken(ctx, domain.PasswordResetToken{
 		TokenHash: "hash-kept", UserID: user.ID, Purpose: domain.TokenPurposeReset,
 		ExpiresAt: now.Add(time.Hour), CreatedAt: now,
+		Recipient: user.Email, CredentialVersion: user.CredentialVersion,
 	}); err != nil {
 		t.Fatalf("create token: %v", err)
 	}

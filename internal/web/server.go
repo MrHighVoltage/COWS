@@ -1015,7 +1015,12 @@ func (s *Server) passwordPost(w http.ResponseWriter, r *http.Request) {
 		s.render(w, http.StatusBadRequest, "password-page", pageData{Title: "Change password | COWS", User: user, CSRFToken: s.ensureCSRF(w, r), Password: passwordFormData{Error: "The new passwords do not match."}})
 		return
 	}
-	if err := s.auth.ChangePassword(r.Context(), user.ID, r.FormValue("current_password"), r.FormValue("new_password")); err != nil {
+	session, err := r.Cookie(sessionCookieName)
+	if err != nil {
+		http.Error(w, "invalid request", http.StatusForbidden)
+		return
+	}
+	if err := s.auth.ChangePassword(r.Context(), user.ID, r.FormValue("current_password"), r.FormValue("new_password"), session.Value); err != nil {
 		message := "The password could not be changed."
 		if errors.Is(err, auth.ErrInvalidCredentials) {
 			message = "The current password is incorrect."
@@ -1024,9 +1029,6 @@ func (s *Server) passwordPost(w http.ResponseWriter, r *http.Request) {
 		}
 		s.render(w, http.StatusBadRequest, "password-page", pageData{Title: "Change password | COWS", User: user, CSRFToken: s.ensureCSRF(w, r), Password: passwordFormData{Error: message}})
 		return
-	}
-	if cookie, cerr := r.Cookie(sessionCookieName); cerr == nil {
-		_ = s.auth.RevokeOtherSessions(r.Context(), user.ID, cookie.Value)
 	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }

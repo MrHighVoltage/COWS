@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/cows-project/cows/internal/domain"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -115,12 +117,47 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			tx.Rollback()
 			return fmt.Errorf("apply migration %d: %w", version, err)
 		}
+		if version == 30 {
+			if err := backfillEmailKeys(ctx, tx); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("apply migration %d: %w", version, err)
+			}
+		}
 		if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (version, applied_at) VALUES (?, datetime('now'))", version); err != nil {
 			tx.Rollback()
 			return fmt.Errorf("record migration %d: %w", version, err)
 		}
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("commit migration %d: %w", version, err)
+		}
+	}
+	return nil
+}
+
+func backfillEmailKeys(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, "SELECT id, email FROM users")
+	if err != nil {
+		return fmt.Errorf("load email keys: %w", err)
+	}
+	defer rows.Close()
+	type accountEmail struct{ id, email string }
+	var accounts []accountEmail
+	for rows.Next() {
+		var account accountEmail
+		if err := rows.Scan(&account.id, &account.email); err != nil {
+			return fmt.Errorf("read email key: %w", err)
+		}
+		accounts = append(accounts, account)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read email keys: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close email key rows: %w", err)
+	}
+	for _, account := range accounts {
+		if _, err := tx.ExecContext(ctx, "UPDATE users SET email_key = ? WHERE id = ?", domain.EmailKey(account.email), account.id); err != nil {
+			return fmt.Errorf("backfill unique email keys: %w", err)
 		}
 	}
 	return nil

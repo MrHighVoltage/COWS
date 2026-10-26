@@ -1,6 +1,15 @@
 package domain
 
-import "time"
+import (
+	"strings"
+	"time"
+)
+
+// EmailKey is the case-insensitive account lookup and uniqueness key. Keep the
+// original address separately for display and mail delivery.
+func EmailKey(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
 
 type Role string
 
@@ -21,8 +30,10 @@ type User struct {
 	Role               Role
 	Disabled           bool
 	MustChangePassword bool
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	// CredentialVersion invalidates issuance based on an earlier account snapshot.
+	CredentialVersion int64
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 type Group struct {
@@ -38,11 +49,12 @@ func (u User) IsAdministrator() bool {
 }
 
 type Session struct {
-	TokenHash string
-	UserID    string
-	CreatedAt time.Time
-	ExpiresAt time.Time
-	LastSeen  time.Time
+	TokenHash         string
+	UserID            string
+	CreatedAt         time.Time
+	ExpiresAt         time.Time
+	LastSeen          time.Time
+	CredentialVersion int64
 }
 
 type AuditEvent struct {

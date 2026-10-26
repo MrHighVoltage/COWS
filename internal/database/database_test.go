@@ -34,8 +34,12 @@ func TestOpenInitializesSQLite(t *testing.T) {
 	if err := db.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&migrations); err != nil {
 		t.Fatalf("count migrations: %v", err)
 	}
-	if migrations != 29 {
-		t.Fatalf("migration count = %d, want 29", migrations)
+	entries, err := migrationFiles.ReadDir("migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if migrations != len(entries) {
+		t.Fatalf("migration count = %d, want %d", migrations, len(entries))
 	}
 
 	var metadataTable string
@@ -65,8 +69,12 @@ func TestOpenReusesAppliedMigration(t *testing.T) {
 	if err := second.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&migrations); err != nil {
 		t.Fatalf("count migrations: %v", err)
 	}
-	if migrations != 29 {
-		t.Fatalf("migration count = %d, want 29", migrations)
+	entries, err := migrationFiles.ReadDir("migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if migrations != len(entries) {
+		t.Fatalf("migration count = %d, want %d", migrations, len(entries))
 	}
 	if err := second.Ping(); err != nil && err != sql.ErrConnDone {
 		t.Fatalf("ping reopened database: %v", err)

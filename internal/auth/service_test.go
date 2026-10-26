@@ -73,7 +73,7 @@ func TestBootstrapAuthenticateAndSession(t *testing.T) {
 	if !user.MustChangePassword {
 		t.Fatal("new administrator should require a password change")
 	}
-	if err := service.ChangePassword(ctx, user.ID, "correct horse battery staple", "changed correct horse battery staple"); err != nil {
+	if err := service.ChangePassword(ctx, user.ID, "correct horse battery staple", "changed correct horse battery staple", token); err != nil {
 		t.Fatalf("change bootstrap password: %v", err)
 	}
 	sessionUser, err := service.UserForSession(ctx, token)

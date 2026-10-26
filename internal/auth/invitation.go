@@ -79,7 +79,7 @@ func (s *Service) CreateUserWithInvitation(ctx context.Context, actorID string, 
 	if err := s.store.CreateUser(ctx, user, hash); err != nil {
 		return domain.User{}, InvitationRequest{}, err
 	}
-	rawToken, expiresAt, err := s.issueToken(ctx, user.ID, domain.TokenPurposeInvitation, s.invitationLifetime)
+	rawToken, expiresAt, err := s.issueToken(ctx, user, domain.TokenPurposeInvitation, s.invitationLifetime)
 	if err != nil {
 		return domain.User{}, InvitationRequest{}, err
 	}
@@ -124,7 +124,7 @@ func (s *Service) ResendInvitation(ctx context.Context, actorID, targetUserID st
 	if target.Disabled || strings.TrimSpace(target.Email) == "" {
 		return InvitationRequest{}, ErrInvitationUnavailable
 	}
-	rawToken, expiresAt, err := s.issueToken(ctx, target.ID, domain.TokenPurposeInvitation, s.invitationLifetime)
+	rawToken, expiresAt, err := s.issueToken(ctx, target, domain.TokenPurposeInvitation, s.invitationLifetime)
 	if err != nil {
 		return InvitationRequest{}, err
 	}

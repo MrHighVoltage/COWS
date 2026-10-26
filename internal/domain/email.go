@@ -21,6 +21,9 @@ type EmailMessage struct {
 	Recipient string
 	Subject   string
 	Body      string
+	// CredentialTokenHash is used only when enqueueing a credential link, to
+	// refuse mail whose token or recipient was superseded before enqueueing.
+	CredentialTokenHash string
 	// DedupeKey is empty for one-shot mail. A non-empty value is unique across
 	// the table, so re-enqueueing updates in place instead of queueing a
 	// second copy.

@@ -34,7 +34,7 @@ var (
 	ErrRegistrationUnavailable = errors.New("registration is unavailable")
 	ErrInvalidResetToken       = errors.New("invalid or expired password reset token")
 	ErrRecoveryTargetInvalid   = errors.New("recovery target must be an existing, enabled administrator")
-	ErrEmailInUse              = errors.New("email address already belongs to another account")
+	ErrEmailInUse              = repository.ErrEmailInUse
 	ErrTargetDisabled          = errors.New("the account must be enabled")
 	ErrSelfPasswordSet         = errors.New("administrator cannot set their own password from the user editor")
 )
@@ -204,12 +204,16 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 	}
 	now := s.now().UTC()
 	if err := s.store.CreateSession(ctx, domain.Session{
-		TokenHash: hashToken(rawToken),
-		UserID:    record.User.ID,
-		CreatedAt: now,
-		ExpiresAt: now.Add(s.sessionLifetime),
-		LastSeen:  now,
+		TokenHash:         hashToken(rawToken),
+		UserID:            record.User.ID,
+		CreatedAt:         now,
+		ExpiresAt:         now.Add(s.sessionLifetime),
+		LastSeen:          now,
+		CredentialVersion: record.User.CredentialVersion,
 	}); err != nil {
+		if errors.Is(err, repository.ErrConflict) {
+			return domain.User{}, "", ErrInvalidCredentials
+		}
 		return domain.User{}, "", err
 	}
 	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: record.User.ID, EventType: auditLoginSuccess, TargetType: "user", TargetID: record.User.ID})
@@ -230,7 +234,12 @@ func (s *Service) Logout(ctx context.Context, rawToken string) error {
 	return s.store.DeleteSession(ctx, hashToken(rawToken))
 }
 
-func (s *Service) ChangePassword(ctx context.Context, userID, currentPassword, newPassword string) error {
+// ChangePassword atomically replaces the password and revokes credential links
+// and sessions. A caller may preserve its current session by supplying its token.
+func (s *Service) ChangePassword(ctx context.Context, userID, currentPassword, newPassword string, keepRawToken ...string) error {
+	if len(keepRawToken) > 1 {
+		return ErrInvalidInput
+	}
 	record, err := s.store.FindUserCredentialsByID(ctx, userID)
 	if err != nil {
 		return err
@@ -242,13 +251,14 @@ func (s *Service) ChangePassword(ctx context.Context, userID, currentPassword, n
 	if err != nil {
 		return err
 	}
-	if err := s.store.UpdateUserPassword(ctx, userID, hash, false); err != nil {
-		return err
+	keepHash := ""
+	if len(keepRawToken) == 1 && keepRawToken[0] != "" {
+		keepHash = hashToken(keepRawToken[0])
 	}
-	// A reset or invitation link mailed earlier must not survive the change it
-	// was meant to bring about; the caller keeps its own session, so sessions
-	// are left to RevokeOtherSessions.
-	if err := s.store.InvalidateUserCredentialTokens(ctx, userID); err != nil {
+	if err := s.store.ReplaceUserPassword(ctx, userID, hash, false, record.User.CredentialVersion, keepHash); err != nil {
+		if errors.Is(err, repository.ErrConflict) {
+			return ErrInvalidCredentials
+		}
 		return err
 	}
 	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: userID, EventType: "password.changed", TargetType: "user", TargetID: userID})
@@ -256,10 +266,8 @@ func (s *Service) ChangePassword(ctx context.Context, userID, currentPassword, n
 }
 
 // RevokeOtherSessions deletes every session for userID except the one backing
-// keepRawToken. It is called after a successful password change so that a
-// stolen session cannot outlive the password change; the caller's own session
-// is preserved so the first-login password-change flow stays logged in. A blank
-// keepRawToken revokes all sessions for the user.
+// keepRawToken. Password changes perform their revocation atomically themselves;
+// this operation is for a standalone session revocation. A blank token revokes all.
 func (s *Service) RevokeOtherSessions(ctx context.Context, userID, keepRawToken string) error {
 	return s.store.DeleteSessionsForUserExcept(ctx, userID, hashToken(keepRawToken))
 }
@@ -292,7 +300,10 @@ func (s *Service) RequestPasswordReset(ctx context.Context, identifier string) (
 	if recent > 0 {
 		return PasswordResetRequest{}, nil
 	}
-	rawToken, expiresAt, err := s.issueToken(ctx, record.User.ID, domain.TokenPurposeReset, s.passwordResetLifetime)
+	rawToken, expiresAt, err := s.issueToken(ctx, record.User, domain.TokenPurposeReset, s.passwordResetLifetime, s.passwordResetMinInterval)
+	if errors.Is(err, repository.ErrConflict) {
+		return PasswordResetRequest{}, nil
+	}
 	if err != nil {
 		return PasswordResetRequest{}, err
 	}
@@ -353,7 +364,7 @@ func (s *Service) RecoverAdministrator(ctx context.Context, username string) (st
 	if err != nil {
 		return "", err
 	}
-	if err := s.replaceCredential(ctx, record.User.ID, hash); err != nil {
+	if err := s.replaceCredential(ctx, record.User, hash); err != nil {
 		return "", err
 	}
 	s.recordAudit(ctx, domain.AuditEvent{EventType: auditAdminRecovered, TargetType: "user", TargetID: record.User.ID})
@@ -630,7 +641,7 @@ func (s *Service) SetUserPassword(ctx context.Context, actorID, targetID, newPas
 	if err != nil {
 		return err
 	}
-	if err := s.replaceCredential(ctx, targetID, hash); err != nil {
+	if err := s.replaceCredential(ctx, target, hash); err != nil {
 		return err
 	}
 	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: auditUserPasswordSet, TargetType: "user", TargetID: targetID})
@@ -875,16 +886,21 @@ func hashToken(raw string) string {
 // issued here so the three call sites cannot drift apart on lifetime, hashing,
 // or purpose scoping. CreatePasswordResetToken replaces the account's previous
 // token of the same purpose and cancels any queued message carrying it.
-func (s *Service) issueToken(ctx context.Context, userID, purpose string, lifetime time.Duration) (string, time.Time, error) {
+func (s *Service) issueToken(ctx context.Context, user domain.User, purpose string, lifetime time.Duration, minInterval ...time.Duration) (string, time.Time, error) {
 	rawToken, err := randomToken()
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("create %s token: %w", purpose, err)
 	}
 	now := s.now().UTC()
 	expiresAt := now.Add(lifetime)
+	interval := time.Duration(0)
+	if len(minInterval) > 0 {
+		interval = minInterval[0]
+	}
 	if err := s.store.CreatePasswordResetToken(ctx, domain.PasswordResetToken{
-		TokenHash: hashToken(rawToken), UserID: userID, Purpose: purpose,
+		TokenHash: hashToken(rawToken), UserID: user.ID, Purpose: purpose,
 		ExpiresAt: expiresAt, CreatedAt: now,
+		CredentialVersion: user.CredentialVersion, Recipient: user.Email, MinInterval: interval,
 	}); err != nil {
 		return "", time.Time{}, err
 	}
@@ -908,14 +924,8 @@ func hashPassword(value string) (string, error) {
 // password at the next sign-in, no session may outlive the credential it was
 // opened with, and any invitation or reset link mailed earlier must stop working
 // now that the credential has been replaced by another route.
-func (s *Service) replaceCredential(ctx context.Context, userID, passwordHash string) error {
-	if err := s.store.UpdateUserPassword(ctx, userID, passwordHash, true); err != nil {
-		return err
-	}
-	if err := s.store.DeleteSessionsForUser(ctx, userID); err != nil {
-		return err
-	}
-	return s.store.InvalidateUserCredentialTokens(ctx, userID)
+func (s *Service) replaceCredential(ctx context.Context, user domain.User, passwordHash string) error {
+	return s.store.ReplaceUserPassword(ctx, user.ID, passwordHash, true, user.CredentialVersion, "")
 }
 
 // emailAvailable reports whether an address is free, or already belongs to
@@ -955,7 +965,7 @@ func (s *Service) SendPasswordResetFor(ctx context.Context, actorID, targetUserI
 	if target.Disabled || strings.TrimSpace(target.Email) == "" {
 		return PasswordResetRequest{}, ErrRecoveryTargetInvalid
 	}
-	rawToken, expiresAt, err := s.issueToken(ctx, target.ID, domain.TokenPurposeReset, s.passwordResetLifetime)
+	rawToken, expiresAt, err := s.issueToken(ctx, target, domain.TokenPurposeReset, s.passwordResetLifetime)
 	if err != nil {
 		return PasswordResetRequest{}, err
 	}
