@@ -25,6 +25,27 @@ func assertFieldMarked(t *testing.T, err error, fields ...string) {
 	}
 }
 
+func TestTemplateMountsProtectTerminalCleanupSystemFiles(t *testing.T) {
+	for _, target := range []string{"/bin", "/bin/kill", "/usr", "/usr/bin", "/usr/bin/kill", "/lib", "/lib64", "/usr/lib", "/usr/lib64/ld-linux.so.2", "/etc", "/etc/ld.so.preload", "/etc/ld.so.cache"} {
+		t.Run(target, func(t *testing.T) {
+			configuration := domain.TemplateConfiguration{Mounts: []domain.TemplateMount{{Name: "data", ContainerPath: target}}}
+			err := validateTemplateConfiguration(configuration)
+			if err == nil {
+				t.Fatalf("accepted mount covering trusted system files: %q", target)
+			}
+			assertFieldMarked(t, err, "config_mount_0_container_path")
+		})
+	}
+	for _, target := range []string{"/data", "/home/alice", "/usr/local/share/data", "/binary", "/library", "/etc/project"} {
+		t.Run(target, func(t *testing.T) {
+			configuration := domain.TemplateConfiguration{Mounts: []domain.TemplateMount{{Name: "data", ContainerPath: target}}}
+			if err := validateTemplateConfiguration(configuration); err != nil {
+				t.Fatalf("safe mount rejected: %v", err)
+			}
+		})
+	}
+}
+
 func TestResolveConfigurationBuildsContainerUserFromCOWSUser(t *testing.T) {
 	uid, gid := int64(1000), int64(1001)
 	configuration := domain.TemplateConfiguration{

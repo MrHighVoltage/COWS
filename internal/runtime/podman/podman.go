@@ -645,7 +645,7 @@ func validRuntimeConfiguration(spec runtime.WorkspaceSpec) bool {
 		if mountType == "" {
 			mountType = "volume"
 		}
-		if !validWorkspaceID(value.Name) || (mountType != "volume" && mountType != "bind") || value.ContainerPath == "" || value.ContainerPath[0] != '/' || strings.Contains(value.ContainerPath, "..") || strings.ContainsAny(value.ContainerPath, "\x00\r\n") || (mountType == "bind" && value.Source == "") || strings.ContainsAny(value.Source, "\x00\r\n") {
+		if !validWorkspaceID(value.Name) || (mountType != "volume" && mountType != "bind") || value.ContainerPath == "" || value.ContainerPath[0] != '/' || strings.Contains(value.ContainerPath, "..") || strings.ContainsAny(value.ContainerPath, "\x00\r\n") || runtime.ProtectedSystemMount(value.ContainerPath) || (mountType == "bind" && value.Source == "") || strings.ContainsAny(value.Source, "\x00\r\n") {
 			return false
 		}
 		if mountType == "bind" && !filepath.IsAbs(value.Source) {
@@ -825,7 +825,7 @@ func (a *Adapter) openShell(ctx context.Context, runtimeID, user string, command
 		return nil, fmt.Errorf("%w: Podman returned invalid exec ID", runtime.ErrInvalidObservation)
 	}
 	cleanupOpenError := func(openErr error) (runtime.Terminal, error) {
-		cleanupErr := a.terminateExec(context.Background(), runtimeID, created.ID, command[0])
+		cleanupErr := a.terminateExec(context.Background(), runtimeID, created.ID)
 		return nil, errors.Join(openErr, cleanupErr)
 	}
 	version, err := a.version(ctx)
@@ -863,7 +863,7 @@ func (a *Adapter) openShell(ctx context.Context, runtimeID, user string, command
 		response.Body.Close()
 		return cleanupOpenError(fmt.Errorf("%w: Podman did not return a writable exec stream", runtime.ErrUnavailable))
 	}
-	return &terminal{stream: stream, adapter: a, runtimeID: runtimeID, execID: created.ID, cleanupShell: command[0]}, nil
+	return &terminal{stream: stream, adapter: a, runtimeID: runtimeID, execID: created.ID}, nil
 }
 
 func (a *Adapter) OpenInternalService(ctx context.Context, runtimeID string, containerPort, hostPort int) (io.ReadWriteCloser, error) {
@@ -895,13 +895,12 @@ func (a *Adapter) OpenInternalService(ctx context.Context, runtimeID string, con
 }
 
 type terminal struct {
-	stream       io.ReadWriteCloser
-	adapter      *Adapter
-	runtimeID    string
-	execID       string
-	cleanupShell string
-	closeOnce    sync.Once
-	closeErr     error
+	stream    io.ReadWriteCloser
+	adapter   *Adapter
+	runtimeID string
+	execID    string
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func (t *terminal) Read(value []byte) (int, error)  { return t.stream.Read(value) }
@@ -911,7 +910,7 @@ func (t *terminal) Close() error {
 		// Inspect and terminate the exec while its upgraded stream is still
 		// attached. Closing the stream first can detach conmon without stopping
 		// the shell, leaving a process that cannot be reconnected to.
-		cleanupErr := t.adapter.terminateExec(context.Background(), t.runtimeID, t.execID, t.cleanupShell)
+		cleanupErr := t.adapter.terminateExec(context.Background(), t.runtimeID, t.execID)
 		streamErr := t.stream.Close()
 		t.closeErr = errors.Join(streamErr, cleanupErr)
 	})
@@ -931,8 +930,8 @@ type execInspection struct {
 	PID     int  `json:"Pid"`
 }
 
-func (a *Adapter) terminateExec(ctx context.Context, runtimeID, execID, shell string) error {
-	if !validRuntimeID(runtimeID) || !validRuntimeID(execID) || shell == "" {
+func (a *Adapter) terminateExec(ctx context.Context, runtimeID, execID string) error {
+	if !validRuntimeID(runtimeID) || !validRuntimeID(execID) {
 		return runtime.ErrConflict
 	}
 	cleanupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -947,13 +946,56 @@ func (a *Adapter) terminateExec(ctx context.Context, runtimeID, execID, shell st
 	if !inspection.Running || inspection.PID <= 0 {
 		return nil
 	}
+	var container containerInspect
+	if err := a.get(cleanupCtx, "/containers/"+url.PathEscape(runtimeID)+"/json", &container); err != nil {
+		return err
+	}
+	for _, mount := range container.Mounts {
+		if runtime.ProtectedSystemMount(mount.Destination) {
+			return fmt.Errorf("%w: terminal cleanup system files are covered by a mount", runtime.ErrConflict)
+		}
+	}
+	// Podman exec merges these overrides into the image/template environment.
+	// Clear every inherited variable before executing any code as container root.
+	environment := make([]string, 0, len(container.Config.Env))
+	for _, value := range container.Config.Env {
+		name, _, ok := strings.Cut(value, "=")
+		if !ok || name == "" || strings.ContainsRune(name, '\x00') {
+			return fmt.Errorf("%w: invalid container environment", runtime.ErrInvalidObservation)
+		}
+		environment = append(environment, name+"=")
+	}
 	pid, err := namespacePID(inspection.PID)
 	if err != nil {
 		return err
 	}
-	command := "kill -TERM -" + strconv.Itoa(pid) + " 2>/dev/null || kill -TERM " + strconv.Itoa(pid) + "; sleep 1; kill -KILL -" + strconv.Itoa(pid) + " 2>/dev/null || kill -KILL " + strconv.Itoa(pid) + " 2>/dev/null || true"
+	if err := a.signalExec(cleanupCtx, runtimeID, pid, "TERM", environment, true); err != nil {
+		return err
+	}
+	select {
+	case <-cleanupCtx.Done():
+		return cleanupCtx.Err()
+	case <-time.After(time.Second):
+	}
+	var latest execInspection
+	if err := a.get(cleanupCtx, "/exec/"+url.PathEscape(execID)+"/json", &latest); err != nil && !errors.Is(err, runtime.ErrNotFound) {
+		return err
+	}
+	if latest.Running && latest.PID != inspection.PID {
+		return fmt.Errorf("%w: terminal exec PID changed during cleanup", runtime.ErrInvalidObservation)
+	}
+	// A group can outlive its leader. Still kill that group, but never target
+	// the positive PID after its managed exec has ended and it could be reused.
+	return a.signalExec(cleanupCtx, runtimeID, pid, "KILL", environment, latest.Running)
+}
+
+func (a *Adapter) signalExec(ctx context.Context, runtimeID string, pid int, signal string, environment []string, includePID bool) error {
 	var created struct {
 		ID string `json:"Id"`
+	}
+	command := []string{"/bin/kill", "-" + signal, "--", "-" + strconv.Itoa(pid)}
+	if includePID {
+		command = append(command, strconv.Itoa(pid))
 	}
 	body := struct {
 		AttachStdin  bool     `json:"AttachStdin"`
@@ -962,17 +1004,19 @@ func (a *Adapter) terminateExec(ctx context.Context, runtimeID, execID, shell st
 		Tty          bool     `json:"Tty"`
 		Cmd          []string `json:"Cmd"`
 		User         string   `json:"User,omitempty"`
-	}{Cmd: []string{shell, "-c", command}, User: "0"}
-	if err := a.mutation(cleanupCtx, http.MethodPost, "/containers/"+url.PathEscape(runtimeID)+"/exec", &body, &created); err != nil {
+		Env          []string `json:"Env"`
+		WorkingDir   string   `json:"WorkingDir"`
+	}{Cmd: command, User: "0", Env: environment, WorkingDir: "/"}
+	if err := a.mutation(ctx, http.MethodPost, "/containers/"+url.PathEscape(runtimeID)+"/exec", &body, &created); err != nil {
 		return err
 	}
 	if !validRuntimeID(created.ID) {
 		return fmt.Errorf("%w: Podman returned invalid terminal cleanup exec ID", runtime.ErrInvalidObservation)
 	}
-	if err := a.mutation(cleanupCtx, http.MethodPost, "/exec/"+url.PathEscape(created.ID)+"/start", map[string]bool{"Detach": true, "Tty": false}, nil); err != nil {
+	if err := a.mutation(ctx, http.MethodPost, "/exec/"+url.PathEscape(created.ID)+"/start", map[string]bool{"Detach": true, "Tty": false}, nil); err != nil {
 		return err
 	}
-	return a.waitForExec(cleanupCtx, created.ID)
+	return a.waitForExec(ctx, created.ID)
 }
 
 func (a *Adapter) waitForExec(ctx context.Context, execID string) error {
@@ -1035,7 +1079,11 @@ type containerInspect struct {
 	SizeRw int64  `json:"SizeRw"`
 	Config struct {
 		Labels map[string]string `json:"Labels"`
+		Env    []string          `json:"Env"`
 	} `json:"Config"`
+	Mounts []struct {
+		Destination string `json:"Destination"`
+	} `json:"Mounts"`
 	State struct {
 		Status   string `json:"Status"`
 		ExitCode int    `json:"ExitCode"`

@@ -7,9 +7,9 @@
 //	COWS_PODMAN_TEST_IMAGE=docker.io/library/debian:bookworm \
 //	  go test -tags podman_integration ./internal/runtime/podman/
 //
-// The image must already be present locally, provide sh, sleep, cat, id, and
-// stat, and must not already define UID 2000. Test data lives in a temporary
-// directory outside the repository.
+// The image must already be present locally, provide sh, sleep, cat, id, stat,
+// grep, and /bin/kill, and must not already define UID 2000. Test data lives in
+// a temporary directory outside the repository.
 package podman
 
 import (

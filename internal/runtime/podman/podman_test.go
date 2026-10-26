@@ -334,7 +334,8 @@ func TestOpenShellUsesPodmanExecUpgradeAndResize(t *testing.T) {
 func TestTerminalCloseTerminatesExec(t *testing.T) {
 	cleanupStarted := false
 	cleanupUser := ""
-	var cleanupCommand []string
+	var cleanupCommands [][]string
+	var cleanupEnvironment []string
 	var events []string
 	stream := &testStream{Reader: strings.NewReader("shell> "), onClose: func() { events = append(events, "stream-close") }}
 	adapter := &Adapter{client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -343,8 +344,10 @@ func TestTerminalCloseTerminatesExec(t *testing.T) {
 			return podmanResponse(http.StatusOK, `{"ApiVersion":"1.45"}`), nil
 		case "/v1.45/containers/abcdef0123456789/exec":
 			var body struct {
-				Cmd  []string `json:"Cmd"`
-				User string   `json:"User"`
+				Cmd        []string `json:"Cmd"`
+				User       string   `json:"User"`
+				Env        []string `json:"Env"`
+				WorkingDir string   `json:"WorkingDir"`
 			}
 			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 				return nil, err
@@ -352,7 +355,11 @@ func TestTerminalCloseTerminatesExec(t *testing.T) {
 			if body.User == "0" {
 				events = append(events, "cleanup-create")
 				cleanupUser = body.User
-				cleanupCommand = body.Cmd
+				cleanupCommands = append(cleanupCommands, body.Cmd)
+				cleanupEnvironment = body.Env
+				if body.WorkingDir != "/" {
+					t.Fatalf("cleanup working directory = %q", body.WorkingDir)
+				}
 				return podmanResponse(http.StatusCreated, `{"Id":"c1ea12345678"}`), nil
 			}
 			return podmanResponse(http.StatusCreated, `{"Id":"abc123"}`), nil
@@ -361,6 +368,8 @@ func TestTerminalCloseTerminatesExec(t *testing.T) {
 		case "/v1.45/exec/abc123/json":
 			events = append(events, "inspect")
 			return podmanResponse(http.StatusOK, `{"Running":true,"Pid":`+strconv.Itoa(os.Getpid())+`}`), nil
+		case "/v1.45/containers/abcdef0123456789/json":
+			return podmanResponse(http.StatusOK, `{"Config":{"Env":["PATH=/data/bin","LD_PRELOAD=/data/evil.so","ENV=/data/startup","BASH_ENV=/data/startup"]},"Mounts":[{"Destination":"/data"}]}`), nil
 		case "/v1.45/exec/c1ea12345678/start":
 			events = append(events, "cleanup-start")
 			var body struct {
@@ -380,18 +389,111 @@ func TestTerminalCloseTerminatesExec(t *testing.T) {
 			return podmanResponse(http.StatusNotFound, `not found`), nil
 		}
 	})}}
-	terminal, err := adapter.OpenShell(context.Background(), "abcdef0123456789", []string{"/bin/sh", "-l"})
+	terminal, err := adapter.OpenShell(context.Background(), "abcdef0123456789", []string{"/data/user-controlled-shell", "-l"})
 	if err != nil {
 		t.Fatalf("open shell: %v", err)
 	}
 	if err := terminal.Close(); err != nil {
 		t.Fatalf("close terminal: %v", err)
 	}
-	if !cleanupStarted || cleanupUser != "0" || len(cleanupCommand) != 3 || cleanupCommand[0] != "/bin/sh" || cleanupCommand[1] != "-c" || !strings.Contains(cleanupCommand[2], "kill -TERM -") {
-		t.Fatalf("unexpected terminal cleanup: started=%v user=%q command=%q", cleanupStarted, cleanupUser, cleanupCommand)
+	if !cleanupStarted || cleanupUser != "0" || len(cleanupCommands) != 2 {
+		t.Fatalf("unexpected terminal cleanup: started=%v user=%q commands=%q", cleanupStarted, cleanupUser, cleanupCommands)
 	}
-	if got, want := strings.Join(events, ","), "inspect,cleanup-create,cleanup-start,stream-close"; got != want {
+	pid, err := namespacePID(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, signal := range []string{"TERM", "KILL"} {
+		want := "/bin/kill -" + signal + " -- -" + strconv.Itoa(pid) + " " + strconv.Itoa(pid)
+		if got := strings.Join(cleanupCommands[index], " "); got != want {
+			t.Fatalf("cleanup command=%q, want %q", got, want)
+		}
+	}
+	if got, want := strings.Join(cleanupEnvironment, ","), "PATH=,LD_PRELOAD=,ENV=,BASH_ENV="; got != want {
+		t.Fatalf("cleanup environment=%q, want %q", got, want)
+	}
+	if got, want := strings.Join(events, ","), "inspect,cleanup-create,cleanup-start,inspect,cleanup-create,cleanup-start,stream-close"; got != want {
 		t.Fatalf("terminal close order = %q, want %q", got, want)
+	}
+}
+
+func TestTerminalCleanupRejectsMountsCoveringTrustedPrograms(t *testing.T) {
+	for _, target := range []string{"/bin", "/usr", "/usr/bin/kill", "/lib64", "/usr/lib/x86_64-linux-gnu", "/etc/ld.so.preload"} {
+		t.Run(target, func(t *testing.T) {
+			adapter := &Adapter{client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				switch request.URL.Path {
+				case "/version":
+					return podmanResponse(http.StatusOK, `{"ApiVersion":"1.45"}`), nil
+				case "/v1.45/exec/abc123/json":
+					return podmanResponse(http.StatusOK, `{"Running":true,"Pid":`+strconv.Itoa(os.Getpid())+`}`), nil
+				case "/v1.45/containers/abcdef0123456789/json":
+					return podmanResponse(http.StatusOK, `{"Mounts":[{"Destination":"`+target+`"}]}`), nil
+				default:
+					t.Fatalf("unsafe cleanup issued request %s", request.URL.Path)
+					return nil, errors.New("unexpected cleanup request")
+				}
+			})}}
+			if err := adapter.terminateExec(context.Background(), "abcdef0123456789", "abc123"); !errors.Is(err, runtime.ErrConflict) {
+				t.Fatalf("cleanup error=%v, want runtime conflict", err)
+			}
+			spec := runtime.WorkspaceSpec{Mounts: []runtime.Mount{{Name: "data", ContainerPath: target}}}
+			if validRuntimeConfiguration(spec) {
+				t.Fatalf("runtime create accepted protected mount %q", target)
+			}
+		})
+	}
+}
+
+func TestTerminalCleanupGuardsPIDReuseAfterGrace(t *testing.T) {
+	for _, outcome := range []string{"exited", "missing", "changed"} {
+		t.Run(outcome, func(t *testing.T) {
+			inspections := 0
+			var commands [][]string
+			adapter := &Adapter{client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				switch request.URL.Path {
+				case "/version":
+					return podmanResponse(http.StatusOK, `{"ApiVersion":"1.45"}`), nil
+				case "/v1.45/exec/abc123/json":
+					inspections++
+					if inspections == 1 {
+						return podmanResponse(http.StatusOK, `{"Running":true,"Pid":`+strconv.Itoa(os.Getpid())+`}`), nil
+					}
+					if outcome == "missing" {
+						return podmanResponse(http.StatusNotFound, `{}`), nil
+					}
+					if outcome == "changed" {
+						return podmanResponse(http.StatusOK, `{"Running":true,"Pid":1}`), nil
+					}
+					return podmanResponse(http.StatusOK, `{"Running":false}`), nil
+				case "/v1.45/containers/abcdef0123456789/json":
+					return podmanResponse(http.StatusOK, `{}`), nil
+				case "/v1.45/containers/abcdef0123456789/exec":
+					var body struct{ Cmd []string }
+					if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+						return nil, err
+					}
+					commands = append(commands, body.Cmd)
+					return podmanResponse(http.StatusCreated, `{"Id":"c1ea123"}`), nil
+				case "/v1.45/exec/c1ea123/start":
+					return podmanResponse(http.StatusOK, ``), nil
+				case "/v1.45/exec/c1ea123/json":
+					return podmanResponse(http.StatusOK, `{"Running":false,"ExitCode":1}`), nil
+				default:
+					t.Fatalf("unexpected request %s", request.URL.Path)
+					return nil, errors.New("unexpected request")
+				}
+			})}}
+			err := adapter.terminateExec(context.Background(), "abcdef0123456789", "abc123")
+			if outcome == "changed" {
+				if !errors.Is(err, runtime.ErrInvalidObservation) || len(commands) != 1 {
+					t.Fatalf("changed PID cleanup error=%v commands=%q", err, commands)
+				}
+				return
+			}
+			if err != nil || len(commands) != 2 || len(commands[1]) != 4 || commands[1][1] != "-KILL" || !strings.HasPrefix(commands[1][3], "-") {
+				t.Fatalf("ended exec cleanup error=%v commands=%q; want group-only KILL", err, commands)
+			}
+		})
 	}
 }
 

@@ -7,8 +7,22 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"path"
+	"strings"
 	"time"
 )
+
+// ProtectedSystemMount reports mounts that can replace the trusted system
+// executables or loader used for terminal cleanup, including usr-merge aliases.
+func ProtectedSystemMount(target string) bool {
+	target = path.Clean(target)
+	for _, protected := range []string{"/bin", "/sbin", "/lib", "/lib64", "/usr/bin", "/usr/sbin", "/usr/lib", "/usr/lib64", "/etc/ld.so.preload", "/etc/ld.so.cache"} {
+		if target == "/" || target == protected || strings.HasPrefix(protected, target+"/") || strings.HasPrefix(target, protected+"/") {
+			return true
+		}
+	}
+	return false
+}
 
 var (
 	ErrNotSupported   = errors.New("runtime: operation not supported")

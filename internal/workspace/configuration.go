@@ -256,6 +256,8 @@ func validateMounts(configuration domain.TemplateConfiguration) []error {
 		}
 		if !validContainerPath(value.ContainerPath) {
 			problems = append(problems, invalidConfiguration(field(EntryContainerPath), "The container path of mount %q must be an absolute path other than \"/\", at most 256 characters, without \"..\".", value.Name))
+		} else if runtime.ProtectedSystemMount(value.ContainerPath) {
+			problems = append(problems, invalidConfiguration(field(EntryContainerPath), "Mount %q must not replace system executables, libraries, or dynamic-loader configuration required for terminal cleanup.", value.Name))
 		}
 		if !prefixValid {
 			problems = append(problems, invalidConfiguration(field(EntryNamePrefix), "The name prefix of mount %q must be at most 32 lowercase letters, digits, underscores, or dashes.", value.Name))
