@@ -121,10 +121,11 @@ prove that rootless Podman is reachable. `/readyz` is the separate,
 runtime-aware readiness signal a reverse proxy or service supervisor should
 use for admission readiness.
 
-The initial deployment has no built-in backup or offline administrator
-credential-recovery command. Operators must follow the documented backup
-procedure and configure local password-reset email, or wait for the dedicated
-recovery implementation, before treating the installation as recoverable.
+Offline administrator credential recovery is implemented by `cows recover-admin`.
+Operators must still test the documented database/managed-data backup and restore
+procedure and separate named-volume recovery before treating the installation as
+recoverable. Built-in backup tooling and complete lifecycle repair remain future
+work.
 
 ## Deployment assumptions
 

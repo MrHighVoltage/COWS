@@ -41,8 +41,11 @@ partial operations, and compromised or misconfigured images.
 - Template configuration is administrator-controlled, typed, and resolved on
   the server. Users cannot edit template JSON, placeholders, ports, mounts, or
   runtime parameters.
-- Sessions use secure, HttpOnly, SameSite cookies where appropriate, with CSRF
-  protection for state-changing requests.
+- Sessions use secure, HttpOnly, SameSite cookies where appropriate. CSRF cookies
+  are signed with a process-local key and bound to the session; mutations require
+  the matching form token and reject cross-origin browser metadata. Signing in
+  or restarting requires old forms to be reloaded. HTTPS external URLs require
+  Secure cookies; public credential email links require HTTPS.
 - User-controlled values are escaped by `html/template` and are not inserted
   through unsafe client-side HTML APIs.
 - Requests, uploads, proxy bodies, and upstream operations have size and time
@@ -66,8 +69,11 @@ partial operations, and compromised or misconfigured images.
   editor endpoint behind switching modes and adding rows only converts the
   submitted configuration and stores nothing. Both editors show stored secret
   and environment values to administrators, as the JSON editor always has.
-- Login failures are rate-limited per source by the single COWS process. A
-  multi-instance deployment must move this control to shared infrastructure.
+- Login attempts reserve source allowance atomically before password work;
+  concurrent in-flight attempts count toward the same cap. Registration and
+  reset/invitation confirmation count successes too. These controls remain local
+  to one process and use the direct peer address; trusted-proxy identity and
+  per-account login policy remain unresolved design work.
 - `/healthz` is a liveness and database-connectivity check only. It does not
   establish rootless-Podman readiness. `/readyz` checks both dependencies
   under a bounded timeout and is unauthenticated like `/healthz`, revealing
@@ -89,7 +95,12 @@ partial operations, and compromised or misconfigured images.
   endpoint resolves an identifier to a single account, so two accounts sharing
   an address would leave it undecided which one a mailed link opens; account
   creation, CSV import, and the administrator profile editor all refuse a
-  duplicate.
+  duplicate, with a partial unique database index as the final concurrent-write
+  guard. Go derives the same Unicode-normalized key for lookup, writes, and
+  migration. Existing duplicates refuse migration without changing account data.
+  This upgrade retires legacy sessions and credential links so historically stale
+  authentication cannot survive the patch; users authenticate and request links
+  again.
 - An administrator may edit an account's email address and display name, and
   may set its password directly for deployments without email delivery. The
   username and role are not editable through that form. Setting a password is
@@ -100,7 +111,11 @@ partial operations, and compromised or misconfigured images.
   password, `recover-admin`, the account holder changing their own, or a
   consumed invitation or reset link --
   retires that account's outstanding invitation and reset tokens and cancels
-  any queued message still carrying one. A password set by an administrator
+  any queued message still carrying one. Password replacement and required
+  revocations commit in one transaction. A monotonic credential generation also
+  prevents an earlier password verification or address lookup from issuing a
+  session or link after the change. Credential-mail enqueue rechecks the current
+  token and recipient. A password set by an administrator
   additionally must be changed at the account's next sign-in and revokes every
   session for that account, including the target's own.
 - Changing an account's email address likewise invalidates its outstanding
@@ -149,13 +164,29 @@ partial operations, and compromised or misconfigured images.
   extension server-side; users never select it. The adapter fails closed on
   Podman releases older than 4.1.0, which would silently ignore the passwd
   entry instead of rejecting it.
+- COWS validates Podman's reported rootless UID/GID maps before using them:
+  container ID ranges must start at zero and be contiguous, host ranges must
+  not overlap or overflow, namespace ID zero is a single reserved slot, and no
+  subordinate range may contain the COWS service account. The file helper
+  translates a configured container identity through the same explicit map,
+  verifies `/proc/self/{uid,gid}_map` against the host IDs the adapter derived,
+  rejects a symlinked or non-directory root, resets supplementary groups, and
+  receives a minimal environment without COWS configuration or
+  credential-shaped variables. Configured-user file access must drop to a
+  nonzero mapped identity. Only image-identity file access and
+  administrator-retained-volume recovery may explicitly authorize
+  namespace-root access; that path is still rooted and server-selected.
 - A template may explicitly allow terminal sessions for selected container UIDs
   through `terminal_uids`. The browser may request one of those values, but the
   backend revalidates the allowlist before the Podman exec request. Allowing UID
   0 grants root inside that workspace, including control of writable mounts and
-  container-visible secrets; it does not grant host root under correct rootless
-  subordinate-ID mappings. It remains high risk if templates expose host paths,
-  runtime sockets, devices, unsafe capabilities, or vulnerable workloads.
+  container-visible secrets. For a template with `container_user` and the
+  private namespace, that root is a subordinate host ID. For a template without
+  `container_user`, Podman's default rootless namespace maps container UID 0 to
+  the COWS service account; the template editor warns about this high-risk
+  choice. It does not grant host root outside the container's mounts, but it
+  remains inappropriate for untrusted templates that expose host paths, runtime
+  sockets, devices, unsafe capabilities, or vulnerable workloads.
 
 ## Access gateway risks
 
@@ -174,9 +205,13 @@ pages, URLs, logs, or audit events. The current
 control-plane database stores this runtime secret and therefore requires the
 existing restrictive database-file permissions. Terminal disconnects first
 terminate the server-created Podman exec process group while its upgraded
-stream is attached, then close the transport and record the audit event;
-failure to clean up does not grant any new access and is emitted as a
-structured runtime diagnostic without terminal contents or secrets.
+stream is attached, then close the transport and record the audit event.
+Cleanup invokes trusted `/bin/kill` directly with inherited environment cleared,
+never the user-configured shell. Mounts covering system executable/library trees
+or loader configuration are rejected. Approved images must keep `/bin/kill` and
+its dependencies outside user-writable storage. Independent process groups are
+outside this cleanup scope. Failure to clean up is emitted as a structured
+runtime diagnostic without terminal contents or secrets.
 
 Generic web-application proxying and public service exposure are intentionally
 not implemented. The only template service is the server-selected desktop VNC
@@ -191,11 +226,11 @@ socket and COWS data directory, use a dedicated service account where
 practical, and avoid exposing the service directly without HTTPS and a trusted
 reverse-proxy configuration.
 
-The current deployment has no offline administrator credential-recovery
-command. Bootstrap credentials are only applied to an empty database, and
-password-reset email depends on a correctly configured external HTTPS URL and
-SMTP path. Treat loss of the last administrator credential as an operational
-failure until the dedicated local recovery path is implemented and tested.
+The local `cows recover-admin` command resets an enabled administrator and
+revokes its sessions and credential links without requiring HTTP or Podman.
+Bootstrap credentials apply only to an empty database. Email recovery still
+depends on an external HTTPS URL and SMTP. Bootstrap and SMTP passwords are
+accepted only through protected environment configuration, never CLI arguments.
 
 SQLite backup must account for WAL mode and must be paired with snapshots of the
 managed directory and archive roots. A database-only backup cannot restore
@@ -300,7 +335,12 @@ need to be verified yet. The server assigns the user role, default quota, and
   provide email verification. Local password reset is a separate,
   non-enumerating, single-use-token flow and requires an HTTPS external URL.
 
-SMTP credentials must be protected as deployment secrets. Email warnings are
+SMTP credentials must be protected as deployment secrets. Every SMTP exchange
+has a total deadline and closes on cancellation; recipient and subject headers
+are validated before connection. Credential-mail bodies contain raw bearer links
+by design, including in sent/canceled rows retained by the outbox. Protect the
+SQLite file and backups as credential-bearing data; hashing the dedicated token
+table does not remove this separate exposure. Email warnings are
 advisory and may be delayed, duplicated around process crashes, rejected by a
 relay, or unavailable. They never authorize access and never determine whether
 COWS stops or deletes a container. Notification messages exclude secrets,
@@ -336,8 +376,9 @@ operations are limited to approved images, labels, and runtime-enforced
 resource limits. Historical metrics, administrator-initiated retained-volume
 restore on behalf of a user, stronger host-level egress policy, and deeper
 runtime integration still need review. Do not deploy it as a service for
-untrusted users. Offline administrator recovery, tested backup/restore, and
-restart-safe lifecycle recovery are not yet complete.
+untrusted users. Tested backup/restore and complete lifecycle repair remain
+incomplete. Startup does reset stale connection counts, but uncertain runtime/DB outcomes still require operator
+review.
 
 ## Reporting vulnerabilities
 
@@ -346,3 +387,26 @@ vulnerabilities privately to the project maintainers rather than opening a
 public issue with exploit details. Include the affected commit, reproduction
 steps, impact, and any suggested mitigation. Do not include real credentials,
 tokens, workspace data, or host secrets in a report.
+
+## October 2026 hardening status
+
+The [2026-10-15 audit disposition](docs/implementation/security-audit-2026-10-15.md)
+records each implementation fix and the design risks deliberately retained.
+Workspace lifecycle locks now precede global admission, with cancelable waits;
+file streams cannot hold global admission while a lifecycle request waits on
+them. Reconciliation discards stale observations after a concurrent lifecycle
+change. Stream closure owns connection accounting exactly once and cannot
+subtract a connection from a later running period.
+
+New successful volume reattachments persist their actual source for file access,
+storage accounting, recreation, and retained-storage records. Older reattachments
+whose source was already lost need manual recovery. ZIP and usage walkers read
+bounded directory batches before applying entry budgets, preserving rooted access
+and stream byte limits. Listings reject symlinked base directories consistently
+with download policy.
+
+Responses carry a CSP that blocks foreign scripts, native inline script handlers,
+objects, base URLs, framing, and foreign form destinations. The current Alpine
+build still requires `unsafe-eval`, and client styling requires inline styles;
+these compatibility allowances limit CSP protection. The policy permits only
+same-authority HTTP/WebSocket connections, local fonts, and local/data images.

@@ -53,6 +53,14 @@ passes WebSocket upgrades for terminal and desktop access. The development
 process intentionally continues to serve plain HTTP; HSTS is added only by the
 TLS proxy.
 
+CSRF cookies carry an HMAC over a random nonce and the session cookie, signed
+with a process-local startup key. Form tokens must match and browser Origin/fetch
+metadata must permit the mutation. Password verification and token issuance carry
+an observed credential generation into their atomic database writes; password
+replacement, session revocation, and link/mail invalidation commit together.
+Non-empty email uniqueness is database-enforced. Source throttles reserve
+in-flight work atomically and remain process-local/direct-peer-based.
+
 ## Template runtime configuration
 
 Templates contain a validated, administrator-controlled configuration document
@@ -121,7 +129,11 @@ uses the runtime exec API's upgraded stream and keeps the runtime-specific
 transport details inside the adapter. Closing a terminal first inspects the
 COWS-owned exec and terminates its process group through a short-lived
 server-created cleanup exec while the upgraded stream is still attached; only
-then is the transport closed. This ordering prevents a disconnected browser
+then is the transport closed. Cleanup uses fixed `/bin/kill` with inherited
+environment cleared, independently of the template shell. System executable,
+library, and loader-configuration mounts are forbidden; approved images supply
+trusted cleanup binaries and dependencies. The cleanup targets the exec process
+group, not independently created groups. This ordering prevents a disconnected browser
 from leaving an interactive shell running. The browser uses the locally vendored
 xterm.js fit addon to adapt rows and columns to the available panel or full
 screen size, then forwards each resize through the authenticated WebSocket.
@@ -156,11 +168,20 @@ stop, delete, and timeout cleanup. Streamed downloads retain the lock until
 they close.
 Rootless Podman starts the local COWS file helper through `podman unshare`,
 enters the server-selected source directory, drops to the mapped container
-UID/GID, and then operates through rooted filesystem calls. For a template
-`container_user`, the adapter translates that identity through the same
-explicit mapping (`n` becomes `n+1` in the `podman unshare` namespace), so
-uploaded files belong to the user the container sees. Named volumes are
-resolved through the runtime adapter, never by browser-visible storage paths.
+UID/GID, and then operates through rooted filesystem calls. COWS first validates
+Podman's reported rootless UID/GID maps for contiguity, overlap, overflow, the
+reserved invoking-account slot, and exclusion of the COWS service account from
+the subordinate range. For a template `container_user`, the adapter translates
+that identity through the same explicit mapping (`n` becomes `n+1` in the
+`podman unshare` namespace), so uploaded files belong to the user the container
+sees. The helper verifies `/proc/self/{uid,gid}_map` against the host IDs the
+adapter derived, rejects a symlinked or non-directory root, resets supplementary
+groups, checks its final identity, and receives only the environment variables
+`podman unshare` needs rather than the COWS service environment. Namespace-root
+file access is an explicit adapter authorization used for Podman's
+image-identity mode and administrator retained-volume recovery; a configured
+container user never keeps it. Named volumes are resolved through the runtime
+adapter, never by browser-visible storage paths.
 Directory downloads can be streamed as bounded ZIP archives without
 temporary files; bounded uploads are implemented, while archive extraction and
 file previews are deferred. Explicit directory archival records workspace and
@@ -438,6 +459,22 @@ and persists observed state. Podman `exited` is normalized to COWS
 being treated as deleted. Timeout actions run only after a successful
 reconciliation pass. Managed runtime objects without a matching workspace are
 recorded as orphan audit events and are not removed automatically.
+
+Lifecycle operations take a cancelable per-workspace lock before the global
+admission lock. Runtime inspection is batched under admission, then applied under
+that same lock order only if no intervening lifecycle/session change invalidated
+the observation. Timeout actions reload state after acquiring locks. Before HTTP
+and worker startup, stale process-owned connection counts are cleared; existing
+idle deadlines survive, and previously connected workspaces get a new idle grace
+window. Returned terminal/desktop streams close and decrement once, tagged to a
+running generation so an older disconnect cannot affect a new start.
+
+Workspace JSON also persists actual reattached named-volume sources. File access,
+usage measurement, recreation, and later retention use that identity rather than
+recomputing a new-workspace name. The migration preserves deterministic naming
+for ordinary legacy workspaces; it cannot infer already-lost reattachment state.
+Archive and usage traversal read fixed-size directory batches with an entry
+budget before further reads, avoiding full-directory sorting/allocation.
 
 Lifecycle operations persist their current operation, status, safe user-facing
 error category, and timestamps. Workspace pages poll a server-rendered HTMX

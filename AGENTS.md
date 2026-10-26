@@ -40,6 +40,10 @@ Health and readiness endpoint changes must follow
 `docs/decisions/0024-runtime-aware-readiness-endpoint.md`.
 Supported Podman version changes must follow
 `docs/decisions/0028-minimum-podman-version.md`.
+Security audit hardening changes must follow
+`docs/decisions/0029-security-audit-hardening.md`.
+Rootless ID mapping and file-helper identity changes must follow
+`docs/decisions/0030-rootless-id-mapping-and-file-helper-identity.md`.
 Implementation status and the prioritized fix queue are tracked in
 `docs/implementation/audit-findings.md`; read it before selecting the next
 hardening task.

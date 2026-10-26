@@ -11,6 +11,15 @@ against the code, not just taken from `ROADMAP.md` claims. Line numbers are
 anchors at the audit commit and will drift — search for the symbol quoted next
 to them.
 
+## Current security follow-up
+
+The [2026-10-15 implementation audit and disposition](security-audit-2026-10-15.md)
+records fourteen concrete fixes plus follow-up hardening, the previous review
+comparison, validation, and five design risks left unchanged by instruction.
+It supersedes the September 30 claim that CSV email invalidation had been fixed:
+that path was still vulnerable at `63fb691` and is fixed by this follow-up.
+The broader B1/B2 repair and backup/restore work remains open.
+
 ## How to work from this file
 
 - Sections A and B are the fix queue, in priority order. Section C lists test
@@ -23,7 +32,7 @@ to them.
 - `ROADMAP.md` exit criteria are the acceptance bar. When you close a finding,
   update `ROADMAP.md` and, if a boundary or data flow changed,
   `ARCHITECTURE.md` / `SECURITY.md` in the same commit. Add a decision record
-  (`docs/decisions/NNNN-*.md`, next number: 0029) when behavior or policy
+  (`docs/decisions/NNNN-*.md`, next number: 0031) when behavior or policy
   changes.
 - Standard checks after any change:
 
@@ -173,18 +182,18 @@ to them.
 
 ## C. Test-coverage findings
 
-### C1. No rootless-Podman integration suite; adapter coverage is thin
+### C1. Rootless-Podman integration coverage exists; further coverage remains
 
-- `internal/runtime/podman/podman.go` (~1190 lines) has only
-  `podman_test.go` (~570 lines) of unit tests; no build-tagged integration
-  tests exist. ROADMAP M2/M4/M5 hardening all call for rootless-Podman
-  integration coverage (runtime behavior, terminal exec against real
-  containers, representative VNC images).
-- Guidance: add opt-in integration tests behind a build tag (e.g.
-  `//go:build podman_integration`), skipped by default, keeping data under
-  `.cows-test/`. Start with adapter contract behaviors the fake can't prove:
-  label matching, loopback port mapping verification, exec streaming and
-  cleanup ordering, isolated network attach/cleanup.
+- COWS has opt-in tagged coverage for configured-user identity and mount
+  mapping, file-helper access, network isolation on both create paths, and
+  adversarial terminal cleanup. Representative VNC images, label matching, and
+  broader exec/stream lifecycle cases still need coverage, as do the filesystem
+  race scenarios in C2.
+- Guidance: extend the existing `podman_integration` suite behind its build tag
+  rather than simulating races in unit tests. Keep test data under
+  `.cows-test/` (or outside the repository) and skip the suite by default. Do
+  not weaken the rooted-path, ownership-mapping, or per-workspace file-lock
+  design while adding tests.
 - **Update (2026-10-14):** the first opt-in test exists:
   `internal/runtime/podman/live_podman_test.go` (`//go:build
   podman_integration`, image from `COWS_PODMAN_TEST_IMAGE`, data in a
@@ -299,7 +308,8 @@ stop. Migration `0027_backfill_idle_since.sql` seeds those rows from
 
 **2026-09-30.** A code-level security review of the auth/web/repository/file/
 runtime layers (16 findings, recorded outside the repository) closed its
-first item: a CSV import that corrected an existing account's email address
+first item (this closure claim was disproved on 2026-10-15; see the current
+follow-up above): a CSV import that corrected an existing account's email address
 updated the row without retiring credential links already mailed to the old
 address, so an outstanding invitation or reset link stayed redeemable from a
 mailbox the account no longer owned. `invalidateCredentialTokensTx`
@@ -428,3 +438,28 @@ long-lived session. `b7b3056` deduplicated the file-manager and file-agent ZIP
 streaming into `internal/archive` (see `ARCHITECTURE.md`); no behavior
 changed. Sections A1, A3, and B remain as audited — verify against the code
 before relying on them, per the note above.
+
+**2026-10-15 security follow-up.** The current disposition above replaces stale
+closure claims and records implementation regressions separately from accepted
+design choices. Password replacement/revocation is now atomic, so C3's old
+separate `RevokeOtherSessions` call is no longer the implementation. Startup
+connection recovery is fixed without claiming B2's full cross-system repair is
+complete. Tagged live coverage now also includes adversarial terminal cleanup;
+representative deployment/restore and broader isolation validation remain open.
+
+**2026-10-26 rootless identity follow-up.** F11's UID-0 helper risk is now
+bounded without rejecting image-identity or administrator-recovery flows
+(decision 0030). Podman's reported UID/GID maps are validated for contiguity,
+overlap, overflow, and exclusion of the COWS service account before the explicit
+container map is built. Configured-user file access must drop to a nonzero
+mapped identity; only image-identity and administrator-recovery calls may
+authorize namespace-root access explicitly. The helper verifies
+`/proc/self/{uid,gid}_map` against the adapter's expected host IDs, rejects
+symlinked or non-directory roots, resets supplementary groups, verifies its
+final identity, and receives a minimal environment without `COWS_*` or
+credential-shaped variables. Unit and live rootless-Podman tests cover the
+mapping validation, identity translation, and file operations. Still open:
+post-start verification of the container's own namespace, resolving the image's
+effective user for non-`container_user` file access, private namespaces for
+non-`container_user` templates, per-workspace subordinate ranges, and the
+private-namespace image-copy stall above.

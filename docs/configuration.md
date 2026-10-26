@@ -3,6 +3,10 @@
 COWS is a single Go process. It reads defaults, then environment variables,
 then command-line flags; later values win. Flags use the environment variable
 names without the `COWS_` prefix and with underscores replaced by hyphens.
+Passwords are exceptions: `COWS_BOOTSTRAP_ADMIN_PASSWORD` and
+`COWS_SMTP_PASSWORD` are environment-only; their former CLI flags are rejected
+to keep secrets out of process arguments. Protect the service environment and
+avoid entering literal credentials into shell history.
 
 ## Build and run
 
@@ -81,8 +85,8 @@ Podman service if it must run without an interactive login.
 | `COWS_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error`. |
 | `COWS_SHUTDOWN_TIMEOUT` | `10s` | Graceful HTTP shutdown timeout. |
 | `COWS_SESSION_LIFETIME` | `8h` | Maximum authenticated session lifetime. |
-| `COWS_COOKIE_SECURE` | `false` | Set `true` when the external URL is HTTPS. |
-| `COWS_EXTERNAL_BASE_URL` | empty | Trusted absolute HTTP(S) base URL used for local password-reset links. Configure the HTTPS proxy URL before enabling reset email. |
+| `COWS_COOKIE_SECURE` | `false` | Required `true` when the external URL is HTTPS. |
+| `COWS_EXTERNAL_BASE_URL` | empty | Trusted absolute base URL for credential links. HTTPS requires Secure cookies; enabled email rejects public HTTP URLs (loopback development is allowed). |
 | `COWS_NETWORK_ISOLATION_ENABLED` | `false` | Give new desktop-enabled workspaces separate internal Podman networks. Existing workspaces are not migrated. |
 | `COWS_BOOTSTRAP_ADMIN_USERNAME` | empty | Initial administrator username. Must be paired with the password. |
 | `COWS_BOOTSTRAP_ADMIN_PASSWORD` | empty | Initial administrator password. |
@@ -175,7 +179,12 @@ current single-server procedure and its named-volume limitations.
 - The configured socket is a rootless Podman user socket, not a rootful socket
   or Docker socket.
 - The user has valid subordinate UID and GID ranges in `/etc/subuid` and
-  `/etc/subgid` when templates configure a container identity.
+  `/etc/subgid` when templates configure a container identity. COWS rejects a
+  non-contiguous, overlapping, or overflowing rootless mapping, and a mapping
+  whose subordinate range contains the COWS service UID or GID. The file helper
+  verifies the same mapping from `/proc/self/{uid,gid}_map` before dropping
+  privileges; a `podman unshare` namespace that differs from the Podman service
+  namespace fails closed.
 - COWS-managed directory and archive roots are writable by the service user,
   are on the same filesystem, and do not contain one another.
 - The SQLite database is on local supported storage, not an unsupported shared
@@ -209,3 +218,36 @@ Keep COWS bound to loopback, set `COWS_COOKIE_SECURE=true`, and terminate TLS
 at a trusted reverse proxy. Use [docs/deployment.md](deployment.md) and the
 examples under `deploy/`. Do not expose the Podman socket, SQLite file, mount
 roots, or the plain COWS listener to users.
+
+## Security hardening upgrades
+
+Migration 0030 adds a unique index on non-empty, case-normalized email addresses.
+Existing duplicates stop migration and leave the accounts unchanged. Correct
+ambiguous addresses through the previous application version before retrying;
+the upgrade never chooses an account, clears an address, or deletes user data.
+Back up the database before upgrading. This upgrade also retires existing
+sessions and reset/invitation links, and cancels pending credential mail.
+Historical login races and CSV corrections may have left them usable after
+revocation. Users sign in again and request fresh links after upgrade; account
+passwords and lifecycle mail are unchanged.
+
+Migration 0031 records the actual named-volume sources used by new successful
+reattachments. It cannot reconstruct source identities already lost by an older
+reattachment. Inspect and recover those workspaces manually before deleting or
+recreating them; ordinary legacy workspace volume naming is preserved.
+
+Terminal-enabled images must supply trusted `/bin/kill` and its loader/libraries.
+Mounts may not replace system executable/library trees or dynamic-loader files;
+template and runtime validation enforce this, including standard usr-merge
+aliases. A custom user shell may still live on a managed writable mount because
+cleanup never executes it as root. Existing unsafe containers need operator
+review; COWS does not migrate them automatically.
+
+Signed CSRF forms are bound to the session and the current process signing key.
+Reload an old tab after signing in or restarting COWS. Startup clears connection
+counts left by the previous process while preserving existing idle deadlines;
+workspaces whose connections were lost receive a fresh idle window.
+
+SMTP sends have a 30-second total deadline, shortened by caller deadlines, and
+cancellation closes an in-progress protocol exchange. Failed delivery remains in
+the existing retrying outbox.

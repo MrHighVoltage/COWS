@@ -10,6 +10,13 @@ Milestone 0 is complete. Milestones 1 through 5 and 7 through 9 have useful
 initial implementations, but several remain in hardening status. COWS is a
 single-server, rootless-Podman system and is not production-ready.
 
+The [2026-10-15 security audit](docs/implementation/security-audit-2026-10-15.md)
+closes the concrete credential, lifecycle-lock, request-budget, CSRF, storage
+identity, restart-connection, traversal, transport, and terminal-cleanup defects.
+The accepted soft-storage, proxy-identity, optional-network, cross-system-repair,
+and outbox-at-rest policies remain unchanged. Tested backup/restore and a complete
+non-destructive runtime repair procedure remain production prerequisites.
+
 Implemented now:
 
 - local authentication, password changes, self-registration, CSV user import,
@@ -56,8 +63,8 @@ Not implemented or incomplete:
   operation;
 - a defined, administrator-gated repair policy for missing records, orphaned
   containers, and interrupted operations;
-- build-tagged rootless-Podman integration coverage and broader abuse,
-  session-invalidation, import-failure, and filesystem race tests;
+- broader abuse, session-invalidation, import-failure, and filesystem race
+  tests, plus further tagged rootless-Podman coverage;
 - arbitrary application/service exposure; this is intentionally out of scope;
 - email verification, OpenID Connect, and institutional identity provisioning;
 - metrics history and operational alerting beyond the live administrator view;
@@ -171,9 +178,9 @@ template shells, login-shell execution, optional template-selected terminal
 UIDs, resize forwarding, idle/max lifetime limits, cleanup, audit events, and
 Podman exec streaming.
 
-Remaining hardening: tagged rootless-Podman integration coverage, accessibility
-review, session observability, and a more explicit policy for templates that
-allow UID 0.
+Remaining hardening: extending tagged rootless-Podman integration coverage,
+accessibility review, session observability, and a more explicit policy for
+templates that allow UID 0.
 
 ## Milestone 5: Graphical desktop access — initial implementation
 
@@ -182,9 +189,9 @@ template-controlled desktop service, loopback mapping verification, automatic
 template-selected VNC credentials, session cleanup, fullscreen/resize behavior,
 and no public VNC port.
 
-Remaining hardening: tagged rootless-Podman integration against representative
-VNC images, browser accessibility review, and stronger network isolation for
-desktop-enabled workspaces.
+Remaining hardening: extending tagged rootless-Podman integration against
+representative VNC images, browser accessibility review, and stronger network
+isolation for desktop-enabled workspaces.
 
 ## Milestone 6: Resource monitoring and email — initial implementation
 
