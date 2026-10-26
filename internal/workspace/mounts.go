@@ -81,7 +81,7 @@ func (s *Service) ListFileMounts(ctx context.Context, actorID, workspaceID strin
 		}
 		mountType := normalizedMountType(mount.Type)
 		mountRoot := ""
-		source := managedVolumeName(value.ID, mount)
+		source := workspaceVolumeSource(value, mount)
 		if mountType == domain.TemplateMountDirectory {
 			mountRoot = filepath.Join(root, mountRootName(value.ID, mount))
 			source = mountRoot
@@ -115,6 +115,13 @@ func managedMountName(workspaceID string, mount domain.TemplateMount) string {
 
 func managedVolumeName(workspaceID string, mount domain.TemplateMount) string {
 	return managedContainerName(workspaceID) + "-" + managedMountName(workspaceID, mount)
+}
+
+func workspaceVolumeSource(value domain.Workspace, mount domain.TemplateMount) string {
+	if source := value.VolumeSources[mount.Name]; source != "" {
+		return source
+	}
+	return managedVolumeName(value.ID, mount)
 }
 
 func mountRootName(workspaceID string, mount domain.TemplateMount) string {

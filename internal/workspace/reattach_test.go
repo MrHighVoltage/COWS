@@ -248,6 +248,51 @@ func TestVolumeReattachmentUsesExistingVolumeNameAndRemapsOwnership(t *testing.T
 	if volumes, err := store.ListRetainedWorkspaceVolumesForOwner(ctx, owner.ID); err != nil || len(volumes) != 0 {
 		t.Fatalf("retained volumes after reattachment = %d, err=%v, want 0 (consumed)", len(volumes), err)
 	}
+	// A fresh service reloads only persisted state, as after a process restart.
+	service = NewWithRuntimeAndMountRoots(store, fake, t.TempDir(), t.TempDir())
+	persisted, err := store.FindWorkspaceByID(ctx, next.ID)
+	if err != nil || persisted.VolumeSources["data"] != oldVolumeName {
+		t.Fatalf("persisted volume identity = %q, err=%v", persisted.VolumeSources["data"], err)
+	}
+	mounts, err := service.ListFileMounts(ctx, owner.ID, next.ID)
+	if err != nil || len(mounts) != 1 || mounts[0].Source != oldVolumeName {
+		t.Fatalf("reattached file mounts = %+v, err=%v", mounts, err)
+	}
+	usageRuntime := &captureStorageRuntime{}
+	provider := NewStorageUsageProvider(usageRuntime, t.TempDir())
+	if _, err := provider.WorkspaceStorageUsage(ctx, persisted); err != nil {
+		t.Fatal(err)
+	}
+	if len(usageRuntime.spec.Mounts) != 1 || usageRuntime.spec.Mounts[0].Source != oldVolumeName {
+		t.Fatalf("storage accounting used wrong volume: %+v", usageRuntime.spec)
+	}
+	// Timeout container removal leaves the reattached data available for recreation.
+	if err := store.UpdateWorkspaceObservedState(ctx, next.ID, "removed", persisted.RuntimeID, "", "", persisted.CreatedAt, persisted.CreatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.StartWorkspace(ctx, owner.ID, next.ID); err != nil {
+		t.Fatal(err)
+	}
+	if fake.lastSpec.Mounts[0].Source != oldVolumeName {
+		t.Fatalf("recreation used volume %q", fake.lastSpec.Mounts[0].Source)
+	}
+	if err := service.StopWorkspace(ctx, owner.ID, next.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.DeleteWorkspace(ctx, owner.ID, next.ID); err != nil {
+		t.Fatal(err)
+	}
+	retained, err := store.ListRetainedWorkspaceVolumesForOwner(ctx, owner.ID)
+	if err != nil || len(retained) != 1 || retained[0].VolumeName != oldVolumeName || retained[0].WorkspaceID != next.ID {
+		t.Fatalf("second deletion lost actual volume identity: %+v, err=%v", retained, err)
+	}
+}
+
+type captureStorageRuntime struct{ spec runtime.StorageUsageSpec }
+
+func (r *captureStorageRuntime) WorkspaceStorageUsage(_ context.Context, spec runtime.StorageUsageSpec) (int64, error) {
+	r.spec = spec
+	return 42, nil
 }
 
 func TestReattachmentRejectsAnotherUsersRetainedStorage(t *testing.T) {

@@ -107,7 +107,7 @@ func (p *StorageUsageProvider) measure(ctx context.Context, value domain.Workspa
 	mounts := make([]runtime.FileAccessSpec, 0, len(value.TemplateConfiguration.Mounts))
 	for _, mount := range value.TemplateConfiguration.Mounts {
 		mountType := normalizedMountType(mount.Type)
-		source := managedVolumeName(value.ID, mount)
+		source := workspaceVolumeSource(value, mount)
 		if mountType == domain.TemplateMountDirectory {
 			source = filepath.Join(root, mountRootName(value.ID, mount))
 		}

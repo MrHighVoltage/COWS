@@ -138,6 +138,9 @@ type Workspace struct {
 	TemplateImageReference string
 	TemplateImageDigest    string
 	TemplateConfiguration  TemplateConfiguration
+	// VolumeSources preserves server-resolved reattachment identities by mount name.
+	// Empty entries retain deterministic naming for existing ordinary workspaces.
+	VolumeSources map[string]string
 	// TemplateSecrets contains resolved administrator-defined secrets. It is
 	// never rendered in ordinary workspace views or recorded in audit events.
 	TemplateSecrets                 map[string]string

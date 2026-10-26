@@ -86,7 +86,7 @@ func TestEvaluateTimeoutsDoesNotDeleteAmbiguousStoppedState(t *testing.T) {
 
 // TestSessionTrackingReArmsIdleTimeoutAfterDisconnect exercises the actual
 // bug being fixed here end to end through the real store:
-// RecordWorkspaceConnection/RecordTerminalDisconnect/RecordDesktopDisconnect
+// Connection starts and stream-close callbacks
 // must track how many sessions are currently open, not merely whether the
 // workspace has ever been connected to - a workspace that connects once and
 // later disconnects must become a stop candidate again, measured from the
@@ -145,7 +145,7 @@ func TestSessionTrackingReArmsIdleTimeoutAfterDisconnect(t *testing.T) {
 	}
 
 	// Closing the first of two sessions must not yet re-arm the timeout.
-	service.RecordTerminalDisconnect(ctx, owner.ID, value.ID)
+	service.recordWorkspaceDisconnect(ctx, owner.ID, value.ID, "terminal.session_ended", 0)
 	if reloaded := reload(); reloaded.ActiveSessions != 1 || !reloaded.IdleSince.IsZero() {
 		t.Fatalf("after closing one of two sessions: active_sessions=%d idle_since=%v, want 1 and zero", reloaded.ActiveSessions, reloaded.IdleSince)
 	}
@@ -155,7 +155,7 @@ func TestSessionTrackingReArmsIdleTimeoutAfterDisconnect(t *testing.T) {
 	// connected (the bug being fixed here).
 	disconnectAt := base.Add(5 * time.Hour)
 	service.now = func() time.Time { return disconnectAt }
-	service.RecordDesktopDisconnect(ctx, owner.ID, value.ID)
+	service.recordWorkspaceDisconnect(ctx, owner.ID, value.ID, "desktop.session_ended", 0)
 	afterDisconnect := reload()
 	if afterDisconnect.ActiveSessions != 0 || !afterDisconnect.IdleSince.Equal(disconnectAt) {
 		t.Fatalf("after closing the last session: active_sessions=%d idle_since=%v, want 0 and %v", afterDisconnect.ActiveSessions, afterDisconnect.IdleSince, disconnectAt)

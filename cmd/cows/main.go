@@ -102,6 +102,9 @@ func run(ctx context.Context, args []string) error {
 	scheduler := quota.NewScheduler(store, podmanRuntime, storageProvider)
 	templateService := workspace.NewWithRuntimeAndMountRootsAndStorage(store, podmanRuntime, cfg.MountRoot, cfg.MountArchiveRoot, storageProvider, scheduler)
 	templateService.SetNetworkIsolation(cfg.NetworkIsolationEnabled)
+	if err := templateService.ResetWorkspaceConnections(ctx); err != nil {
+		return fmt.Errorf("reset workspace connections at startup: %w", err)
+	}
 	var notificationService *notifications.Service
 	if cfg.EmailEnabled {
 		sender, err := notifications.NewSMTPSender(notifications.SMTPConfig{Host: cfg.SMTPHost, Port: cfg.SMTPPort, From: cfg.SMTPFrom, Username: cfg.SMTPUsername, Password: cfg.SMTPPassword, RequireTLS: cfg.SMTPRequireTLS})

@@ -145,7 +145,19 @@ func (s *Service) CreateWorkspace(ctx context.Context, actorID string, input Cre
 			return domain.Workspace{}, err
 		}
 	}
-	releaseAdmission := s.acquireAdmission()
+	id, err := newWorkspaceID()
+	if err != nil {
+		return domain.Workspace{}, fmt.Errorf("create workspace ID: %w", err)
+	}
+	release, err := s.beginLifecycleChange(ctx, id)
+	if err != nil {
+		return domain.Workspace{}, err
+	}
+	defer release()
+	releaseAdmission, err := s.acquireAdmission(ctx)
+	if err != nil {
+		return domain.Workspace{}, err
+	}
 	defer releaseAdmission()
 	if s.scheduler != nil {
 		if err := s.scheduler.CheckCreate(ctx, user.ID, domain.ResourceRequest{CPUMillis: cpuMillis, MemoryBytes: memoryBytes}); err != nil {
@@ -156,10 +168,6 @@ func (s *Service) CreateWorkspace(ctx context.Context, actorID string, input Cre
 		return domain.Workspace{}, repository.ErrConflict
 	} else if !errors.Is(err, repository.ErrNotFound) {
 		return domain.Workspace{}, err
-	}
-	id, err := newWorkspaceID()
-	if err != nil {
-		return domain.Workspace{}, fmt.Errorf("create workspace ID: %w", err)
 	}
 	// Claim (consume) every referenced volume tombstone before touching the
 	// filesystem or the runtime. A volume tombstone consumed here is gone
@@ -183,6 +191,7 @@ func (s *Service) CreateWorkspace(ctx context.Context, actorID string, input Cre
 		TemplateImageDigest:             template.ImageDigest,
 		TemplateConfiguration:           cloneTemplateConfiguration(template.Configuration),
 		TemplateSecrets:                 templateSecrets,
+		VolumeSources:                   volumeOverrides,
 		Name:                            name,
 		DesiredState:                    domain.DesiredWorkspaceStopped,
 		ObservedState:                   "unknown",
@@ -231,7 +240,7 @@ func (s *Service) CreateWorkspace(ctx context.Context, actorID string, input Cre
 		directoriesRestored = true
 	}
 	if len(volumeOverrides) > 0 {
-		if err := s.startWorkspace(ctx, user.ID, id, volumeOverrides); err != nil {
+		if err := s.startWorkspace(ctx, user.ID, id); err != nil {
 			_ = s.store.DeleteWorkspace(ctx, id)
 			_ = s.store.ReleaseWorkspacePorts(ctx, id)
 			if !directoriesRestored {
@@ -637,6 +646,11 @@ func (s *Service) WorkspaceAccessMethods(ctx context.Context, actorID, workspace
 }
 
 func (s *Service) SetDesiredState(ctx context.Context, actorID, workspaceID string, state domain.DesiredWorkspaceState) error {
+	release, err := s.beginLifecycleChange(ctx, workspaceID)
+	if err != nil {
+		return err
+	}
+	defer release()
 	workspace, err := s.GetWorkspace(ctx, actorID, workspaceID)
 	if err != nil {
 		return err
@@ -652,21 +666,22 @@ func (s *Service) SetDesiredState(ctx context.Context, actorID, workspaceID stri
 }
 
 func (s *Service) StartWorkspace(ctx context.Context, actorID, workspaceID string) error {
-	releaseAdmission := s.acquireAdmission()
+	release, err := s.beginLifecycleChange(ctx, workspaceID)
+	if err != nil {
+		return err
+	}
+	defer release()
+	releaseAdmission, err := s.acquireAdmission(ctx)
+	if err != nil {
+		return err
+	}
 	defer releaseAdmission()
-	return s.startWorkspace(ctx, actorID, workspaceID, nil)
+	return s.startWorkspace(ctx, actorID, workspaceID)
 }
 
-// startWorkspace is StartWorkspace's implementation, called either by
-// StartWorkspace (which acquires admission itself, below) or directly by
-// CreateWorkspace as part of self-service storage reattachment (decision
-// 0025), on a workspace that was just created and so is always taking the
-// RuntimeID == "" branch below. It deliberately does not acquire admission
-// itself: CreateWorkspace already holds it for the whole call when
-// reattaching, and admission's sync.Mutex is not reentrant, so acquiring it
-// twice on the same goroutine would deadlock. volumeOverrides is threaded
-// straight through to runtimeSpec.
-func (s *Service) startWorkspace(ctx context.Context, actorID, workspaceID string, volumeOverrides map[string]string) error {
+// startWorkspace requires the workspace lock followed by admission. Creation
+// holds both before publishing a new row so reattachment can start it here.
+func (s *Service) startWorkspace(ctx context.Context, actorID, workspaceID string) error {
 	if s.runtime == nil {
 		return ErrRuntimeUnavailable
 	}
@@ -674,11 +689,6 @@ func (s *Service) startWorkspace(ctx context.Context, actorID, workspaceID strin
 	if err != nil {
 		return err
 	}
-	release, err := s.beginLifecycleChange(ctx, value.ID)
-	if err != nil {
-		return err
-	}
-	defer release()
 	if value.ObservedState != string(runtime.StateRunning) && s.scheduler != nil {
 		if err := s.scheduler.CheckStart(ctx, value.OwnerUserID, domain.ResourceRequest{CPUMillis: value.AllocatedCPUMillis, MemoryBytes: value.AllocatedMemoryBytes}); err != nil {
 			return err
@@ -707,7 +717,7 @@ func (s *Service) startWorkspace(ctx context.Context, actorID, workspaceID strin
 			return err
 		}
 		_ = s.updateOperationPhase(ctx, value.ID, "start:creating")
-		spec, err := s.runtimeSpec(ctx, value, volumeOverrides)
+		spec, err := s.runtimeSpec(ctx, value)
 		if err != nil {
 			return err
 		}
@@ -758,6 +768,7 @@ func (s *Service) startWorkspace(ctx context.Context, actorID, workspaceID strin
 	// - any stale active_sessions count left over from a prior run (e.g. a
 	// disconnect hook that never fired because the process restarted) is
 	// wiped here rather than carried forward.
+	s.lockForWorkspace(value.ID).sessionGeneration++
 	if err := s.store.ResetWorkspaceSessions(ctx, value.ID, now, now); err != nil {
 		return err
 	}
@@ -781,8 +792,15 @@ func (s *Service) StopWorkspace(ctx context.Context, actorID, workspaceID string
 		return err
 	}
 	defer release()
-	releaseAdmission := s.acquireAdmission()
+	releaseAdmission, err := s.acquireAdmission(ctx)
+	if err != nil {
+		return err
+	}
 	defer releaseAdmission()
+	value, err = s.GetWorkspace(ctx, actorID, workspaceID)
+	if err != nil {
+		return err
+	}
 	if err := s.store.SetWorkspaceDesiredState(ctx, value.ID, domain.DesiredWorkspaceStopped, s.now().UTC()); err != nil {
 		return err
 	}
@@ -833,8 +851,15 @@ func (s *Service) DeleteWorkspace(ctx context.Context, actorID, workspaceID stri
 		return err
 	}
 	defer release()
-	releaseAdmission := s.acquireAdmission()
+	releaseAdmission, err := s.acquireAdmission(ctx)
+	if err != nil {
+		return err
+	}
 	defer releaseAdmission()
+	value, err = s.GetWorkspace(ctx, actorID, workspaceID)
+	if err != nil {
+		return err
+	}
 	configuration, err := s.effectiveConfiguration(ctx, value)
 	if err != nil {
 		return err
@@ -969,7 +994,7 @@ func retainedWorkspaceVolumes(value domain.Workspace, mounts []domain.TemplateMo
 			continue
 		}
 		volumes = append(volumes, domain.RetainedWorkspaceVolume{
-			VolumeName:    managedVolumeName(value.ID, mount),
+			VolumeName:    workspaceVolumeSource(value, mount),
 			WorkspaceID:   value.ID,
 			OwnerUserID:   value.OwnerUserID,
 			TemplateID:    value.TemplateID,
@@ -1018,18 +1043,22 @@ func retainedWorkspaceDirectory(value domain.Workspace, mounts []domain.Template
 	}
 }
 
-// RecordWorkspaceConnection is the hook used by terminal and desktop access
-// (via OpenTerminal/OpenDesktop) to mark a session as open, which both
-// records this as the workspace's most recent connection and cancels the
-// idle-shutdown timeout for as long as this - or any other concurrently
-// open - session lasts. It must be paired with RecordTerminalDisconnect or
-// RecordDesktopDisconnect once the caller's session ends, or the workspace
-// will never be considered idle again this run.
+// RecordWorkspaceConnection records a connection while serializing it with
+// lifecycle transitions. Stream gateways pair connections with their Close.
 func (s *Service) RecordWorkspaceConnection(ctx context.Context, actorID, workspaceID string) error {
+	release, err := s.beginLifecycleChange(ctx, workspaceID)
+	if err != nil {
+		return err
+	}
+	defer release()
 	value, err := s.GetWorkspace(ctx, actorID, workspaceID)
 	if err != nil {
 		return err
 	}
+	return s.recordWorkspaceConnection(ctx, actorID, value)
+}
+
+func (s *Service) recordWorkspaceConnection(ctx context.Context, actorID string, value domain.Workspace) error {
 	if value.ObservedState != string(runtime.StateRunning) {
 		return ErrWorkspaceStateConflict
 	}
@@ -1048,6 +1077,11 @@ func (s *Service) OpenTerminal(ctx context.Context, actorID, workspaceID string,
 	if s.runtime == nil {
 		return nil, ErrRuntimeUnavailable
 	}
+	release, err := s.beginLifecycleChange(ctx, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	value, err := s.GetWorkspace(ctx, actorID, workspaceID)
 	if err != nil {
 		return nil, err
@@ -1109,7 +1143,7 @@ func (s *Service) OpenTerminal(ctx context.Context, actorID, workspaceID string,
 	if err != nil {
 		return nil, err
 	}
-	if err := s.RecordWorkspaceConnection(ctx, actorID, workspaceID); err != nil {
+	if err := s.recordWorkspaceConnection(ctx, actorID, value); err != nil {
 		_ = terminal.Close()
 		return nil, err
 	}
@@ -1122,7 +1156,8 @@ func (s *Service) OpenTerminal(ctx context.Context, actorID, workspaceID string,
 		metadata["uid"] = fmt.Sprintf("%d", uid)
 	}
 	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "terminal.session_started", TargetType: "workspace", TargetID: workspaceID, Metadata: metadata})
-	return terminal, nil
+	connection := s.trackWorkspaceConnection(terminal, actorID, value.ID, "terminal.session_ended")
+	return &workspaceTerminal{Terminal: terminal, connection: connection}, nil
 }
 
 func containsInt64(values []int64, want int64) bool {
@@ -1132,12 +1167,6 @@ func containsInt64(values []int64, want int64) bool {
 		}
 	}
 	return false
-}
-
-func (s *Service) RecordTerminalDisconnect(ctx context.Context, actorID, workspaceID string) {
-	now := s.now().UTC()
-	_ = s.store.RecordWorkspaceSessionEnd(ctx, workspaceID, now, now)
-	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "terminal.session_ended", TargetType: "workspace", TargetID: workspaceID})
 }
 
 func (s *Service) RecordFileAudit(ctx context.Context, actorID, workspaceID, eventType string, metadata map[string]string) {
@@ -1150,6 +1179,11 @@ func (s *Service) OpenDesktop(ctx context.Context, actorID, workspaceID string) 
 	if s.runtime == nil {
 		return nil, ErrRuntimeUnavailable
 	}
+	release, err := s.beginLifecycleChange(ctx, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	value, err := s.GetWorkspace(ctx, actorID, workspaceID)
 	if err != nil {
 		return nil, err
@@ -1188,12 +1222,12 @@ func (s *Service) OpenDesktop(ctx context.Context, actorID, workspaceID string) 
 		if err != nil {
 			return nil, err
 		}
-		if err := s.RecordWorkspaceConnection(ctx, actorID, workspaceID); err != nil {
+		if err := s.recordWorkspaceConnection(ctx, actorID, value); err != nil {
 			_ = connection.Close()
 			return nil, err
 		}
 		s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "desktop.session_started", TargetType: "workspace", TargetID: workspaceID})
-		return connection, nil
+		return s.trackWorkspaceConnection(connection, actorID, value.ID, "desktop.session_ended"), nil
 	}
 	return nil, ErrDesktopNotAvailable
 }
@@ -1232,12 +1266,6 @@ func (s *Service) GetDesktopCredentials(ctx context.Context, actorID, workspaceI
 	return password, nil
 }
 
-func (s *Service) RecordDesktopDisconnect(ctx context.Context, actorID, workspaceID string) {
-	now := s.now().UTC()
-	_ = s.store.RecordWorkspaceSessionEnd(ctx, workspaceID, now, now)
-	s.recordAudit(ctx, domain.AuditEvent{ActorUserID: actorID, EventType: "desktop.session_ended", TargetType: "workspace", TargetID: workspaceID})
-}
-
 func (s *Service) RunTimeouts(ctx context.Context) error {
 	if s.runtime == nil {
 		return ErrRuntimeUnavailable
@@ -1249,7 +1277,6 @@ func (s *Service) RunTimeouts(ctx context.Context) error {
 	now := s.now().UTC()
 	failed := 0
 	for _, value := range values {
-		status := EvaluateTimeouts(value, now)
 		release, lockErr := s.beginLifecycleChange(ctx, value.ID)
 		if lockErr != nil {
 			if errors.Is(lockErr, context.Canceled) || errors.Is(lockErr, context.DeadlineExceeded) {
@@ -1257,9 +1284,24 @@ func (s *Service) RunTimeouts(ctx context.Context) error {
 			}
 			continue
 		}
-		releaseAdmission := s.acquireAdmission()
+		releaseAdmission, err := s.acquireAdmission(ctx)
+		if err != nil {
+			release()
+			return err
+		}
 		func() {
 			defer releaseAdmission()
+			var err error
+			value, err = s.store.FindWorkspaceByID(ctx, value.ID)
+			if errors.Is(err, repository.ErrNotFound) {
+				return
+			}
+			if err != nil {
+				failed++
+				return
+			}
+			now = s.now().UTC()
+			status := EvaluateTimeouts(value, now)
 			switch status.Action {
 			case TimeoutActionStop:
 				if value.RuntimeID == "" || value.ObservedState != string(runtime.StateRunning) {
@@ -1349,9 +1391,15 @@ func (s *Service) beginOperation(ctx context.Context, workspaceID, operation str
 	return s.store.UpdateWorkspaceOperation(ctx, workspaceID, operation, "running", "", startedAt, startedAt)
 }
 
-func (s *Service) acquireAdmission() func() {
-	s.admissionMu.Lock()
-	return s.admissionMu.Unlock
+// Take the workspace lock before admission so a stream cannot block every
+// user's admission while a lifecycle request waits for that stream to close.
+func (s *Service) acquireAdmission(ctx context.Context) (func(), error) {
+	select {
+	case s.admission <- struct{}{}:
+		return func() { <-s.admission }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func (s *Service) finishOperation(ctx context.Context, workspaceID, operation, status, operationError string, startedAt time.Time) error {
@@ -1369,7 +1417,24 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	if s.runtime == nil {
 		return ErrRuntimeUnavailable
 	}
+	// Snapshot revisions before observing runtime state. An operation that
+	// finishes while inspection or a file stream is in flight invalidates
+	// that workspace's observation until the next pass.
+	releaseAdmission, err := s.acquireAdmission(ctx)
+	if err != nil {
+		return err
+	}
+	values, err := s.store.ListAllWorkspaces(ctx)
+	if err != nil {
+		releaseAdmission()
+		return err
+	}
+	revisions := make(map[string]uint64, len(values))
+	for _, value := range values {
+		revisions[value.ID] = s.lockForWorkspace(value.ID).revision.Load()
+	}
 	inspection, err := runtime.Inspect(ctx, s.runtime)
+	releaseAdmission()
 	if err != nil {
 		return err
 	}
@@ -1377,52 +1442,93 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	for _, observed := range inspection.Workspaces {
 		observedByWorkspace[observed.WorkspaceID] = observed
 	}
+	for _, snapshot := range values {
+		release, err := s.beginLifecycleChange(ctx, snapshot.ID)
+		if err != nil {
+			return err
+		}
+		err = func() error {
+			defer release()
+			releaseAdmission, err := s.acquireAdmission(ctx)
+			if err != nil {
+				return err
+			}
+			defer releaseAdmission()
+			value, err := s.store.FindWorkspaceByID(ctx, snapshot.ID)
+			if errors.Is(err, repository.ErrNotFound) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if s.lockForWorkspace(value.ID).revision.Load() != revisions[value.ID] {
+				return nil
+			}
+			now := s.now().UTC()
+			observed, ok := observedByWorkspace[value.ID]
+			if !ok {
+				if value.RuntimeID == "" || value.ObservedState == string(runtime.StateRemoved) {
+					return nil
+				}
+				return s.store.UpdateWorkspaceObservedState(ctx, value.ID, "missing", value.RuntimeID, "runtime_missing", "managed container was not found during runtime reconciliation", inspection.ObservedAt, now)
+			}
+			state := normalizeObservedState(observed.State)
+			observedAt := observed.ObservedAt
+			if observedAt.IsZero() {
+				observedAt = inspection.ObservedAt
+			}
+			if state == string(runtime.StateRunning) {
+				if value.ObservedState != string(runtime.StateRunning) || value.StartedAt.IsZero() {
+					value.StartedAt = observedAt
+					value.LastConnectedAt = time.Time{}
+					s.lockForWorkspace(value.ID).sessionGeneration++
+					if err := s.store.ResetWorkspaceSessions(ctx, value.ID, now, now); err != nil {
+						return err
+					}
+				}
+				value.StoppedAt = time.Time{}
+			}
+			if state == string(runtime.StateStopped) && value.StoppedAt.IsZero() {
+				value.StoppedAt = observedAt
+			}
+			if err := s.store.UpdateWorkspaceObservedState(ctx, value.ID, state, observed.RuntimeID, "", "", observedAt, now); err != nil {
+				return err
+			}
+			return s.store.UpdateWorkspaceLifecycle(ctx, value.ID, value.StartedAt, value.LastConnectedAt, value.StoppedAt, value.ContainerDeletedAt, value.DataArchiveEligibleAt, now)
+		}()
+		if err != nil {
+			return err
+		}
+	}
+	for _, observed := range inspection.Workspaces {
+		if _, err := s.store.FindWorkspaceByID(ctx, observed.WorkspaceID); err == nil {
+			continue
+		} else if !errors.Is(err, repository.ErrNotFound) {
+			return err
+		}
+		s.recordAudit(ctx, domain.AuditEvent{EventType: "runtime.orphaned_container", TargetType: "runtime", TargetID: observed.RuntimeID, Metadata: map[string]string{"workspace_id": observed.WorkspaceID, "state": string(observed.State)}})
+	}
+	return nil
+}
+
+// ResetWorkspaceConnections runs once before the HTTP server and workers start.
+// Only one COWS process is supported; none of a previous process's streams can
+// survive startup. Preserve existing idle deadlines, giving lost connections
+// a new idle period rather than stopping their workspaces immediately.
+func (s *Service) ResetWorkspaceConnections(ctx context.Context) error {
 	values, err := s.store.ListAllWorkspaces(ctx)
 	if err != nil {
 		return err
 	}
 	now := s.now().UTC()
 	for _, value := range values {
-		observed, ok := observedByWorkspace[value.ID]
-		if !ok {
-			if value.RuntimeID == "" || value.ObservedState == string(runtime.StateRemoved) {
-				continue
-			}
-			_ = s.store.UpdateWorkspaceObservedState(ctx, value.ID, "missing", value.RuntimeID, "runtime_missing", "managed container was not found during runtime reconciliation", inspection.ObservedAt, now)
+		if value.ActiveSessions == 0 && (value.ObservedState != string(runtime.StateRunning) || !value.IdleSince.IsZero()) {
 			continue
 		}
-		state := normalizeObservedState(observed.State)
-		startedAt := value.StartedAt
-		stoppedAt := value.StoppedAt
-		observedAt := observed.ObservedAt
-		if observedAt.IsZero() {
-			observedAt = inspection.ObservedAt
-		}
-		if state == string(runtime.StateRunning) {
-			if startedAt.IsZero() {
-				startedAt = observedAt
-			}
-			stoppedAt = time.Time{}
-		}
-		if state == string(runtime.StateStopped) && stoppedAt.IsZero() {
-			stoppedAt = observedAt
-		}
-		if err := s.store.UpdateWorkspaceObservedState(ctx, value.ID, state, observed.RuntimeID, "", "", observedAt, now); err != nil {
+		s.lockForWorkspace(value.ID).sessionGeneration++
+		if err := s.store.ResetWorkspaceSessions(ctx, value.ID, now, now); err != nil {
 			return err
 		}
-		if err := s.store.UpdateWorkspaceLifecycle(ctx, value.ID, startedAt, value.LastConnectedAt, stoppedAt, value.ContainerDeletedAt, value.DataArchiveEligibleAt, now); err != nil {
-			return err
-		}
-	}
-	knownWorkspaceIDs := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		knownWorkspaceIDs[value.ID] = struct{}{}
-	}
-	for _, observed := range inspection.Workspaces {
-		if _, ok := knownWorkspaceIDs[observed.WorkspaceID]; ok {
-			continue
-		}
-		s.recordAudit(ctx, domain.AuditEvent{EventType: "runtime.orphaned_container", TargetType: "runtime", TargetID: observed.RuntimeID, Metadata: map[string]string{"workspace_id": observed.WorkspaceID, "state": string(observed.State)}})
 	}
 	return nil
 }
@@ -1444,12 +1550,9 @@ func normalizeObservedState(state runtime.State) string {
 	}
 }
 
-// runtimeSpec builds the runtime.WorkspaceSpec used to create value's
-// container. volumeOverrides, when non-nil, maps a mount name to an existing
-// volume name that mount should attach to instead of the workspace's own
-// deterministic name — the self-service reattachment mechanism (decision
-// 0025); it is nil for every ordinary start.
-func (s *Service) runtimeSpec(ctx context.Context, value domain.Workspace, volumeOverrides map[string]string) (runtime.WorkspaceSpec, error) {
+// runtimeSpec resolves administrator-approved configuration and persisted
+// volume identities after authorization.
+func (s *Service) runtimeSpec(ctx context.Context, value domain.Workspace) (runtime.WorkspaceSpec, error) {
 	configuration, err := s.effectiveConfiguration(ctx, value)
 	if err != nil {
 		return runtime.WorkspaceSpec{}, err
@@ -1479,7 +1582,7 @@ func (s *Service) runtimeSpec(ctx context.Context, value domain.Workspace, volum
 	}
 	mounts := make([]runtime.Mount, 0, len(configuration.Mounts))
 	for _, definition := range configuration.Mounts {
-		mount, err := materializeMount(s.mountRoot, value.ID, definition, volumeOverrides[definition.Name])
+		mount, err := materializeMount(s.mountRoot, value.ID, definition, value.VolumeSources[definition.Name])
 		if err != nil {
 			return runtime.WorkspaceSpec{}, err
 		}
@@ -1518,6 +1621,16 @@ func (s *Service) effectiveConfiguration(ctx context.Context, value domain.Works
 // UpdateObservedState is called by reconciliation code, not by browser
 // handlers. It keeps runtime truth separate from the desired state.
 func (s *Service) UpdateObservedState(ctx context.Context, workspaceID, observedState, runtimeID, observedError string, observedAt time.Time) error {
+	release, err := s.beginLifecycleChange(ctx, workspaceID)
+	if err != nil {
+		return err
+	}
+	defer release()
+	releaseAdmission, err := s.acquireAdmission(ctx)
+	if err != nil {
+		return err
+	}
+	defer releaseAdmission()
 	errorCode := ""
 	if observedError != "" {
 		errorCode = "runtime_observation_failed"

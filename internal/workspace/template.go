@@ -92,8 +92,8 @@ type Service struct {
 	fileAccessLocks  sync.Map
 	// One process-wide admission lock; database reservations belong to
 	// the future multi-instance deployment.
-	admissionMu sync.Mutex
-	now         func() time.Time
+	admission chan struct{}
+	now       func() time.Time
 }
 
 // SetNetworkIsolation configures the process-wide network policy during
@@ -140,7 +140,7 @@ func newService(store repository.Store, runtimeAdapter runtime.Runtime, schedule
 	if len(schedulers) > 0 {
 		scheduler = schedulers[0]
 	}
-	return &Service{store: store, scheduler: scheduler, runtime: runtimeAdapter, now: time.Now}
+	return &Service{store: store, scheduler: scheduler, runtime: runtimeAdapter, admission: make(chan struct{}, 1), now: time.Now}
 }
 
 func (s *Service) ListTemplates(ctx context.Context, actorID string) ([]domain.WorkspaceTemplate, error) {

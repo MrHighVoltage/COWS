@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"sync/atomic"
 
 	"github.com/cows-project/cows/internal/runtime"
 )
@@ -9,7 +10,9 @@ import (
 // workspaceLock serializes file operations with lifecycle changes. Streaming
 // downloads hold the lock until their returned reader is closed.
 type workspaceLock struct {
-	semaphore chan struct{}
+	semaphore         chan struct{}
+	revision          atomic.Uint64
+	sessionGeneration uint64
 }
 
 func (s *Service) lockForWorkspace(workspaceID string) *workspaceLock {
@@ -49,5 +52,12 @@ func (s *Service) BeginFileAccess(ctx context.Context, actorID, workspaceID stri
 }
 
 func (s *Service) beginLifecycleChange(ctx context.Context, workspaceID string) (func(), error) {
-	return s.acquireWorkspaceLock(ctx, workspaceID)
+	release, err := s.acquireWorkspaceLock(ctx, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	return func() {
+		s.lockForWorkspace(workspaceID).revision.Add(1)
+		release()
+	}, nil
 }
