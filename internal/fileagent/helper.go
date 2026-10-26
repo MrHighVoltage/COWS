@@ -9,7 +9,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path"
 	"strings"
@@ -170,6 +169,13 @@ func cleanName(value string) error {
 }
 
 func list(root *os.Root, relativePath string, output io.Writer) error {
+	info, err := root.Lstat(relativePath)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("symbolic links are not supported")
+	}
 	directory, err := root.Open(relativePath)
 	if err != nil {
 		return err
@@ -198,18 +204,7 @@ func list(root *os.Root, relativePath string, output io.Writer) error {
 
 func usage(root *os.Root, output io.Writer) error {
 	var total int64
-	entries := 0
-	err := fs.WalkDir(root.FS(), ".", func(currentPath string, item fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		entries++
-		if entries > MaxUsageEntries {
-			return errors.New("usage contains too many entries")
-		}
-		if item.Type()&os.ModeSymlink != 0 {
-			return errors.New("symbolic links are not supported")
-		}
+	err := archive.WalkDir(context.Background(), root, ".", MaxUsageEntries, func(_ string, item os.DirEntry) error {
 		if !item.Type().IsRegular() {
 			return nil
 		}

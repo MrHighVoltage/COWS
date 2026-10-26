@@ -5,9 +5,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -161,5 +163,39 @@ func TestWriteZipAbortsOnEntryLimit(t *testing.T) {
 	err := WriteZip(context.Background(), root, "tree", zip.NewWriter(io.Discard), &state)
 	if !errors.Is(err, ErrTooManyEntries) {
 		t.Fatalf("error = %v, want ErrTooManyEntries", err)
+	}
+}
+
+func TestWriteZipWideDirectoryAndSpecialEntryBudget(t *testing.T) {
+	dir := t.TempDir()
+	for index := range 300 {
+		writeFile(t, dir, fmt.Sprint(index), []byte("data"))
+	}
+	if err := syscall.Mkfifo(filepath.Join(dir, "pipe"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root := openRoot(t, dir)
+	var output bytes.Buffer
+	writer := zip.NewWriter(&output)
+	state := State{}
+	if err := WriteZip(context.Background(), root, ".", writer, &state); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if entries := readArchive(t, &output); len(entries) != 300 || state.Entries != 300 || state.Bytes != 1200 {
+		t.Fatalf("entries=%d state=%+v, want 300 regular files totaling 1200 bytes", len(entries), state)
+	}
+	// Even skipped special files consume the bounded traversal budget.
+	specials := t.TempDir()
+	for _, name := range []string{"one", "two"} {
+		if err := syscall.Mkfifo(filepath.Join(specials, name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	state = State{Entries: MaxEntries - 1}
+	if err := WriteZip(context.Background(), openRoot(t, specials), ".", zip.NewWriter(io.Discard), &state); !errors.Is(err, ErrTooManyEntries) {
+		t.Fatalf("special-entry walk error=%v, want bounded traversal failure", err)
 	}
 }

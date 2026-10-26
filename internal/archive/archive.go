@@ -43,28 +43,23 @@ type State struct {
 // bounded ZIP archive to w. The caller owns the *zip.Writer (including
 // Close) and the State. Symlinks are rejected, the context bounds
 // cancellation, and exceeding MaxBytes or MaxEntries aborts the walk.
+// Skipped special files also consume the traversal budget, so they cannot
+// cause an unbounded scan without producing archive entries.
 //
 // Path errors from the underlying filesystem are returned unwrapped so the
 // caller can map them to its own error vocabulary; the archive-specific
 // limits and symlink policy use the sentinel errors above.
 func WriteZip(ctx context.Context, root *os.Root, relativePath string, w *zip.Writer, state *State) error {
-	return fs.WalkDir(root.FS(), relativePath, func(currentPath string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
+	remaining := MaxEntries - int(state.Entries)
+	if relativePath == "." {
+		remaining++ // The mount root is visited but has no ZIP entry.
+	}
+	return WalkDir(ctx, root, relativePath, remaining, func(currentPath string, entry fs.DirEntry) error {
 		if currentPath == "." {
 			return nil
 		}
 		if state.Entries >= MaxEntries {
 			return ErrTooManyEntries
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			return ErrSymlinkUnsupported
 		}
 		info, err := entry.Info()
 		if err != nil {

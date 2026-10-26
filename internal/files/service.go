@@ -578,6 +578,13 @@ func (s *Service) openLocalMount(mount workspace.FileMount) (*os.Root, error) {
 }
 
 func readDirectory(root *os.Root, relativePath string) ([]fs.DirEntry, error) {
+	info, err := root.Lstat(relativePath)
+	if err != nil {
+		return nil, mapPathError(err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, ErrInvalidPath
+	}
 	directory, err := root.Open(relativePath)
 	if err != nil {
 		return nil, mapPathError(err)

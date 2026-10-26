@@ -97,6 +97,22 @@ func TestLocalListingAndRenameRejectSymlinks(t *testing.T) {
 	}
 }
 
+func TestLocalListingRejectsSymlinkedBaseDirectory(t *testing.T) {
+	service, root := newFileService(t, false)
+	if err := os.Mkdir(filepath.Join(root, "directory"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("directory", filepath.Join(root, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.List(context.Background(), "user-1", "workspace-1", "data", "directory"); err != nil {
+		t.Fatalf("ordinary directory listing failed: %v", err)
+	}
+	if _, err := service.List(context.Background(), "user-1", "workspace-1", "data", "alias"); !errors.Is(err, ErrInvalidPath) {
+		t.Fatalf("symlinked listing base error=%v, want invalid path", err)
+	}
+}
+
 func TestOpenZipStreamsDirectoryContents(t *testing.T) {
 	service, root := newFileService(t, true)
 	if err := os.Mkdir(filepath.Join(root, "project"), 0o700); err != nil {
