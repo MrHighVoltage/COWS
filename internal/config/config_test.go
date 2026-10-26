@@ -85,6 +85,8 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{name: "bad timeout", args: []string{"-shutdown-timeout", "0s"}},
 		{name: "bad session lifetime", args: []string{"-session-lifetime", "0s"}},
 		{name: "incomplete bootstrap", args: []string{"-bootstrap-admin-username", "admin"}},
+		{name: "bootstrap password argument", args: []string{"-bootstrap-admin-password", "secret"}},
+		{name: "SMTP password argument", args: []string{"-smtp-password", "secret"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -109,6 +111,31 @@ func TestInvalidWarningLeadBoundsAreRejected(t *testing.T) {
 			}
 			if _, err := load(nil, lookup); err == nil {
 				t.Fatal("expected the configuration to be rejected")
+			}
+		})
+	}
+}
+
+func TestCredentialLinksRequireSafeTransportConfiguration(t *testing.T) {
+	for _, test := range []struct {
+		name, base           string
+		secure, email, valid bool
+	}{
+		{"https secure", "https://cows.example.test", true, true, true},
+		{"https insecure cookie", "https://cows.example.test", false, false, false},
+		{"public http credential links", "http://cows.example.test", false, true, false},
+		{"loopback development", "http://127.0.0.1:8080", false, true, true},
+		{"IPv6 loopback development", "http://[::1]:8080", false, true, true},
+		{"localhost development", "http://localhost:8080", false, true, true},
+		{"lookalike localhost", "http://localhost.example.test", false, true, false},
+		{"URL credentials", "https://name:secret@cows.example.test", true, true, false},
+		{"empty hostname", "https://:443", true, true, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			env := map[string]string{"COWS_EXTERNAL_BASE_URL": test.base, "COWS_COOKIE_SECURE": strconv.FormatBool(test.secure), "COWS_EMAIL_ENABLED": strconv.FormatBool(test.email), "COWS_SMTP_HOST": "smtp.example.test", "COWS_SMTP_FROM": "cows@example.test"}
+			_, err := load(nil, func(key string) (string, bool) { value, ok := env[key]; return value, ok })
+			if (err == nil) != test.valid {
+				t.Fatalf("valid=%t, error=%v", test.valid, err)
 			}
 		})
 	}

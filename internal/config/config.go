@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"net"
 	"net/mail"
 	"net/url"
 	"os"
@@ -135,7 +136,6 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	flags.StringVar(&externalBaseURL, "external-base-url", externalBaseURL, "trusted external COWS base URL used in email links")
 	flags.BoolVar(&networkIsolationEnabled, "network-isolation-enabled", networkIsolationEnabled, "enable per-workspace internal Podman networks")
 	flags.StringVar(&bootstrapUsername, "bootstrap-admin-username", bootstrapUsername, "initial administrator username")
-	flags.StringVar(&bootstrapPassword, "bootstrap-admin-password", bootstrapPassword, "initial administrator password")
 	flags.BoolVar(&registrationEnabled, "registration-enabled", registrationEnabled, "enable public local-account registration")
 	flags.StringVar(&registrationGroupsValue, "registration-default-groups", registrationGroupsValue, "comma-separated default group names for self-registered users")
 	flags.StringVar(&registrationCPUValue, "registration-default-cpu-millis", registrationCPUValue, "default registered-user CPU quota")
@@ -148,7 +148,6 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	flags.StringVar(&smtpPortValue, "smtp-port", smtpPortValue, "SMTP server port")
 	flags.StringVar(&smtpFrom, "smtp-from", smtpFrom, "SMTP sender address")
 	flags.StringVar(&smtpUsername, "smtp-username", smtpUsername, "SMTP username")
-	flags.StringVar(&smtpPassword, "smtp-password", smtpPassword, "SMTP password")
 	flags.BoolVar(&smtpRequireTLS, "smtp-require-tls", smtpRequireTLS, "require STARTTLS for email delivery")
 	flags.StringVar(&emailWarningDivisorValue, "email-warning-lead-divisor", emailWarningDivisorValue, "fraction of the timeout window used as warning lead time")
 	flags.StringVar(&emailWarningMaxValue, "email-warning-lead-max", emailWarningMaxValue, "maximum lead time for lifecycle warning emails")
@@ -192,8 +191,17 @@ func load(args []string, lookup func(string) (string, bool)) (Config, error) {
 	}
 	if strings.TrimSpace(externalBaseURL) != "" {
 		parsed, parseErr := url.Parse(strings.TrimSpace(externalBaseURL))
-		if parseErr != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		if parseErr != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" || parsed.User != nil || parsed.Opaque != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
 			return Config{}, errors.New("external base URL must be an absolute HTTP or HTTPS URL without query or fragment")
+		}
+		if parsed.Scheme == "https" && !cookieSecure {
+			return Config{}, errors.New("HTTPS external base URL requires Secure cookies (COWS_COOKIE_SECURE=true)")
+		}
+		if emailEnabled && parsed.Scheme == "http" {
+			ip := net.ParseIP(parsed.Hostname())
+			if !strings.EqualFold(parsed.Hostname(), "localhost") && (ip == nil || !ip.IsLoopback()) {
+				return Config{}, errors.New("email credential links require an HTTPS external base URL, except on loopback for development")
+			}
 		}
 		externalBaseURL = strings.TrimRight(parsed.String(), "/")
 	}
