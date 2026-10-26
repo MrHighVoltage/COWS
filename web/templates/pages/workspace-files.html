@@ -18,7 +18,7 @@
   <div class="panel-heading"><div><h2 id="file-panel-title">{{ .FileListing.Mount.Name }}</h2><p class="muted">Container path: <code>{{ .FileListing.Mount.ContainerPath }}</code>{{ if .FileListing.Mount.ReadOnly }} · Read-only{{ else }} · Read-write{{ end }}</p></div></div>
   <form class="file-toolbar" method="get" action="/workspaces/{{ .ActiveWorkspace.ID }}/files">
     <label for="file-mount">Mount</label>
-    <select id="file-mount" name="mount" onchange="this.form.submit()">
+    <select id="file-mount" name="mount" x-on:change="$el.form.submit()">
       {{ range .FileMounts }}<option value="{{ .Name }}"{{ if eq .Name $.FileListing.Mount.Name }} selected{{ end }}>{{ .Name }} ({{ .ContainerPath }})</option>{{ end }}
     </select>
     <input type="hidden" name="path" value="{{ .FileListing.Path }}">

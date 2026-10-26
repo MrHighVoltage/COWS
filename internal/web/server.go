@@ -3,9 +3,7 @@ package web
 import (
 	"context"
 	"crypto/rand"
-	"crypto/subtle"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -73,6 +71,7 @@ type Server struct {
 	userImports *userImportStore
 	imagePullMu sync.Mutex
 	imagePulls  map[string]*imagePullOperation
+	csrfKey     [32]byte
 }
 
 type healthSnapshot struct {
@@ -570,8 +569,12 @@ func New(db *sql.DB, authService *auth.Service, templateService *workspace.Servi
 	if err != nil {
 		return nil, fmt.Errorf("open static assets: %w", err)
 	}
+	var csrfKey [32]byte
+	if _, err := rand.Read(csrfKey[:]); err != nil {
+		return nil, fmt.Errorf("initialize CSRF signing key: %w", err)
+	}
 	fileAccessRuntime, _ := runtimeAdapter.(runtime.FileAccessRuntime)
-	return &Server{db: db, logger: options.Logger, auth: authService, workspace: templateService, quota: quotaService, runtime: runtimeAdapter, files: files.New(templateService, fileAccessRuntime), options: options, templates: templates, static: static, userImports: newUserImportStore(), imagePulls: make(map[string]*imagePullOperation)}, nil
+	return &Server{db: db, logger: options.Logger, auth: authService, workspace: templateService, quota: quotaService, runtime: runtimeAdapter, files: files.New(templateService, fileAccessRuntime), options: options, templates: templates, static: static, userImports: newUserImportStore(), imagePulls: make(map[string]*imagePullOperation), csrfKey: csrfKey}, nil
 }
 
 func quotaProgressClass(current, limit int64) string {
@@ -707,6 +710,29 @@ func securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		// Alpine's expression evaluator needs unsafe-eval; Alpine, HTMX, and
+		// the access clients also use inline styles. Keep script elements and
+		// native event handlers restricted despite those compatibility limits.
+		connectSources := "'self'"
+		// Browsers differ on whether self covers WebSocket schemes. Allow
+		// only this authority for ws/wss, including behind HTTPS termination,
+		// without trusting forwarded headers or interpolating CSP syntax.
+		// IPv6 literals are not valid CSP host sources; retain self for those.
+		authority := r.Host
+		parsed, err := url.Parse("http://" + authority)
+		if err != nil || parsed.Host != authority || parsed.Hostname() == "" || strings.Contains(parsed.Hostname(), ":") {
+			authority = ""
+		}
+		for _, character := range authority {
+			if !(character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || strings.ContainsRune(".-:[]", character)) {
+				authority = ""
+				break
+			}
+		}
+		if authority != "" {
+			connectSources += " ws://" + authority + " wss://" + authority
+		}
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-eval'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src "+connectSources)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -771,7 +797,8 @@ func (s *Server) passwordResetRequestPost(w http.ResponseWriter, r *http.Request
 	}
 	data := pageData{Title: "Reset password | COWS", CSRFToken: s.ensureCSRF(w, r), PasswordResetEnabled: true}
 	key := "password-reset:" + loginRateLimitKey(r)
-	if !s.options.LoginLimiter.Allow(key) {
+	reservation, allowed := s.options.LoginLimiter.Reserve(key)
+	if !allowed {
 		data.PasswordReset.Notice = "If the account is eligible, a reset message will be sent. Check your email or try again later."
 		s.render(w, http.StatusOK, "password-reset-request-page", data)
 		return
@@ -780,7 +807,7 @@ func (s *Server) passwordResetRequestPost(w http.ResponseWriter, r *http.Request
 	if err == nil && request.Token != "" {
 		err = s.options.Notifications.EnqueuePasswordReset(r.Context(), request.User.ID, request.User.Email, request.Token, s.options.ExternalBaseURL, request.ExpiresAt)
 	}
-	s.options.LoginLimiter.Failure(key)
+	reservation.Complete(false)
 	// Do not distinguish unknown accounts or delivery failures in this response.
 	data.PasswordReset.Notice = "If the account is eligible, a password reset message has been queued. Check your email."
 	if err != nil {
@@ -816,6 +843,11 @@ func (s *Server) passwordResetConfirmPost(w http.ResponseWriter, r *http.Request
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
+	reservation, allowed := s.reserveCredentialConfirmation(w, r)
+	if !allowed {
+		return
+	}
+	defer reservation.Complete(false)
 	data := pageData{Title: "Choose new password | COWS", CSRFToken: s.ensureCSRF(w, r), PasswordResetEnabled: true, PasswordReset: passwordResetFormData{Token: r.FormValue("token")}}
 	if r.FormValue("new_password") != r.FormValue("confirm_password") {
 		data.PasswordReset.Error = "The new passwords do not match."
@@ -862,6 +894,11 @@ func (s *Server) invitationAcceptPost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
+	reservation, allowed := s.reserveCredentialConfirmation(w, r)
+	if !allowed {
+		return
+	}
+	defer reservation.Complete(false)
 	data := pageData{Title: "Set your password | COWS", CSRFToken: s.ensureCSRF(w, r), InvitationsEnabled: true, PasswordReset: passwordResetFormData{Token: r.FormValue("token")}}
 	_, err := s.auth.AcceptInvitation(r.Context(), r.FormValue("token"), r.FormValue("new_password"), r.FormValue("confirm_password"))
 	if err != nil {
@@ -889,7 +926,8 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := loginRateLimitKey(r)
-	if !s.options.LoginLimiter.Allow(key) {
+	reservation, allowed := s.options.LoginLimiter.Reserve(key)
+	if !allowed {
 		retryAfter := int(s.options.LoginLimiter.RetryAfter(key).Seconds())
 		if retryAfter < 1 {
 			retryAfter = 1
@@ -903,14 +941,14 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 	}
 	user, token, err := s.auth.Authenticate(r.Context(), r.FormValue("username"), r.FormValue("password"))
 	if err != nil {
-		s.options.LoginLimiter.Failure(key)
+		reservation.Complete(false)
 		s.render(w, http.StatusUnauthorized, "login-page", pageData{
 			Title: "Sign in | COWS", CSRFToken: s.ensureCSRF(w, r), RegistrationEnabled: s.options.RegistrationEnabled,
 			Error: "Invalid username or password.",
 		})
 		return
 	}
-	s.options.LoginLimiter.Success(key)
+	reservation.Complete(true)
 	s.setSessionCookie(w, token)
 	if user.MustChangePassword {
 		http.Redirect(w, r, "/account/password", http.StatusSeeOther)
@@ -951,7 +989,8 @@ func (s *Server) registerPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := "registration:" + loginRateLimitKey(r)
-	if !s.options.RegistrationLimiter.Allow(key) {
+	reservation, allowed := s.options.RegistrationLimiter.Reserve(key)
+	if !allowed {
 		retryAfter := int(s.options.RegistrationLimiter.RetryAfter(key).Seconds())
 		if retryAfter < 1 {
 			retryAfter = 1
@@ -960,15 +999,14 @@ func (s *Server) registerPost(w http.ResponseWriter, r *http.Request) {
 		s.render(w, http.StatusTooManyRequests, "register-page", pageData{Title: "Register | COWS", CSRFToken: s.ensureCSRF(w, r), RegistrationEnabled: true, Registration: registrationFormData{Error: "Too many registration attempts. Try again later."}})
 		return
 	}
+	defer reservation.Complete(false)
 	form := registrationFormData{Username: r.FormValue("username"), Email: r.FormValue("email"), DisplayName: r.FormValue("display_name")}
 	registered, err := s.auth.Register(r.Context(), auth.RegisterUserInput{Username: form.Username, Email: form.Email, DisplayName: form.DisplayName, Password: r.FormValue("password"), PasswordConfirmation: r.FormValue("confirm_password")})
 	if err != nil {
-		s.options.RegistrationLimiter.Failure(key)
 		form.Error, form.FieldErrors = registrationFormFeedback(err)
 		s.render(w, http.StatusBadRequest, "register-page", pageData{Title: "Register | COWS", CSRFToken: s.ensureCSRF(w, r), RegistrationEnabled: true, Registration: form})
 		return
 	}
-	s.options.RegistrationLimiter.Success(key)
 	// Informational only: the account already has the password its owner
 	// chose, so this carries no token and is not address verification.
 	if s.options.Notifications != nil && registered.Email != "" {
@@ -1289,8 +1327,15 @@ func (s *Server) workspaceAction(w http.ResponseWriter, r *http.Request, action 
 		return
 	}
 	workspaceID := r.PathValue("id")
-	actionContext := classifyWorkspaceActionContext(r, user)
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if err := r.ParseMultipartForm(1 << 20); err != nil && !errors.Is(err, http.ErrNotMultipart) {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
+	actionContext := classifyWorkspaceActionContext(r, user)
 	if !s.validCSRF(r) {
 		http.Error(w, "invalid request", http.StatusForbidden)
 		return
@@ -4385,19 +4430,6 @@ func (s *Server) currentUser(r *http.Request) (*domain.User, error) {
 	return &user, nil
 }
 
-func (s *Server) ensureCSRF(w http.ResponseWriter, r *http.Request) string {
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && cookie.Value != "" {
-		return cookie.Value
-	}
-	tokenBytes := make([]byte, 32)
-	if _, err := rand.Read(tokenBytes); err != nil {
-		return ""
-	}
-	token := base64.RawURLEncoding.EncodeToString(tokenBytes)
-	http.SetCookie(w, &http.Cookie{Name: csrfCookieName, Value: token, Path: "/", MaxAge: int(s.options.SessionLifetime.Seconds()), Secure: s.options.CookieSecure, SameSite: http.SameSiteLaxMode})
-	return token
-}
-
 // adminForm runs the preamble every administrator form POST repeats: the actor
 // must be a signed-in administrator, the request body is capped before anything
 // reads it, the CSRF token must match, and the form must parse. It answers the
@@ -4420,18 +4452,6 @@ func (s *Server) adminForm(w http.ResponseWriter, r *http.Request) (domain.User,
 		return domain.User{}, false
 	}
 	return user, true
-}
-
-func (s *Server) validCSRF(r *http.Request) bool {
-	cookie, err := r.Cookie(csrfCookieName)
-	if err != nil || cookie.Value == "" {
-		return false
-	}
-	provided := r.FormValue("csrf_token")
-	if provided == "" {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(provided)) == 1
 }
 
 func (s *Server) setSessionCookie(w http.ResponseWriter, token string) {
@@ -4831,4 +4851,15 @@ func loginRateLimitKey(r *http.Request) string {
 		return "unknown"
 	}
 	return r.RemoteAddr
+}
+
+func (s *Server) reserveCredentialConfirmation(w http.ResponseWriter, r *http.Request) (*auth.LoginReservation, bool) {
+	key := "credential-confirm:" + loginRateLimitKey(r)
+	reservation, allowed := s.options.LoginLimiter.Reserve(key)
+	if !allowed {
+		retryAfter := max(1, int(s.options.LoginLimiter.RetryAfter(key).Seconds()))
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+		http.Error(w, "Too many attempts. Try again later.", http.StatusTooManyRequests)
+	}
+	return reservation, allowed
 }

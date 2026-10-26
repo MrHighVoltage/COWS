@@ -174,7 +174,9 @@ func TestWorkspaceActionHTMXRequestSwapsRowInPlace(t *testing.T) {
 		t.Fatalf("create web server: %v", err)
 	}
 
-	const csrfToken = "test-csrf-token-0123456789abcdef"
+	csrfRequest := httptest.NewRequest(http.MethodGet, "/workspaces", nil)
+	csrfRequest.AddCookie(&http.Cookie{Name: sessionCookieName, Value: sessionToken})
+	csrfToken := server.ensureCSRF(httptest.NewRecorder(), csrfRequest)
 	postRowAction := func(action string) *httptest.ResponseRecorder {
 		t.Helper()
 		request := httptest.NewRequest(http.MethodPost, "/workspaces/"+value.ID+"/"+action, strings.NewReader("csrf_token="+csrfToken))
@@ -309,7 +311,9 @@ func TestWorkspaceActionHTMXDetailContextSwapsHeaderInPlace(t *testing.T) {
 		t.Fatalf("create web server: %v", err)
 	}
 
-	const csrfToken = "test-csrf-token-0123456789abcdef"
+	csrfRequest := httptest.NewRequest(http.MethodGet, "/workspaces", nil)
+	csrfRequest.AddCookie(&http.Cookie{Name: sessionCookieName, Value: sessionToken})
+	csrfToken := server.ensureCSRF(httptest.NewRecorder(), csrfRequest)
 	postDetailAction := func(action string) *httptest.ResponseRecorder {
 		t.Helper()
 		request := httptest.NewRequest(http.MethodPost, "/workspaces/"+value.ID+"/"+action, strings.NewReader("csrf_token="+csrfToken+"&context=detail"))
@@ -617,6 +621,14 @@ func TestLoginAndAdministratorUserManagement(t *testing.T) {
 	sessionCookie := cookieByName(loginRecorder.Result().Cookies(), "cows_session")
 	if sessionCookie == nil || !sessionCookie.HttpOnly {
 		t.Fatalf("invalid session cookie: %#v", sessionCookie)
+	}
+	passwordPage := httptest.NewRequest(http.MethodGet, "/account/password", nil)
+	passwordPage.AddCookie(sessionCookie)
+	passwordPageRecorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(passwordPageRecorder, passwordPage)
+	csrfCookie = cookieByName(passwordPageRecorder.Result().Cookies(), csrfCookieName)
+	if csrfCookie == nil {
+		t.Fatal("password page did not issue session-bound CSRF cookie")
 	}
 	passwordForm := url.Values{"csrf_token": {csrfCookie.Value}, "current_password": {"correct horse battery staple"}, "new_password": {"changed correct horse battery staple"}, "confirm_password": {"changed correct horse battery staple"}}
 	passwordRequest := httptest.NewRequest(http.MethodPost, "/account/password", strings.NewReader(passwordForm.Encode()))
