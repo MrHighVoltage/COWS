@@ -10,6 +10,7 @@ import (
 	"net/mail"
 	"net/smtp"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -41,11 +42,25 @@ func NewSMTPSender(config SMTPConfig) (*SMTPSender, error) {
 }
 
 func (s *SMTPSender) Send(ctx context.Context, recipient, subject, body string) error {
+	parsed, err := mail.ParseAddress(recipient)
+	if err != nil || parsed.Address != recipient || strings.ContainsAny(subject, "\r\n") {
+		return errors.New("invalid SMTP recipient or subject")
+	}
+	// Bound the whole SMTP exchange, including the greeting and TLS handshake.
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	dialer := &net.Dialer{Timeout: 15 * time.Second}
 	connection, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(s.config.Host, strconv.Itoa(s.config.Port)))
 	if err != nil {
 		return fmt.Errorf("dial SMTP server: %w", err)
 	}
+	defer connection.Close()
+	deadline, _ := ctx.Deadline()
+	if err := connection.SetDeadline(deadline); err != nil {
+		return fmt.Errorf("set SMTP deadline: %w", err)
+	}
+	stop := context.AfterFunc(ctx, func() { _ = connection.Close() })
+	defer stop()
 	client, err := smtp.NewClient(connection, s.config.Host)
 	if err != nil {
 		connection.Close()
