@@ -105,8 +105,18 @@ func (p *StorageUsageProvider) measure(ctx context.Context, value domain.Workspa
 		return 0, err
 	}
 	mounts := make([]runtime.FileAccessSpec, 0, len(value.TemplateConfiguration.Mounts))
+	// Podman creates a named volume together with the first container that
+	// uses it, not when the workspace row is created. A never-started
+	// workspace therefore has no volume to measure; treating that absence as
+	// an unavailable measurement would block creating a second workspace
+	// while the first is still stopped. Directory mounts do exist from
+	// creation, so they are still measured.
+	neverStarted := value.RuntimeID == ""
 	for _, mount := range value.TemplateConfiguration.Mounts {
 		mountType := normalizedMountType(mount.Type)
+		if neverStarted && mountType == domain.TemplateMountVolume {
+			continue
+		}
 		source := workspaceVolumeSource(value, mount)
 		if mountType == domain.TemplateMountDirectory {
 			source = filepath.Join(root, mountRootName(value.ID, mount))
